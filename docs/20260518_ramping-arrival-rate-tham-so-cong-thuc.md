@@ -81,6 +81,28 @@ rate là target start iteration theo lịch
 VU chỉ là worker để giữ lịch đó
 ```
 
+`open model` nghĩa là k6 bám theo lịch start, không đợi iteration trước chạy xong rồi mới tự lặp tiếp.
+
+Nếu mới đọc, nhớ 5 câu này trước:
+
+```text
+slot = 1 lần k6 muốn start đúng giờ
+rate = nhịp start trong 1 giây
+peak = chỗ nhịp cao nhất
+VU = worker giữ iteration chạy
+drop = đến giờ mà không có worker rảnh
+```
+
+Đọc bài theo thứ tự này sẽ dễ hơn:
+
+```text
+1. Ý tưởng chính
+2. 5 câu nhớ nhanh
+3. Ví dụ worked example
+4. 3.2 và 3.3
+5. 3.9 chỉ khi muốn đối chiếu code
+```
+
 `slot` ở đây là mốc start iteration theo lịch của scheduler. Mỗi slot cần 1 VU rảnh.
 Không có VU rảnh đúng mốc thì slot đó bị drop. k6 không chờ slot cũ rồi chạy bù.
 
@@ -122,6 +144,17 @@ latency/error
 ```
 
 ### 1.2. Core chạy như nào?
+
+Phần này là để đối chiếu code thật. Nếu mới học, chỉ cần nhớ 4 ý:
+
+```text
+scheduler chuẩn bị trước VU
+cal() sinh lịch start
+đến giờ thì TryRunIteration()
+thiếu VU => slot đó mất
+```
+
+Tên hàm trong ngoặc chỉ để tra code, không cần nhớ thuộc lòng.
 
 Core file:
 
@@ -184,16 +217,16 @@ nhưng vẫn giữ VU bận.
 | Ký hiệu | Nghĩa | Đơn vị | Đọc từ đâu | Ghi chú |
 | --- | --- | --- | --- | --- |
 | `startRate` | rate lúc bắt đầu scenario | iterations/timeUnit | code/header | Nếu không set thì core dùng 0. |
-| `timeUnit` | đơn vị của rate | duration | code/header | Default `1s`. |
+| `timeUnit` | đơn vị của rate | duration | code/header | Default `1s`. Ví dụ `rate: 4, timeUnit: 1s` = 4 lần start mỗi giây. |
 | `stages` | các stage đổi rate | list stage | code/header | Bắt buộc, mỗi stage có `duration` + `target`. |
-| `stage.duration` | thời lượng stage | duration | code/header | Tổng các stage = regular duration của executor. |
-| `stage.target` | rate đích ở cuối stage | iterations/timeUnit | code/header | Đây là rate, không phải VU. |
-| `preAllocatedVUs` | VU chuẩn bị sẵn | VUs | code/header | Planned VUs. |
-| `maxVUs` | trần VU tối đa | VUs | code/header | Planned + unplanned quota; nếu bỏ qua thì core dùng bằng `preAllocatedVUs`. |
-| `total_regular_duration` | tổng duration của các stage | duration | tự tính | `sum(stage.duration)`. |
-| `lambda_start` | start rate quy đổi ra /s | iterations/s | tự tính | `startRate / timeUnit`. |
-| `lambda_peak` | peak rate quy đổi ra /s | iterations/s | tự tính | max của startRate và mọi stage.target. |
-| `W_effective` | thời gian VU bị bận cho 1 iteration | seconds/iteration | summary + core caveat | Dùng để sizing. |
+| `stage.duration` | thời lượng stage | duration | code/header | Ví dụ `2s` nghĩa là stage đó kéo dài 2 giây. Tổng các stage = `total_regular_duration`. |
+| `stage.target` | nhịp đích ở cuối stage | iterations/timeUnit | code/header | Đây là nhịp start, không phải VU. |
+| `preAllocatedVUs` | VU chuẩn bị sẵn | VUs | code/header | Số worker có sẵn từ đầu để đỡ phải tạo gấp. |
+| `maxVUs` | trần VU tối đa | VUs | code/header | Giới hạn cao nhất của worker; nếu bỏ qua thì bằng `preAllocatedVUs`. |
+| `total_regular_duration` | tổng thời gian của các stage | duration | tự tính | `sum(stage.duration)`, chưa tính `gracefulStop`. |
+| `lambda_start` | nhịp start lúc mở màn | iterations/s | tự tính | `startRate / timeUnit`. |
+| `lambda_peak` | nhịp cao nhất trong cả timeline | iterations/s | tự tính | max của `startRate` và mọi `stage.target`. |
+| `W_effective` | thời gian 1 VU bị bận cho 1 iteration | seconds/iteration | summary + core caveat | Dùng để ước lượng số VU cần. |
 
 ### 2.1. Biến phụ trong công thức
 
@@ -205,8 +238,8 @@ nhưng vẫn giữ VU bận.
 | `d_i` | duration của stage thứ i | Đơn vị seconds. |
 | `scheduled_iterations_i` | số mốc start được schedule trong stage i | Với ramp tuyến tính: `d_i * (lambda_prev + lambda_next) / 2`. |
 | `scheduled_iterations_total` | tổng số mốc start theo lịch cho toàn timeline | `sum(scheduled_iterations_i)`. |
-| `average_target_rate` | rate lịch start trung bình trên toàn regular duration | `scheduled_iterations_total / total_regular_duration`. |
-| `actual_summary_iterations_rate` | rate completed iterations trung bình của summary | `completed_iterations / actual_scenario_runtime`. |
+| `average_target_rate` | nhịp start trung bình của cả timeline | `scheduled_iterations_total / total_regular_duration`. |
+| `actual_summary_iterations_rate` | tốc độ completed iteration thật sự của summary | `completed_iterations / actual_scenario_runtime`. |
 | `drop_rate` | số slot bị drop ước lượng theo giây | Chỉ là ước lượng, không phải metric core. |
 | `W_effective_p95` | p95 của effective busy time | dùng khi sizing theo tail. |
 | `safety_factor` | hệ số an toàn | margin > 1 để bù jitter/dao động. |
@@ -229,79 +262,105 @@ scheduled_iterations_i = d_i * (lambda_prev + lambda_next) / 2
 
 Đọc chậm từng biến:
 
-- `lambda_start`: rate bắt đầu của scenario, đổi về đơn vị `iterations/s`.
-- `lambda_i_end`: rate đích ở cuối stage i, cũng đổi về `iterations/s`.
-- `d_i`: duration của stage i, tính bằng giây.
-- `lambda_prev`: rate ở đầu stage đang xét.
-- `lambda_next`: rate ở cuối stage đang xét.
-- `scheduled_iterations_i`: số slot start mà stage đó phải sinh ra.
+- `lambda_start`: nhịp start lúc scenario vừa mở màn.
+- `lambda_i_end`: nhịp start ở cuối stage i.
+- `d_i`: stage đó kéo dài bao lâu.
+- `lambda_prev`: nhịp ở đầu stage đang xét.
+- `lambda_next`: nhịp ở cuối stage đang xét.
+- `scheduled_iterations_i`: tổng số lần k6 phải bắt đầu trong stage đó.
 
-Có thể đọc công thức này theo hình học:
+Trong mấy công thức dưới, cứ đọc `lambda` là "nhịp start".
+Nó chỉ là cách viết gọn của tốc độ k6 phải bấm start trong 1 giây.
 
-```text
-scheduled_iterations_i
-= d_i * lambda_prev
-  + d_i * (lambda_next - lambda_prev) / 2
-= d_i * (lambda_prev + lambda_next) / 2
-```
-
-Nghĩa của từng mảnh:
+Tưởng tượng k6 như người bấm nút start theo lịch:
 
 ```text
-d_i * lambda_prev
-= phần hình chữ nhật nền
-
-d_i * (lambda_next - lambda_prev) / 2
-= phần tam giác tăng thêm nếu ramp lên
-= phần tam giác bớt đi nếu ramp xuống
+stage dài 2 giây
+đầu stage bấm ít
+cuối stage bấm nhiều
+vì nhịp thay đổi đều nên cả stage tính bằng nhịp trung bình
 ```
 
-Ví dụ:
+Nói bằng tiếng thường:
+
+```text
+stage ramp tuyến tính = 1 đoạn thời gian mà nhịp start tăng hoặc giảm đều
+số slot của stage = nhịp trung bình trong stage * thời gian của stage
+```
+
+Ví dụ dễ nhất:
 
 ```text
 2 -> 4 iterations/s trong 2s
-phần chữ nhật = 2 * 2 = 4
-phần tam giác = 2 * (4 - 2) / 2 = 2
-scheduled_iterations_i = 4 + 2 = 6 iterations
+0s: 2/s
+1s: 3/s
+2s: 4/s
+trung bình = 3/s
+2s * 3/s = 6 iterations
 ```
 
-Ví dụ ramp xuống:
+Ramp xuống cũng giống vậy:
 
 ```text
 4 -> 1 iterations/s trong 2s
-phần chữ nhật = 4 * 2 = 8
-phần tam giác = 2 * (1 - 4) / 2 = -3
-scheduled_iterations_i = 8 - 3 = 5 iterations
+0s: 4/s
+1s: 2.5/s
+2s: 1/s
+trung bình = 2.5/s
+2s * 2.5/s = 5 iterations
 ```
 
-Đây là ý của "diện tích dưới đường rate": trục X là thời gian (giây), trục Y là tốc độ
-start iteration (`iterations/s`), nên phần diện tích hai trục nhân nhau ra đúng "số iteration".
-Với ramp tuyến tính, hình đó là một hình thang.
-
-Nếu muốn viết bằng toán:
+Nếu muốn nhìn bằng hình:
 
 ```text
-A_i(t) = diện tích tích lũy từ đầu stage tới thời điểm t
-slot thứ n xảy ra khi A_i(t) cộng dồn tới n
+Ramp lên 2 -> 4 trong 2s
+
+rate
+4 |           /|
+3 |          / |
+2 |_________/  |
+0 +------0s----2s
+
+0s=2/s, 1s=3/s, 2s=4/s
+=> tổng 6 slot
+
+Ramp xuống 4 -> 1 trong 2s
+
+rate
+4 |--------\   |
+3 |         \  |
+2 |          \ |
+1 |           \|
+0 +------0s----2s
+
+0s=4/s, 1s=2.5/s, 2s=1/s
+=> tổng 5 slot
 ```
 
-Nói ngắn gọn: core đi từ "slot thứ i" sang "thời điểm slot đó xảy ra", không đi ngược lại.
-`scheduled_iterations_i` ở đây là số slot theo lịch của stage i. Nó có thể ra số lẻ; phần thập phân
-không bị làm tròn ngay mà được mang sang stage sau qua `doneSoFar`.
+Trong core, `cal()` chỉ làm việc này:
 
-Nếu stage là constant:
+```text
+đi qua từng stage
+tính tổng slot của stage đó
+cộng phần slot còn dư sang stage sau
+```
+
+`scheduled_iterations_i` có thể ra số lẻ. Core không làm tròn ngay; phần lẻ được mang sang stage
+sau qua `doneSoFar`.
+
+Nếu stage không ramp, tức là giữ nguyên một nhịp:
 
 ```text
 scheduled_iterations_i = d_i * lambda
 ```
 
-Tổng số mốc start theo lịch:
+Tổng số lần k6 dự tính bấm start cho cả bài:
 
 ```text
 scheduled_iterations_total = sum(scheduled_iterations_i)
 ```
 
-Đây là số mốc start theo lịch, không phải số completed iterations cuối cùng.
+Đây là số lần k6 định bấm start, chưa tính chuyện bị rớt hay bị dừng sớm.
 Nếu có drop/interrupt, summary completed rate sẽ thấp hơn con số này.
 
 Trong `cal()`:
@@ -313,36 +372,39 @@ Trong `cal()`:
 Ví dụ stage trước kết thúc ở `9.8` events thì `0.8` không mất đi. Core giữ phần đó trong
 `doneSoFar`, rồi stage sau chỉ cần cộng tiếp phần còn lại để tìm khi nào slot kế tiếp xảy ra.
 
-### 3.2. Peak và average
+### 3.2. Nhịp cao nhất và nhịp bình quân
 
 ```text
 lambda_peak = max(lambda_start, mọi lambda_i_end)
 average_target_rate = scheduled_iterations_total / total_regular_duration
 ```
 
-`lambda_peak` là rate cao nhất mà timeline chạm tới ở một đầu stage. Vì mỗi stage ramp là một
-đoạn thẳng, đỉnh của stage chỉ nằm ở đầu hoặc cuối stage, không nằm giữa stage.
+`lambda_peak` là nhịp cao nhất mà timeline đòi k6 phải start ở bất kỳ đoạn nào.
+Vì stage ramp đi đều từ đầu sang cuối, chỗ cao nhất của stage chỉ nằm ở 2 đầu stage.
 
-`average_target_rate` là rate trung bình của lịch start, không phải summary completed rate.
-Về đơn vị: `scheduled_iterations_total [iterations] / total_regular_duration [s] = iterations/s`.
+`average_target_rate` là nhịp bình quân của cả bài test nếu lấy tổng slot chia cho tổng thời gian.
+Nó không phải summary completed rate.
 
-`lambda_peak` là peak instant rate của lịch start. Với docs này:
+Nói dễ hiểu:
 
 ```text
-lambda_peak = max(lambda_start, mọi lambda_i_end)
+lambda_peak = nhịp cao nhất cần chịu
+average_target_rate = nhịp trung bình của cả timeline
 ```
 
-`drop_rate` chỉ là ước lượng thô:
+Ví dụ: cả bài có lúc lên 8/s rồi xuống 2/s thì sizing phải nhìn 8/s, vì chính đoạn 8/s mới là
+đoạn dễ thiếu VU nhất.
+
+`drop_rate` là phần slot bị rớt khi nhịp hiện tại vượt quá khả năng của VU:
 
 ```text
 drop_rate ~= max(0, lambda_current - capacity_with_M_vus)
 ```
 
-`lambda_current` là rate tại đúng thời điểm đang xét. Ví dụ cùng một timeline, đầu stage có thể
-thấp, giữa stage có thể cao hơn. Khi sizing an toàn, thường phải nhìn peak stage hoặc p95 của
-workload chứ không chỉ nhìn average_target_rate.
+`lambda_current` là nhịp đang xảy ra ngay lúc đó. Đầu stage có thể thấp, giữa stage có thể cao hơn.
+Khi chuẩn bị VU, đừng nhìn `average_target_rate` một mình, vì nhịp giữa stage mới là chỗ dễ thiếu VU.
 
-### 3.3. Sizing VU
+### 3.3. Ước lượng VU
 
 ```text
 required_vus_min_peak ~= ceil(lambda_peak * W_effective)
@@ -350,13 +412,12 @@ capacity_with_M_vus ~= M / W_effective
 drop_rate ~= max(0, lambda_current - capacity_with_M_vus)
 ```
 
-Đọc chậm biểu thức sizing:
+Đọc kiểu thực tế:
 
-- `lambda_peak * W_effective`: số VU đang bị chiếm đồng thời ước lượng tại peak.
-- `ceil(...)`: làm tròn lên vì VU là số nguyên.
-- `capacity_with_M_vus`: nếu có `M` VU và mỗi VU bị bận `W_effective` giây cho 1 iteration,
-  thì cả pool làm được khoảng bao nhiêu iteration/s.
-- `drop_rate`: nếu demand hiện tại lớn hơn capacity, phần chênh là số slot/s có nguy cơ drop.
+- `lambda_peak * W_effective`: một iteration giữ VU bao lâu, nhân với nhịp cao nhất.
+- `ceil(...)`: làm tròn lên vì không thể có nửa VU.
+- `capacity_with_M_vus`: với `M` VU thì cả pool chạy được khoảng bao nhiêu iteration/s.
+- `drop_rate`: nhịp hiện tại lớn hơn sức chứa thì phần dư sẽ bị drop.
 
 Kiểm tra đơn vị:
 
@@ -407,6 +468,9 @@ estimated_http_reqs_rate_if_no_branch = N * actual_summary_iterations_rate
 Chỉ dùng khi code path sạch và không có interrupt/branch làm thiếu request.
 
 ## 3.9. Checklist core đã lọc cho `ramping-arrival-rate`
+
+Phần này là phụ lục đối chiếu code thật. Nếu mới học, đọc cột `Hành vi thật` trước; cột `Core`
+chỉ để biết chỗ đó nằm ở file nào.
 
 | Core | Hành vi thật | Ý nghĩa khi đọc bài |
 | --- | --- | --- |

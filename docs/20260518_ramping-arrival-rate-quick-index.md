@@ -30,12 +30,12 @@ docs/20260518_ramping_arrival_rate_worked_example.md
 ## Nhớ nhanh
 
 ```text
-ramping-arrival-rate = fixed stage curve of iteration start rate
-startRate = rate trước stage 1
-stage.target = rate đích ở cuối stage
-stage.duration = thời lượng stage
-total_regular_duration = sum(stage.duration)
-lambda_peak = max(startRate, mọi stage.target) / timeUnit
+ramping-arrival-rate = đường stage đổi nhịp start iteration theo timeline
+startRate = nhịp lúc bắt đầu stage 1
+stage.target = nhịp đích ở cuối stage
+stage.duration = thời lượng mỗi stage
+total_regular_duration = tổng thời lượng các stage
+lambda_peak = nhịp cao nhất trong cả timeline (đã đổi về /s)
 ```
 
 ```text

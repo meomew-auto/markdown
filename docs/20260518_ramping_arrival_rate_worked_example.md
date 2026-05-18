@@ -1,6 +1,6 @@
 # `ramping-arrival-rate` worked example
 
-Mẫu này dùng một workload cực dễ đọc để bóc đúng core flow:
+Mẫu này dùng một workload cực dễ đọc để nhìn rõ cách k6 xếp lịch start:
 
 ```text
 1 iteration = 1 sleep(0.4)
@@ -35,9 +35,10 @@ export default function () {
 }
 ```
 
-## 2. Rate curve
+## 2. Đường nhịp
 
 Core `cal()` hiểu stage theo đường tuyến tính giữa `startRate` và `stage.target`.
+Nói dễ hiểu: trong mỗi stage, nhịp start không nhảy cục mà đổi đều từ đầu stage tới cuối stage.
 
 Với config trên:
 
@@ -67,7 +68,7 @@ lambda_peak = 8 iterations/s
 
 Đây là peak instant rate của timeline, không phải average rate của cả test.
 
-## 3. Sizing VU
+## 3. Cần bao nhiêu VU
 
 Vì workload chỉ `sleep(0.4)`:
 
@@ -97,7 +98,7 @@ safety_factor = hệ số an toàn, thường > 1
 safe_vus ~= ceil(lambda_peak * W_effective_p95 * safety_factor)
 ```
 
-## 4. Đọc summary theo core
+## 4. Đọc output theo core
 
 Nếu run sạch:
 
