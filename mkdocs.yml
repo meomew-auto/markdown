@@ -1,0 +1,25 @@
+site_name: k6 Internal Documentation
+site_url: https://meomew-auto.github.io/markdown/
+repo_url: https://github.com/meomew-auto/markdown
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.highlight
+    - search.suggest
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
