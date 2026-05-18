@@ -63,10 +63,15 @@ Get-ChildItem -LiteralPath $repoDocs -Recurse -File | ForEach-Object {
 }
 
 $mkdocsExe = Join-Path $repoRoot '.venv\Scripts\mkdocs.exe'
-if (Test-Path -LiteralPath $mkdocsExe) {
-  & $mkdocsExe build
-} else {
-  & mkdocs build
+Push-Location $repoRoot
+try {
+  if (Test-Path -LiteralPath $mkdocsExe) {
+    & $mkdocsExe build
+  } else {
+    & mkdocs build
+  }
+} finally {
+  Pop-Location
 }
 
 & git -C $repoRoot add .github docs mkdocs.yml README.md requirements.txt .gitignore sync-from-source.ps1
