@@ -9,11 +9,13 @@ $repoRoot = $PSScriptRoot
 $repoDocs = Join-Path $repoRoot 'docs'
 $sourceDocs = Join-Path $SourceRoot 'docs'
 $sourceExamples = Join-Path $SourceRoot 'examples'
+$desired = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 
 function Copy-Tree {
   param(
     [string]$From,
     [string]$To,
+    [string]$Prefix = '',
     [string[]]$SkipNames = @()
   )
 
@@ -21,6 +23,12 @@ function Copy-Tree {
     $SkipNames -notcontains $_.Name
   } | ForEach-Object {
     $relative = $_.FullName.Substring($From.Length).TrimStart('\', '/')
+    $key = $relative
+    if ($Prefix) {
+      $key = Join-Path $Prefix $key
+    }
+    $key = $key.Replace('/', '\')
+    [void]$desired.Add($key)
     $destination = Join-Path $To $relative
     $parent = Split-Path -Parent $destination
     if ($parent) {
@@ -41,7 +49,18 @@ if (-not (Test-Path -LiteralPath $sourceExamples)) {
 New-Item -ItemType Directory -Force -Path $repoDocs | Out-Null
 
 Copy-Tree -From $sourceDocs -To $repoDocs -SkipNames @('mkdocs.yml')
-Copy-Tree -From $sourceExamples -To (Join-Path $repoDocs 'examples')
+Copy-Tree -From $sourceExamples -To (Join-Path $repoDocs 'examples') -Prefix 'examples'
+
+foreach ($generated in @('index.md', 'design\index.md')) {
+  [void]$desired.Add($generated)
+}
+
+Get-ChildItem -LiteralPath $repoDocs -Recurse -File | ForEach-Object {
+  $relative = $_.FullName.Substring($repoDocs.Length).TrimStart('\', '/')
+  if (-not $desired.Contains($relative)) {
+    Remove-Item -LiteralPath $_.FullName -Force
+  }
+}
 
 $mkdocsExe = Join-Path $repoRoot '.venv\Scripts\mkdocs.exe'
 if (Test-Path -LiteralPath $mkdocsExe) {
