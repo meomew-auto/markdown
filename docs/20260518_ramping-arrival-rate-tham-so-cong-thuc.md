@@ -227,12 +227,67 @@ Với stage ramp tuyến tính từ `lambda_prev` sang `lambda_next` trong `d_i`
 scheduled_iterations_i = d_i * (lambda_prev + lambda_next) / 2
 ```
 
-Nghĩa là:
+Đọc chậm từng biến:
+
+- `lambda_start`: rate bắt đầu của scenario, đổi về đơn vị `iterations/s`.
+- `lambda_i_end`: rate đích ở cuối stage i, cũng đổi về `iterations/s`.
+- `d_i`: duration của stage i, tính bằng giây.
+- `lambda_prev`: rate ở đầu stage đang xét.
+- `lambda_next`: rate ở cuối stage đang xét.
+- `scheduled_iterations_i`: số slot start mà stage đó phải sinh ra.
+
+Có thể đọc công thức này theo hình học:
 
 ```text
-diện tích dưới đoạn thẳng rate của stage
-= số mốc start mà scheduler phải tạo trong stage đó
+scheduled_iterations_i
+= d_i * lambda_prev
+  + d_i * (lambda_next - lambda_prev) / 2
+= d_i * (lambda_prev + lambda_next) / 2
 ```
+
+Nghĩa của từng mảnh:
+
+```text
+d_i * lambda_prev
+= phần hình chữ nhật nền
+
+d_i * (lambda_next - lambda_prev) / 2
+= phần tam giác tăng thêm nếu ramp lên
+= phần tam giác bớt đi nếu ramp xuống
+```
+
+Ví dụ:
+
+```text
+2 -> 4 iterations/s trong 2s
+phần chữ nhật = 2 * 2 = 4
+phần tam giác = 2 * (4 - 2) / 2 = 2
+scheduled_iterations_i = 4 + 2 = 6 iterations
+```
+
+Ví dụ ramp xuống:
+
+```text
+4 -> 1 iterations/s trong 2s
+phần chữ nhật = 4 * 2 = 8
+phần tam giác = 2 * (1 - 4) / 2 = -3
+scheduled_iterations_i = 8 - 3 = 5 iterations
+```
+
+Đây là ý của "diện tích dưới đường rate": trục X là thời gian (giây), trục Y là tốc độ
+start iteration (`iterations/s`), nên phần diện tích hai trục nhân nhau ra đúng "số iteration".
+Với ramp tuyến tính, hình đó là một hình thang.
+
+Nếu muốn viết bằng toán:
+
+```text
+A_i(t) = diện tích tích lũy từ đầu stage tới thời điểm t
+slot thứ n xảy ra khi A_i(t) cộng dồn tới n
+```
+
+Nói ngắn gọn: core đi từ "slot thứ i" sang "thời điểm slot đó xảy ra", không đi ngược lại.
+`scheduled_iterations_i` ở đây là số slot theo lịch của stage i. Nó có thể ra số lẻ; phần thập phân
+không bị làm tròn ngay mà được mang sang stage sau qua `doneSoFar`.
 
 Nếu stage là constant:
 
@@ -249,6 +304,15 @@ scheduled_iterations_total = sum(scheduled_iterations_i)
 Đây là số mốc start theo lịch, không phải số completed iterations cuối cùng.
 Nếu có drop/interrupt, summary completed rate sẽ thấp hơn con số này.
 
+Trong `cal()`:
+
+- `doneSoFar` = số slot đã tích lũy trước stage hiện tại
+- `endCount` = số slot tích lũy tới cuối stage hiện tại
+- `i` = slot nguyên kế tiếp cần được gán thời điểm start
+
+Ví dụ stage trước kết thúc ở `9.8` events thì `0.8` không mất đi. Core giữ phần đó trong
+`doneSoFar`, rồi stage sau chỉ cần cộng tiếp phần còn lại để tìm khi nào slot kế tiếp xảy ra.
+
 ### 3.2. Peak và average
 
 ```text
@@ -256,7 +320,11 @@ lambda_peak = max(lambda_start, mọi lambda_i_end)
 average_target_rate = scheduled_iterations_total / total_regular_duration
 ```
 
+`lambda_peak` là rate cao nhất mà timeline chạm tới ở một đầu stage. Vì mỗi stage ramp là một
+đoạn thẳng, đỉnh của stage chỉ nằm ở đầu hoặc cuối stage, không nằm giữa stage.
+
 `average_target_rate` là rate trung bình của lịch start, không phải summary completed rate.
+Về đơn vị: `scheduled_iterations_total [iterations] / total_regular_duration [s] = iterations/s`.
 
 `lambda_peak` là peak instant rate của lịch start. Với docs này:
 
@@ -270,12 +338,39 @@ lambda_peak = max(lambda_start, mọi lambda_i_end)
 drop_rate ~= max(0, lambda_current - capacity_with_M_vus)
 ```
 
+`lambda_current` là rate tại đúng thời điểm đang xét. Ví dụ cùng một timeline, đầu stage có thể
+thấp, giữa stage có thể cao hơn. Khi sizing an toàn, thường phải nhìn peak stage hoặc p95 của
+workload chứ không chỉ nhìn average_target_rate.
+
 ### 3.3. Sizing VU
 
 ```text
 required_vus_min_peak ~= ceil(lambda_peak * W_effective)
 capacity_with_M_vus ~= M / W_effective
 drop_rate ~= max(0, lambda_current - capacity_with_M_vus)
+```
+
+Đọc chậm biểu thức sizing:
+
+- `lambda_peak * W_effective`: số VU đang bị chiếm đồng thời ước lượng tại peak.
+- `ceil(...)`: làm tròn lên vì VU là số nguyên.
+- `capacity_with_M_vus`: nếu có `M` VU và mỗi VU bị bận `W_effective` giây cho 1 iteration,
+  thì cả pool làm được khoảng bao nhiêu iteration/s.
+- `drop_rate`: nếu demand hiện tại lớn hơn capacity, phần chênh là số slot/s có nguy cơ drop.
+
+Kiểm tra đơn vị:
+
+```text
+lambda_peak [iterations/s] * W_effective [s/iteration] = số VU cần đồng thời
+M [VU] / W_effective [s/iteration] = capacity [iterations/s]
+```
+
+Ví dụ nhanh:
+
+```text
+lambda_peak = 8 iterations/s
+W_effective = 0.4s
+ceil(8 * 0.4) = ceil(3.2) = 4 VUs
 ```
 
 Với `W_effective`:
@@ -291,6 +386,16 @@ W_effective ~= max(iteration_duration, minIterationDuration) nếu có minIterat
 actual_summary_iterations_rate = completed_iterations / actual_scenario_runtime
 http_reqs_rate = total_http_requests / actual_scenario_runtime
 checks_total_rate = total_checks / actual_scenario_runtime
+```
+
+Đây là rate của metric summary thật, đọc từ `count / runtime` của Counter.
+`actual_scenario_runtime` là thời gian thực tế từ lúc scenario bắt đầu tới lúc nó thật sự dừng,
+thường có thể dài hơn `total_regular_duration` nếu còn `gracefulStop`.
+Nó khác `average_target_rate` ở trên:
+
+```text
+average_target_rate = rate lịch start trung bình
+actual_summary_iterations_rate = rate completed iteration thực tế
 ```
 
 Nếu 1 completed iteration chạy đủ N request:
@@ -359,7 +464,7 @@ S sizing:
 required_vus_min_peak ~= ceil(4 * W_effective)
 ```
 
-Nếu `W_effective = 0.4s`:
+Nếu `W_effective = 0.4s` (ví dụ workload kiểu `sleep(0.4)`):
 
 ```text
 required_vus_min_peak ~= 2 VUs

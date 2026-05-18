@@ -75,6 +75,9 @@ Vì workload chỉ `sleep(0.4)`:
 W_effective ~= 0.4s
 ```
 
+`0.4s` lấy thẳng từ `sleep(0.4)` trong `default()`. Vì demo này gần như chỉ ngủ, nên
+`iteration_duration.avg` cũng sẽ xấp xỉ 400ms và đó là cách summary xác nhận lại `W_effective`.
+
 Peak VU cần gần đúng:
 
 ```text
