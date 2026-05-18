@@ -195,6 +195,22 @@ nhưng vẫn giữ VU bận.
 | `lambda_peak` | peak rate quy đổi ra /s | iterations/s | tự tính | max của startRate và mọi stage.target. |
 | `W_effective` | thời gian VU bị bận cho 1 iteration | seconds/iteration | summary + core caveat | Dùng để sizing. |
 
+### 2.1. Biến phụ trong công thức
+
+| Biến / biểu thức | Nghĩa | Ghi chú |
+| --- | --- | --- |
+| `lambda_prev` | rate ở đầu stage đang xét | Stage 1 thì = `lambda_start`; các stage sau thì = rate đích stage trước. |
+| `lambda_next` | rate ở cuối stage đang xét | Bằng `stage.target / timeUnit_seconds`. |
+| `lambda_current` | rate đang xét tại một thời điểm cụ thể | Dùng trong `drop_rate ~= max(0, lambda_current - capacity_with_M_vus)`. |
+| `d_i` | duration của stage thứ i | Đơn vị seconds. |
+| `scheduled_iterations_i` | số mốc start được schedule trong stage i | Với ramp tuyến tính: `d_i * (lambda_prev + lambda_next) / 2`. |
+| `scheduled_iterations_total` | tổng số mốc start theo lịch cho toàn timeline | `sum(scheduled_iterations_i)`. |
+| `average_target_rate` | rate lịch start trung bình trên toàn regular duration | `scheduled_iterations_total / total_regular_duration`. |
+| `actual_summary_iterations_rate` | rate completed iterations trung bình của summary | `completed_iterations / actual_scenario_runtime`. |
+| `drop_rate` | số slot bị drop ước lượng theo giây | Chỉ là ước lượng, không phải metric core. |
+| `W_effective_p95` | p95 của effective busy time | dùng khi sizing theo tail. |
+| `safety_factor` | hệ số an toàn | margin > 1 để bù jitter/dao động. |
+
 ## 3. Công thức nền
 
 ### 3.1. Rate theo stage
@@ -211,6 +227,13 @@ Với stage ramp tuyến tính từ `lambda_prev` sang `lambda_next` trong `d_i`
 scheduled_iterations_i = d_i * (lambda_prev + lambda_next) / 2
 ```
 
+Nghĩa là:
+
+```text
+diện tích dưới đoạn thẳng rate của stage
+= số mốc start mà scheduler phải tạo trong stage đó
+```
+
 Nếu stage là constant:
 
 ```text
@@ -223,6 +246,9 @@ Tổng số mốc start theo lịch:
 scheduled_iterations_total = sum(scheduled_iterations_i)
 ```
 
+Đây là số mốc start theo lịch, không phải số completed iterations cuối cùng.
+Nếu có drop/interrupt, summary completed rate sẽ thấp hơn con số này.
+
 ### 3.2. Peak và average
 
 ```text
@@ -231,6 +257,18 @@ average_target_rate = scheduled_iterations_total / total_regular_duration
 ```
 
 `average_target_rate` là rate trung bình của lịch start, không phải summary completed rate.
+
+`lambda_peak` là peak instant rate của lịch start. Với docs này:
+
+```text
+lambda_peak = max(lambda_start, mọi lambda_i_end)
+```
+
+`drop_rate` chỉ là ước lượng thô:
+
+```text
+drop_rate ~= max(0, lambda_current - capacity_with_M_vus)
+```
 
 ### 3.3. Sizing VU
 

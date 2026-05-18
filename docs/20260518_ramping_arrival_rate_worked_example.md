@@ -56,11 +56,16 @@ stage 3 = 2s * (2 + 6)/2 = 8
 total scheduled iterations = 30
 ```
 
+Đây là số slot start theo lịch từ core `cal()`. Nếu run sạch, completed iterations có thể tiến gần
+30; nếu thiếu VU hoặc bị interrupt thì summary `iterations` sẽ thấp hơn.
+
 Peak rate:
 
 ```text
 lambda_peak = 8 iterations/s
 ```
+
+Đây là peak instant rate của timeline, không phải average rate của cả test.
 
 ## 3. Sizing VU
 
@@ -78,9 +83,14 @@ required_vus_min_peak ~= ceil(8 * 0.4) = 4 VUs
 
 Nên config `preAllocatedVUs: 4, maxVUs: 4` đủ cho peak này.
 
+Nếu `W_effective` lớn hơn, cần tăng VU theo `ceil(lambda_peak * W_effective)`.
+
 Nếu muốn an toàn hơn khi workload dao động:
 
 ```text
+W_effective_p95 = p95 của effective busy time
+safety_factor = hệ số an toàn, thường > 1
+
 safe_vus ~= ceil(lambda_peak * W_effective_p95 * safety_factor)
 ```
 
