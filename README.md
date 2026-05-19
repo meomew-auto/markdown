@@ -9,3 +9,9 @@ Run:
 ```powershell
 .\sync-from-source.ps1 -Message "Update docs"
 ```
+
+Live preview:
+
+```powershell
+.\sync-from-source.ps1 -Watch -IntervalSeconds 5
+```

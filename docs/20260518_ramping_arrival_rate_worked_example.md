@@ -113,6 +113,8 @@ vus_max = initialized VUs sample
 vus = active VUs sample
 ```
 
+`vus` chỉ đếm VU đang chạy iteration; VU đã init xong nhưng đang rảnh chờ việc mới chưa được tính.
+
 Nếu `iterations` không bằng 30:
 
 ```text

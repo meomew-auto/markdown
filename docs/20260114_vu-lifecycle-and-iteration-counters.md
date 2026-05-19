@@ -155,7 +155,7 @@ Phân biệt nhanh:
 | Loại | Nghĩa | Tạo khi nào? |
 |------|------|--------------|
 | `planned VUs` | VUs được tính trước và pre-create | Scheduler Init phase |
-| `active VUs` | VUs đang được executor mượn và đang/chờ chạy iteration | Execution phase |
+| `active VUs` | VUs đang thật sự chạy iteration, hoặc đang graceful wind-down sau iteration đó | Execution phase |
 | `unplanned VUs` | VUs có thể tạo thêm nếu runtime thiếu VU | Giữa test run |
 
 Ví dụ `per-vu-iterations`:
@@ -215,6 +215,9 @@ unplanned VUs có thể tạo thêm = 40
 
 Key point: **planned VU không đồng nghĩa với đang chạy**. Nó chỉ có nghĩa là VU đã được tạo
 sẵn và đang nằm trong pool để executor lấy ra dùng.
+
+Key point thêm: **active VU cũng không phải VU rảnh ngồi chờ**. Nó chỉ tính khi VU đang chạy
+script thực tế, hoặc đang wind-down sau khi đã chạy xong iteration.
 
 ### Planned VU init time có tính vào `maxDuration` không?
 

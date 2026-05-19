@@ -208,6 +208,10 @@ vus = active VUs tại thời điểm sample
 vus_max = initialized VUs tại thời điểm sample
 ```
 
+`active VUs` ở đây là VUs đang chạy iteration, hoặc đang trong đoạn graceful wind-down của
+iteration đó. VU đã init xong nhưng đang rảnh chờ slot mới thì chưa tính vào `vus`; nó thuộc
+initialized VUs.
+
 `iterations` và `iteration_duration` vẫn được emit bởi JS runner sau full iteration.
 Nếu có `minIterationDuration`, phần sleep bù không nằm trong `iteration_duration`
 nhưng vẫn giữ VU bận.
