@@ -18,6 +18,65 @@ Bài phân tích này giải thích các câu hỏi:
 4. `iterationInScenario` reset khi chuyển scenario?
 5. VU có được reuse giữa scenarios?
 
+### VU Lifecycle Overview
+
+K6 không luôn tạo VU theo một cách duy nhất. Tùy executor thuộc **closed model** hay **open model**,
+vòng đời sẽ khác nhau:
+
+```text
+                      [Scheduler Init]
+                             |
+                             v
+           tính planned VUs từ execution plan
+           init VUs và đẩy vào `es.vus` pool
+                             |
+                             v
+                      [Execution phase]
+                             |
+                 +-----------+-----------+
+                 |                       |
+                 v                       v
+            Closed model             Open model
+    (constant-vus, ramping-vus,      (constant-arrival-rate,
+     per-vu-iterations,               ramping-arrival-rate)
+     shared-iterations)
+      - lấy VU từ pool                - chạy theo các mốc start (slot)
+      - VU chạy xong mới              - tới slot mà không có VU rảnh
+        chạy tiếp                       -> slot đó bị drop
+      - load phụ thuộc vào            - nếu còn quota, k6 có thể
+        thời gian chạy iteration        init thêm unplanned VU ở nền
+                                      - VU tạo thêm chỉ giúp slot sau
+```
+
+Nói ngắn:
+
+```text
+closed model = VU quyết định nhịp chạy
+open model   = lịch start quyết định nhịp chạy
+```
+
+Điểm dễ nhầm:
+
+```text
+VU không phải lúc nào cũng được tạo hết ngay từ init.
+
+- Với closed model, VU cần cho test thường được init trước rồi cho chạy dần.
+- Với open model, phần chắc chắn được init trước là `preAllocatedVUs`.
+- Nếu `maxVUs > preAllocatedVUs`, phần thiếu có thể được tạo thêm trong lúc test đang chạy.
+- Nếu `maxVUs == preAllocatedVUs`, open model vẫn chỉ có phần planned được tạo trước.
+```
+
+Ví dụ rất ngắn:
+
+```text
+closed model:
+  1 VU chạy xong request trước rồi mới chạy request sau
+
+open model:
+  k6 hẹn sẵn slot 0.00s, 0.25s, 0.50s...
+  nếu lúc đến slot không có VU rảnh -> slot đó bị drop
+```
+
 ---
 
 ## 2. Code Flow
@@ -154,9 +213,16 @@ Phân biệt nhanh:
 
 | Loại | Nghĩa | Tạo khi nào? |
 |------|------|--------------|
-| `planned VUs` | VUs được tính trước và pre-create | Scheduler Init phase |
-| `active VUs` | VUs đang thật sự chạy iteration, hoặc đang graceful wind-down sau iteration đó | Execution phase |
-| `unplanned VUs` | VUs có thể tạo thêm nếu runtime thiếu VU | Giữa test run |
+| `planned VUs` | VUs đã được chuẩn bị sẵn và nằm trong pool chờ dùng | Scheduler Init phase |
+| `active VUs` | VUs đang thật sự chạy iteration, hoặc đang kết thúc nốt job cũ | Execution phase |
+| `unplanned VUs` | VUs có thể tạo thêm nếu lúc chạy bị thiếu VU | Giữa test run |
+
+Hiểu ngắn:
+
+```text
+VU đang ngồi chờ việc = VU đã có sẵn trong pool, nhưng chưa được tính active
+VU active = VU đang làm việc thật
+```
 
 Ví dụ `per-vu-iterations`:
 
@@ -216,8 +282,32 @@ unplanned VUs có thể tạo thêm = 40
 Key point: **planned VU không đồng nghĩa với đang chạy**. Nó chỉ có nghĩa là VU đã được tạo
 sẵn và đang nằm trong pool để executor lấy ra dùng.
 
-Key point thêm: **active VU cũng không phải VU rảnh ngồi chờ**. Nó chỉ tính khi VU đang chạy
-script thực tế, hoặc đang wind-down sau khi đã chạy xong iteration.
+Key point thêm:
+
+```text
+VU được chuẩn bị sẵn mà đang ngồi chờ việc -> chưa tính active
+VU đang chạy `default()` -> tính active
+VU vừa chạy xong nhưng còn bận nốt phần kết thúc của iteration cũ -> vẫn tính active
+```
+
+Ví dụ rất ngắn:
+
+```text
+ta có 3 VU đã chuẩn bị sẵn
+1 VU đang chạy job
+1 VU đang kết thúc nốt job cũ
+1 VU đang ngồi chờ
+
+=> active VUs = 2
+=> VU đang chờ chưa tính active
+```
+
+Đối chiếu core:
+
+```text
+es.vus = pool VU đã init xong, đang chờ được executor lấy ra
+activeVUs = số VU đang chạy thật ở thời điểm đó
+```
 
 ### Planned VU init time có tính vào `maxDuration` không?
 
@@ -225,6 +315,13 @@ Với các planned VUs, câu trả lời là:
 
 ```text
 không tính vào maxDuration / scenario duration
+```
+
+Hiểu bằng tiếng thường:
+
+```text
+planned VU init = giai đoạn chuẩn bị trước khi scenario bắt đầu
+scenario chưa chạy nên thời gian này không trừ vào thời gian chạy của scenario
 ```
 
 Luồng đúng:
@@ -245,21 +342,61 @@ Scheduler.Run()
 Nên nếu `vus` rất lớn:
 
 ```text
-wall-clock từ lúc bấm k6 run
-  có thể lâu hơn vì phải chờ init VUs
+thời gian đồng hồ thật từ lúc bấm `k6 run`
+  có thể dài hơn vì còn thời gian chuẩn bị VU
 
-scenario maxDuration / exec.scenario.startTime / running time
-  bắt đầu sau khi planned VUs init xong
+thời gian chạy của scenario
+  chỉ bắt đầu sau khi planned VUs init xong
+```
+
+Ví dụ:
+
+```text
+planned VU init mất 12s
+startTime = 5s
+duration = 30s
+gracefulStop = 10s
+
+thời gian đồng hồ thật:
+  12 + 5 + 30 + 10 = 57s
+
+thời gian chạy của scenario:
+  30 + 10 = 40s
 ```
 
 Nói cách khác:
 
 ```text
-planned VU init phase
-  nằm trước execution phase
+1. bấm `k6 run`
+2. k6 init planned VUs
+3. scenario mới bắt đầu chạy
+```
 
-executor duration
-  bắt đầu khi executor thật sự Run()
+`startTime` là độ trễ trước khi scenario/executor bắt đầu chạy. Nó là một thời lượng
+(`duration`), ví dụ `5s`, `1m`, `0s`. Nếu không ghi thì mặc định là `0s`.
+
+Ví dụ:
+
+```text
+vus rất lớn nên init VUs mất 12s
+startTime = 5s
+duration = 30s
+gracefulStop = 10s
+
+wall-clock tổng:
+  12s + 5s + 30s + 10s = 57s
+
+thời gian chạy của scenario:
+  30s + 10s = 40s
+```
+
+Ý chính:
+
+```text
+12s đầu = chỉ chuẩn bị VU, scenario chưa chạy
+5s sau = chờ tới giờ scenario start
+30s tiếp = scenario chạy bình thường
+10s cuối = cho job đang chạy kịp kết thúc
 ```
 
 Code path cần nhớ:
@@ -412,6 +549,72 @@ Về cuối test:
 `unplanned VUs` là VUs không được tạo sẵn trong Scheduler Init phase, nhưng có thể được tạo thêm
 giữa lúc test đang chạy nếu executor cần thêm VU và vẫn chưa vượt `maxVUs`.
 
+#### Slot là gì?
+
+`slot` là **một mốc start đã được lên lịch** cho 1 iteration. Nó không phải là một “ô” 1 giây,
+cũng không phải một khoảng chờ để gom đủ việc rồi mới chạy tiếp. Trong kiểu tải mở của
+arrival-rate, k6 chủ động đặt các mốc start theo lịch thời gian, không đợi iteration trước chạy
+xong rồi mới tự loop sang lần kế tiếp.
+
+Ví dụ `rate: 4, timeUnit: "1s"` không có nghĩa là chờ đủ 1 giây rồi mới chạy 4 iteration. Nó có
+nghĩa là trong mỗi 1 giây, k6 cố đặt 4 mốc start, xấp xỉ cách nhau 250ms. Mỗi mốc đó là 1 `slot`.
+
+```text
+rate: 4, timeUnit: "1s"
+
+0.00s -> slot 1
+0.25s -> slot 2
+0.50s -> slot 3
+0.75s -> slot 4
+1.00s -> slot 5
+```
+
+Với `constant-arrival-rate`, các slot cách đều nhau. Với `ramping-arrival-rate`, khoảng cách giữa
+các slot thay đổi theo đường ramp, nhưng ý nghĩa của từng slot vẫn vậy: tới giờ start thì phải có
+VU rảnh ngay, nếu không thì mốc đó bị bỏ.
+
+Theo core, nó chạy theo thứ tự này:
+
+```text
+1. tới giờ của 1 slot start
+2. k6 thử lấy ngay 1 VU rảnh bằng `TryRunIteration()`
+3. nếu có VU rảnh -> slot đó chạy
+4. nếu không có VU rảnh -> slot đó bị bỏ, core ghi `dropped_iterations`
+5. sau khi bỏ slot đó, k6 mới xin tạo thêm unplanned VU ở nền
+6. VU mới xong sau đó chỉ giúp các slot tiếp theo, không cứu slot vừa bỏ
+```
+
+Nói thường:
+
+```text
+bạn bấm `k6 run` -> k6 vừa chạy vừa có thể đi tạo thêm VU
+nếu VU mới tạo xong kịp trước slot sau thì nó giúp slot sau
+nếu tạo xong quá trễ thì slot đã bỏ mất rồi, không quay lại được
+```
+
+Ví dụ:
+
+```text
+scenario đang chạy tới giây thứ 20
+tới 20.0s có 1 slot start đến hạn
+không có VU rảnh
+=> slot đó bị drop ngay
+
+sau đó k6 bắt đầu tạo thêm 1 unplanned VU
+VU này mất 2s mới xong
+
+trong 2s chờ đó, nếu tới 20.5s hoặc 21s lại có slot mới
+và vẫn chưa có VU rảnh
+=> các slot mới đó cũng có thể bị drop
+
+đến 22s VU mới xong
+=> từ lúc đó trở đi, nó mới có thể giúp các slot sau
+```
+
+`drop` ở đây không phải là VU rớt. Nó là slot start bị bỏ vì tới đúng giờ mà chưa có VU rảnh.
+Core có đúng đường này: tới slot mà `TryRunIteration()` không nhận được VU ngay thì k6 ghi
+`dropped_iterations`, rồi mới xin unplanned VU ở background.
+
 Trường hợp phổ biến là arrival-rate executors:
 
 ```js
@@ -506,6 +709,10 @@ có thể bị nhiễu vì k6 vừa tạo JS runtime vừa bắn traffic; nên s
 - **File**: [scheduler.go](file:///e:/Projects/k6/internal/execution/scheduler.go#L124-L140)
 - **Function**: `initVU()`
 - **Purpose**: Gán VU ID duy nhất trước khi test bắt đầu
+
+Trong script JS, nếu cần đọc ID này thì dùng `import exec from "k6/execution"` rồi lấy
+`exec.vu.idInInstance`. `exec.vu.idInTest` là ID global trên toàn test, còn `__VU` là cách viết
+ngắn tương đương với `exec.vu.idInInstance`.
 
 ```go
 // internal/execution/scheduler.go:124-140
@@ -740,7 +947,8 @@ Key point: **ReturnVU = trả về pool để có thể reuse; không phải des
 
 | Property | JS Variable | Behavior on Scenario Change | Source |
 |----------|-------------|----------------------------|--------|
-| VU ID | `__VU`, `exec.vu.idInTest` | **No change** | `VU.ID` |
+| VU ID in instance | `__VU`, `exec.vu.idInInstance` | **No change** | `VU.ID` |
+| VU ID in test | `exec.vu.idInTest` | **No change** | `VU.IDGlobal` |
 | Global Iteration | `__ITER` | **Continues** (no reset) | `VU.iteration` |
 | Scenario Iteration | `exec.vu.iterationInScenario` | **Starts from 0** | `VU.scenarioIter[scenario]` |
 
@@ -750,6 +958,7 @@ Key point: **ReturnVU = trả về pool để có thể reuse; không phải des
 
 1. **Sử dụng `exec.vu.iterationInScenario`** khi cần iteration counter độc lập cho mỗi scenario
 2. **Sử dụng `__ITER`** khi cần iteration counter toàn cục cho VU
+3. **Sử dụng `exec.vu.idInTest`** khi cần VU ID duy nhất trên toàn test, đặc biệt nếu có nhiều instance
 3. **Không giả định VU reuse** - behavior phụ thuộc vào timing của scenarios
 4. **VU ID là stable identifier** - có thể dùng để correlate logs/metrics
 
