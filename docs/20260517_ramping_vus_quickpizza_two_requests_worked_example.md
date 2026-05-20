@@ -148,6 +148,20 @@ vus_max........................: 4     min=4       max=4
 running (6.8s), 0/4 VUs, 12 complete and 0 interrupted iterations
 ```
 
+Đừng đọc nhầm:
+
+```text
+4 looping VUs trong header
+  = trần planned VU của executor theo plan
+
+running ... 0/4 VUs
+  = snapshot cuối cùng khi progress in ra
+
+iterations.........: 12    1.771928/s
+  = tốc độ iteration trung bình của cả scenario
+  = không phải 1 VU chạy 1.771928 iteration/s
+```
+
 Cách đọc riêng dòng này:
 
 ```text

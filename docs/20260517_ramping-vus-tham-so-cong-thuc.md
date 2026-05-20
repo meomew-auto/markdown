@@ -320,7 +320,7 @@ Những điểm cần lưu ý khi đọc core:
 | `max_planned_vus` | số VU tối đa executor có thể cần reserve | header / core execution plan | `4`, `6` | Thường là target lớn nhất sau scaling/segment; khác với metric `vus_max` dù local run thường trùng số. |
 | `active_vus_now` | số VU đang active ở một thời điểm | progress / metric `vus` | thay đổi theo thời gian | Đây là đại lượng lên xuống theo timeline. |
 | `completed_iterations` | số iteration hoàn thành thật | summary `iterations` | chỉ biết sau khi chạy | Không có target cố định trước khi chạy. |
-| `interrupted_iterations` | số iteration bị cắt giữa chừng | progress cuối | chỉ có khi bị hard stop / end context | Demo interrupt sẽ thấy. |
+| `interrupted_iterations` | số iteration đã start nhưng bị cancel trước khi thành full iteration | progress cuối | thường do hard stop, hết grace, user abort, hoặc interrupt error | Demo interrupt sẽ thấy. |
 | `http_requests_per_iteration` | số HTTP request trong 1 iteration | đọc từ code | `2` ở QuickPizza | Không phải builtin field. |
 | `checks_per_iteration` | số check trong 1 iteration | đọc từ code | `2` ở QuickPizza | Không phải builtin field. |
 
@@ -583,6 +583,30 @@ Nếu `gracefulRampDown > thời gian iteration còn lại`:
 iteration có thể finish sạch dù timeline đã giảm VU
 ```
 
+Nhưng có một caveat rất quan trọng ở gần cuối scenario:
+
+```text
+gracefulStop vẫn là trần wall-clock cuối cùng của executor
+```
+
+Nói đời thường:
+
+```text
+gracefulRampDown = thời gian nới thêm khi bị giảm VU giữa timeline
+gracefulStop     = thời gian nới thêm khi cả scenario đi tới đoạn kết
+```
+
+Nếu một VU bị scale-down quá sát cuối scenario thì thời gian finish thật của nó có thể bị
+`gracefulStop` cắt ngắn. Nghĩa là:
+
+```text
+gracefulStop < gracefulRampDown
+=> grace cuối thực tế có thể ngắn hơn gracefulRampDown
+```
+
+Đây là đúng với comment trong core `ramping_vus.go`: step cuối luôn bị chặn ở
+`sum(stages) + gracefulStop`.
+
 ## 3.9. Checklist core đã lọc cho `ramping-vus`
 
 | Nguồn core | Ý nghĩa | Ghi nhớ |
@@ -596,7 +620,7 @@ iteration có thể finish sạch dù timeline đã giảm VU
 | `ramping_vus.go:437-451` | Step cuối bị cap ở `sum(stages) + gracefulStop`. | `gracefulStop` là trần wall-clock cuối. |
 | `ramping_vus.go:494-561` | `Run()` tách `regularDuration` và `maxDuration`; progress bám `regularDuration`. | Progress 100% rồi nhưng có thể còn grace phase rất ngắn. |
 | `vu_handle.go:115-181` | VU được `start()`, `gracefulStop()`, `hardStop()` qua state machine. | Scale-down mềm và hard-stop là hai chuyện khác nhau. |
-| `helpers.go:77-113` | Interrupted iteration được đếm khi context bị cancel trong lúc iteration đang chạy. | `ramping-vus` có thể có interrupted, nhất là khi `gracefulRampDown=0s`. |
+| `helpers.go:77-113` | Interrupted iteration được đếm khi context bị cancel trong lúc iteration đang chạy; full iteration chỉ tăng ở `AddFullIterations(1)`. | `ramping-vus` có thể có interrupted vì hard stop, hết grace, abort, hoặc interrupt error; không chỉ riêng case `gracefulRampDown=0s`. |
 | `internal/js/runner.go:RunOnce()` + `iterationSamples()` | `iteration_duration` được emit trước phần sleep bù `minIterationDuration`. | Nếu có min duration, throughput sizing dùng `effective_iteration_time`, không dùng riêng `iteration_duration`. |
 | `ramping_vus.go` + grep metric paths | Không có path emit `dropped_iterations`. | Đừng dạy `ramping-vus` như per/shared về `dropped_iterations`. |
 
@@ -835,6 +859,16 @@ nhưng vì gracefulRampDown đủ dài
 iteration vẫn kết thúc sạch ở 2.2s
 ```
 
+Đừng đọc ví dụ này thành quy tắc tuyệt đối:
+
+```text
+cứ có gracefulRampDown = 3s thì luôn được finish đủ 3s
+```
+
+Không đúng ở cuối scenario.
+Nếu VU bị scale-down quá sát mốc `sum(stages) + gracefulStop`, thì trần cuối cùng vẫn là
+`gracefulStop` của cả scenario, không phải toàn bộ `gracefulRampDown`.
+
 ## 6.2. Hard stop khi `gracefulRampDown = 0s`
 
 File:
@@ -944,6 +978,21 @@ vus................: 2     min=2       max=4
 vus_max............: 4     min=4       max=4
 
 running (6.8s), 0/4 VUs, 12 complete and 0 interrupted iterations
+```
+
+Đừng đọc nhầm 3 dòng sau thành cùng một loại số:
+
+```text
+4 looping VUs trong header
+  = trần planned VU theo execution plan của executor này
+
+running ... 0/4 VUs
+  = snapshot ở cuối lúc progress in ra
+  = lúc đó không còn VU nào đang bận, nhưng plan tối đa của executor là 4
+
+vus: 2 min=2 max=4
+  = Gauge summary của các sample active VUs trong lúc chạy
+  = không phải snapshot cuối
 ```
 
 ### 7.1. Từ output suy ra gì?

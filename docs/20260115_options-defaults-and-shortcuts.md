@@ -12,7 +12,16 @@
 
 Khi bạn viết k6 script, `options` **KHÔNG bắt buộc**. k6 có logic để:
 1. Áp dụng default values nếu không có options
-2. Convert "shortcut" options (vus, duration, stages) thành full scenarios
+2. Convert shortcut options thành full scenarios
+
+Trong core hiện tại, nhóm shortcut quan trọng là:
+
+```text
+iterations
+duration
+stages
+vus-only
+```
 
 ---
 
@@ -26,15 +35,15 @@ Script Load → Parse Options → DeriveScenariosFromShortcuts()
                     ┌──────────────────────────────────────────┐
                     │                                          │
                     ▼                         ▼                ▼
-            iterations set?          duration set?       stages set?
-                    │                         │                │
-                    ▼                         ▼                ▼
-            shared-iterations        constant-vus        ramping-vus
-                    │                         │                │
-                    └─────────────────────────┴────────────────┘
+            iterations set?    duration set?    stages set?    only vus set?
+                    │                 │               │               │
+                    ▼                 ▼               ▼               ▼
+            shared-iterations   constant-vus   ramping-vus   shared-iterations
+                                                                   (vus=N, iterations=N)
+                    └────────────────────────────────────────────────────┘
                                         │
                                         ▼
-                                scenarios = nil?
+                               no execution shortcut?
                                         │
                                         ▼
                               per-vu-iterations
@@ -49,7 +58,7 @@ Script Load → Parse Options → DeriveScenariosFromShortcuts()
 
 ```go
 // DeriveScenariosFromShortcuts checks for conflicting options and turns any
-// shortcut options (i.e. duration, iterations, stages) into the proper
+// shortcut options (i.e. duration, iterations, stages, vus-only) into the proper
 // long-form scenario/executor configuration in the scenarios property.
 func DeriveScenariosFromShortcuts(opts lib.Options, logger logrus.FieldLogger) (lib.Options, error) {
     result := opts
@@ -66,6 +75,13 @@ func DeriveScenariosFromShortcuts(opts lib.Options, logger logrus.FieldLogger) (
     case len(opts.Stages) > 0:
         // stages → ramping-vus executor
         result.Scenarios = getRampingVUsScenario(opts.Stages, opts.VUs)
+
+    case opts.VUs.Valid && opts.Stages == nil && !opts.Iterations.Valid && !opts.Duration.Valid:
+        // vus-only → shared-iterations executor with iterations = vus
+        ds := NewSharedIterationsConfig(lib.DefaultScenarioName)
+        ds.VUs = opts.VUs
+        ds.Iterations = opts.VUs
+        result.Scenarios = lib.ScenarioConfigs{lib.DefaultScenarioName: ds}
 
     case len(opts.Scenarios) > 0:
         // Explicit scenarios - do nothing
@@ -117,6 +133,7 @@ const DefaultScenarioName = "default"
 | `iterations` | `shared-iterations` | `{ iterations: 100 }` |
 | `duration` | `constant-vus` | `{ duration: '30s' }` |
 | `stages` | `ramping-vus` | `{ stages: [...] }` |
+| `vus` only | `shared-iterations` với `vus = N`, `iterations = N` | `{ vus: 10 }` |
 | `scenarios` | As defined | `{ scenarios: {...} }` |
 | **None** | `per-vu-iterations` (1 VU, 1 iter) | No options |
 
@@ -164,20 +181,43 @@ func getRampingVUsScenario(stages []lib.Stage, startVUs null.Int) lib.ScenarioCo
 }
 ```
 
+### 6.4 vus-only shortcut
+```go
+case opts.VUs.Valid && opts.Stages == nil && !opts.Iterations.Valid && !opts.Duration.Valid:
+    ds := NewSharedIterationsConfig(lib.DefaultScenarioName)
+    ds.VUs = opts.VUs
+    ds.Iterations = opts.VUs
+    result.Scenarios = lib.ScenarioConfigs{lib.DefaultScenarioName: ds}
+```
+
+Đọc đời thường:
+
+```text
+chỉ khai báo vus: N
+=> k6 không rơi về per-vu-iterations mặc định
+=> k6 tạo shared-iterations với N VU và tổng N iteration
+```
+
 ---
 
 ## 7. Warning Messages
 
-Khi có VUs mà không có duration/iterations/stages:
+Với core hiện tại, `vus`-only không còn là case "bị ignore".
+Nó có nhánh shortcut riêng:
 
 ```go
-// execution_config_shortcuts.go:98-101
-if opts.VUs.Valid && opts.VUs.Int64 != 1 {
-    logger.Warnf(
-        "`vus=%d` option will be ignored, it only works in conjunction with `iterations`, `duration`, or `stages`",
-        opts.VUs.Int64,
-    )
-}
+ds := NewSharedIterationsConfig(lib.DefaultScenarioName)
+ds.VUs = opts.VUs
+ds.Iterations = opts.VUs
+```
+
+Nghĩa là:
+
+```text
+options = { vus: 10 }
+=> executor thật là shared-iterations
+=> vus = 10
+=> iterations = 10
 ```
 
 ---
@@ -241,6 +281,26 @@ export const options = {
             executor: 'constant-vus',
             vus: 10,
             duration: '30s',
+        },
+    },
+};
+```
+
+### Script chỉ có `vus`
+```javascript
+export const options = {
+    vus: 10,
+};
+```
+
+Tương đương với:
+```javascript
+export const options = {
+    scenarios: {
+        default: {
+            executor: 'shared-iterations',
+            vus: 10,
+            iterations: 10,
         },
     },
 };

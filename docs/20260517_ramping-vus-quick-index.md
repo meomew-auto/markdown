@@ -74,6 +74,14 @@ average_iteration_rate = completed_iterations / actual_runtime
 average_http_request_rate = total_http_requests / actual_runtime
 ```
 
+Trong đó:
+
+```text
+t_i = thời gian một iteration của VU i giữ VU bận
+per_vu_rate_i = 1 / t_i = riêng VU đó trung bình chạy được bao nhiêu iteration/s
+active_vus = số VU đang bận ở thời điểm đang xét
+```
+
 Không có:
 
 ```text
@@ -103,4 +111,11 @@ completed_iterations = summary iterations count
 ```text
 ramping-vus đổi số VU theo timeline
 chứ không đặt lịch start iteration cố định như arrival-rate
+```
+
+Cảnh báo nhanh:
+
+```text
+gracefulStop có thể cắt ngắn gracefulRampDown ở cuối scenario
+vus và vus_max là Gauge sample theo chu kỳ, không phải timeline chính xác từng khoảnh khắc
 ```
