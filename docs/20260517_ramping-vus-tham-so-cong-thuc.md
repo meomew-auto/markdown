@@ -1124,13 +1124,13 @@ per_vu_rate_i = 1 / effective_iteration_time
 
 peak_iteration_rate_if_all_active ~= active_vus / effective_iteration_time
 
-average_iteration_rate = completed_iterations / actual_runtime
+average_iteration_rate = completed_iterations / summary_runtime_base
 
-average_http_request_rate = total_http_requests / actual_runtime
+average_http_request_rate = total_http_requests / summary_runtime_base
 
-total_http_requests = completed_iterations * http_requests_per_iteration
+estimated_http_requests_if_fixed_path = completed_iterations * http_requests_per_iteration
 
-total_checks = completed_iterations * checks_per_iteration
+estimated_checks_if_fixed_path = completed_iterations * checks_per_iteration
 ```
 
 Nhớ nhanh:

@@ -334,7 +334,7 @@ iteration đã start nhưng chưa finish trước duration + gracefulStop
 | `t_i` | thời gian chiếm VU cho 1 iteration | ký hiệu mình dùng | không min: `t_i = js_iteration_time_i`; có min: `t_i = max(js_iteration_time_i, minIterationDuration)` | Dùng để ước lượng tốc độ VU. |
 | `per_vu_rate_i` | tốc độ 1 VU | tự tính | `1 / t_i` | Một VU trung bình chạy được bao nhiêu iteration/s. |
 | `peak_iteration_rate_if_all_vus_active` | peak lý thuyết khi toàn bộ VU còn active | tự tính | `sum(1 / t_i)` hoặc `vus / t` nếu đều nhau | Không phải metric core k6. Dùng để dự đoán. |
-| `completed_iterations` | số iteration hoàn thành thật | summary/progress | đọc từ `iterations` hoặc progress `complete` | Với constant-vus, số này không biết trước. |
+| `completed_iterations` | số iteration hoàn thành thật | summary/progress | clean run thường đọc từ `iterations` hoặc progress `complete` | Với constant-vus, số này không biết trước. Edge case context chết trong sleep bù `minIterationDuration` có thể làm summary `iterations` và progress `complete` không hoàn toàn trùng. |
 | `interrupted_iterations` | số iteration bị cắt giữa chừng | progress cuối | đọc từ `interrupted iterations` | Có khi iteration dài hơn `duration + gracefulStop`. |
 | `actual_scenario_runtime` | thời gian scenario chạy thật theo trực giác của bài | summary / tự tính | thường gần `duration`, hoặc dài hơn nếu có iteration finish trong grace | Hữu ích để hiểu executor, nhưng không phải lúc nào cũng trùng mẫu số `/s` của summary. |
 | `average_iteration_rate` | tốc độ iteration trung bình nhìn từ summary | summary | `completed_iterations / summary_runtime_base` | Trong demo 1 scenario sạch, `summary_runtime_base` thường gần `actual_scenario_runtime`. |
@@ -964,7 +964,7 @@ Rate:
 per_vu_rate ~= 1 / 0.70315 = 1.422 iter/s/VU
 peak_iteration_rate ~= 2 / 0.70315 = 2.844 iter/s
 
-actual_runtime ~= 10 / 2.828882 = 3.535s
+summary_runtime_base ~= 10 / 2.828882 = 3.535s
 average_iteration_rate = 10 / 3.535 = 2.828882 iter/s
 ```
 
@@ -1063,7 +1063,7 @@ peak ~= 10 iter/s
 Tốc độ trung bình summary:
 
 ```text
-actual_runtime ~= 21 / 8.744211 = 2.402s
+summary_runtime_base ~= 21 / 8.744211 = 2.402s
 average_iteration_rate = 21 / 2.402 = 8.744211 iter/s
 ```
 
@@ -1181,7 +1181,7 @@ checks_per_iteration = 2
 total_http_requests = 12 * 2 = 24
 total_checks = 12 * 2 = 24
 
-actual_runtime ~= 12 / 2.333723 = 5.142s
+summary_runtime_base ~= 12 / 2.333723 = 5.142s
 http_reqs_rate ~= 24 / 5.142 = 4.667445 req/s
 ```
 

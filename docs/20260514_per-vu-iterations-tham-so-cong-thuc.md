@@ -467,7 +467,7 @@ lúc đó thường hợp hơn với:
 | `t_i` | thời gian chiếm VU cho 1 iteration | ký hiệu mình dùng | nếu không có min: `t_i = js_iteration_time_i`; có min: `t_i = max(js_iteration_time_i, minIterationDuration)` | Bằng `js_iteration_time_i`, hoặc bị kéo lên bởi `minIterationDuration`. |
 | `vu_runtime_i` | thời gian chạy hết việc của VU thứ i | tự tính | `vu_runtime_i ≈ iterations_per_vu * t_i` | Thời gian VU thứ i cần để chạy đủ `iterations_per_vu`. |
 | `total_iterations` | tổng số iteration theo kế hoạch | tự tính | `total_iterations = vus * iterations_per_vu` | Nếu không bị interrupt/drop: `vus * iterations_per_vu`. |
-| `completed_iterations` | số iteration hoàn thành thật | k6 output | đọc từ progress `... complete` hoặc summary `iterations` | Số complete trong progress hoặc metric `iterations` cuối test. |
+| `completed_iterations` | số iteration hoàn thành thật | k6 output | clean run thường đọc từ progress `... complete` hoặc summary `iterations` | Trong clean run hai chỗ này thường trùng. Edge case context chết trong sleep bù `minIterationDuration` có thể làm summary `iterations` đã tăng nhưng progress vẫn báo interrupted. |
 | `actual_scenario_runtime` | thời gian scenario chạy thật theo mô hình giải thích của bài | output / tự ước lượng | `actual_scenario_runtime ≈ max(vu_runtime_i)` | Với `per-vu-iterations`, thường gần thời gian của VU chậm nhất. Đây là đại lượng trực giác để hiểu scenario, không phải lúc nào cũng trùng mẫu số `/s` của summary. |
 | `peak_iteration_rate_if_all_vus_active` | tốc độ iteration cao nhất khi tất cả VU còn active | tự tính | `sum(1 / t_i)` | Không phải metric core k6. Dùng để dự đoán peak. |
 | `average_iteration_rate` | tốc độ iteration trung bình nhìn từ summary | k6 summary / tự tính | `completed_iterations / summary_runtime_base` | Trong demo 1 scenario sạch, `summary_runtime_base` thường gần `actual_scenario_runtime`, nên hai cách nhìn gần nhau. |
@@ -1088,7 +1088,7 @@ actual_scenario_runtime ≈ max(vu_runtime_i)
 Average iteration rate:
 
 ```text
-average_iteration_rate = completed_iterations / actual_scenario_runtime
+average_iteration_rate = completed_iterations / summary_runtime_base
 ```
 
 Nếu không bị interrupt/drop:
@@ -1439,7 +1439,7 @@ actual_scenario_runtime ≈ max(vu_runtime_fast, vu_runtime_slow)
 Average toàn test:
 
 ```text
-average_iteration_rate = completed_iterations / actual_scenario_runtime
+average_iteration_rate = completed_iterations / summary_runtime_base
                        = 200 / 10s
                        = 20 iters/s
 ```
@@ -1733,7 +1733,7 @@ Tự kiểm tra average iteration rate:
 
 ```text
 average_iteration_rate
-  = completed_iterations / actual_scenario_runtime
+  = completed_iterations / summary_runtime_base
   ≈ 12 / 4.4s
   ≈ 2.7 iters/s
 ```
@@ -1810,7 +1810,7 @@ Không, không nên hiểu như vậy cho `iteration_duration`.
 
 ```text
 average_iteration_rate
-  = completed_iterations / actual_scenario_runtime
+  = completed_iterations / summary_runtime_base
 ```
 
 Tự tính lại:
@@ -2227,7 +2227,7 @@ average_iteration_rate
   ≈ 2.780988 iters/s
 
 average_http_request_rate
-  = total_http_requests / actual_scenario_runtime
+  = total_http_requests / summary_runtime_base
   = 12 / 4.315
   ≈ 2.780988 req/s
 ```
@@ -2269,7 +2269,7 @@ total_http_requests
 
 ```text
 http_request_rate
-  = total_http_requests / actual_scenario_runtime
+  = total_http_requests / summary_runtime_base
 ```
 
 Với run này:
@@ -2543,7 +2543,7 @@ estimated_http_reqs_rate = iterations/s
 ```
 
 Đây chỉ là cách nối hai Counter trong clean run 1 request/iteration. Metric `http_reqs/s` thật
-vẫn được summary tính bằng `total_http_requests / actual_scenario_runtime`.
+vẫn được summary tính bằng `total_http_requests / summary_runtime_base`.
 
 Kết luận:
 
@@ -2556,7 +2556,7 @@ Kết luận:
   trong demo không có minIterationDuration nên effective_iteration_time gần bằng iteration_duration
 
 http_reqs/s trong summary
-  = total_http_requests / actual_scenario_runtime
+  = total_http_requests / summary_runtime_base
 ```
 
 #### E.2. Nếu đã biết `iteration_duration`, thì 1 VU 1 giây chạy được bao nhiêu iteration?
@@ -3197,7 +3197,7 @@ peak_total_rate
   ≈ active_vus * per_vu_rate
 
 average_iteration_rate
-  = completed_iterations / actual_scenario_runtime
+  = completed_iterations / summary_runtime_base
 
 summary iterations/s
   = average_iteration_rate, không phải peak
@@ -3260,3 +3260,4 @@ run-known / estimate-after-run:
   peak_iteration_rate_if_all_vus_active
   average_iteration_rate
 ```
+

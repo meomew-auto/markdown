@@ -401,7 +401,7 @@ số VU active còn thay đổi theo ramp timeline
 Nên `http_reqs/s` của toàn scenario phải đọc bằng:
 
 ```text
-total_http_requests / actual_runtime
+total_http_requests / summary_runtime_base
 ```
 
 không suy ra trực tiếp từ `1 / http_req_duration_avg`.
@@ -502,7 +502,7 @@ checks_per_iteration = 2
 total_http_requests = 12 * 2 = 24
 total_checks = 12 * 2 = 24
 
-actual_runtime = 12 / 1.771928 ≈ 6.7722s
+summary_runtime_base = 12 / 1.771928 ≈ 6.7722s
 
 average_iteration_rate = 12 / 6.7722 ≈ 1.771928 iter/s
 

@@ -360,7 +360,7 @@ pool còn 1 iteration chưa được claim trước khi hết maxDuration
 | `vus` | số VU / số worker | `options.scenarios.<name>.vus` | lấy từ config | Số VU cùng chia nhau tổng iteration. |
 | `iterations` | tổng số iteration chung | `options.scenarios.<name>.iterations` | lấy từ config | Tổng số iteration của scenario, không phải mỗi VU. |
 | `total_iterations_target` | tổng iteration mục tiêu | ký hiệu mình dùng | `total_iterations_target = iterations` | Tổng việc cần chạy xong. |
-| `completed_iterations` | số iteration hoàn thành thật | summary/progress | đọc từ `iterations` hoặc progress `complete` | Nếu không drop/interrupt thì bằng `iterations`. |
+| `completed_iterations` | số iteration hoàn thành thật | summary/progress | clean run thường đọc từ `iterations` hoặc progress `complete` | Nếu không drop/interrupt thì thường bằng `iterations`. Edge case context chết trong sleep bù `minIterationDuration` có thể làm summary `iterations` và progress `complete` lệch nhau. |
 | `iterations_per_vu_i` | số iteration VU i thực tế chạy | log / tự đo | không cố định | VU nhanh thường có số này lớn hơn VU chậm. |
 | `maxDuration` | trần thời gian chạy bình thường | config | lấy trực tiếp | Hết mốc này không start iteration mới. |
 | `gracefulStop` | thời gian chờ dừng mềm | config/base | lấy trực tiếp | Cho iteration đang chạy thêm thời gian kết thúc. |
@@ -727,7 +727,7 @@ Và tốc độ toàn scenario:
 
 ```text
 iterations/s
-  = completed_iterations / actual_runtime
+  = completed_iterations / summary_runtime_base
   = 16 / 1.602s
   ≈ 9.985 iter/s
 ```
