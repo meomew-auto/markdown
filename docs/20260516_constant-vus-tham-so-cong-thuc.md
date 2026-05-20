@@ -336,11 +336,11 @@ iteration đã start nhưng chưa finish trước duration + gracefulStop
 | `peak_iteration_rate_if_all_vus_active` | peak lý thuyết khi toàn bộ VU còn active | tự tính | `sum(1 / t_i)` hoặc `vus / t` nếu đều nhau | Không phải metric core k6. Dùng để dự đoán. |
 | `completed_iterations` | số iteration hoàn thành thật | summary/progress | đọc từ `iterations` hoặc progress `complete` | Với constant-vus, số này không biết trước. |
 | `interrupted_iterations` | số iteration bị cắt giữa chừng | progress cuối | đọc từ `interrupted iterations` | Có khi iteration dài hơn `duration + gracefulStop`. |
-| `actual_scenario_runtime` | thời gian scenario chạy thật | summary / tự tính | `count / rate` với Counter | Thường gần `duration`, hoặc dài hơn nếu có iteration finish trong gracefulStop. |
-| `average_iteration_rate` | tốc độ iteration trung bình | summary | `completed_iterations / actual_scenario_runtime` | Summary `iterations...: count rate/s`. |
+| `actual_scenario_runtime` | thời gian scenario chạy thật theo trực giác của bài | summary / tự tính | thường gần `duration`, hoặc dài hơn nếu có iteration finish trong grace | Hữu ích để hiểu executor, nhưng không phải lúc nào cũng trùng mẫu số `/s` của summary. |
+| `average_iteration_rate` | tốc độ iteration trung bình nhìn từ summary | summary | `completed_iterations / summary_runtime_base` | Trong demo 1 scenario sạch, `summary_runtime_base` thường gần `actual_scenario_runtime`. |
 | `http_requests_per_iteration` | số request trong 1 iteration | code | đếm `http.get/post/...` | Dùng để map `iterations` sang `http_reqs`. |
 | `checks_per_iteration` | số check trong 1 iteration | code | đếm check name / check expression | Dùng để map `iterations` sang `checks_total`. |
-| `http_reqs_rate` | tốc độ HTTP request | summary | `http_reqs / actual_scenario_runtime` | Đây là RPS theo HTTP request. |
+| `http_reqs_rate` | tốc độ HTTP request nhìn từ summary | summary | `http_reqs / summary_runtime_base` | Đây là RPS theo HTTP request. |
 | `iteration_duration` | thời gian 1 iteration hoàn chỉnh | summary | Trend `avg/min/med/max/p...` | Đo từ lúc bắt đầu gọi JS function đến lúc function trả về. |
 | `vus` metric | số VU active tại sample | summary/progress | Gauge `value/min/max` | Với constant-vus thường min=max=`vus` trong lúc chạy. |
 | `vus_max` metric | số VU initialized/reserved | summary/header | Gauge `value/min/max` | Thường bằng `vus` với constant-vus. |
@@ -506,11 +506,11 @@ Nếu `gracefulStop` quá ngắn, iteration cuối có thể bị interrupt, lú
 
 ### 3.3. Runtime và rate
 
-Với metric `Counter`:
+Với metric `Counter`, core summary dùng:
 
 ```text
-rate = count / actual_scenario_runtime
-actual_scenario_runtime = count / rate
+rate = count / summary_runtime_base
+summary_runtime_base = count / rate
 ```
 
 Ví dụ từ demo loop:
@@ -518,9 +518,16 @@ Ví dụ từ demo loop:
 ```text
 iterations.........: 10  2.828882/s
 
-actual_scenario_runtime
+summary_runtime_base
   = 10 / 2.828882
   = 3.535s
+```
+
+Lưu ý:
+
+```text
+đây là mẫu số mà summary Counter dùng cho cột /s của cả test run
+trong demo 1 scenario, startTime=0, không setup/teardown thì nó thường gần runtime của scenario
 ```
 
 Khớp với:

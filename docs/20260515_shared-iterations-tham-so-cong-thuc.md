@@ -366,8 +366,8 @@ pool còn 1 iteration chưa được claim trước khi hết maxDuration
 | `gracefulStop` | thời gian chờ dừng mềm | config/base | lấy trực tiếp | Cho iteration đang chạy thêm thời gian kết thúc. |
 | `minIterationDuration` | thời gian tối thiểu mỗi iteration | global option | lấy trực tiếp | Nếu function chạy ngắn hơn min, k6 sleep bù sau function. Phần sleep bù không nằm trong `iteration_duration`, nhưng vẫn chiếm VU. |
 | `effective_iteration_time` | thời gian VU bị bận cho 1 iteration | tự tính | không min: `iteration_duration`; có min: `max(iteration_duration, minIterationDuration)` | Dùng để ước lượng `per_vu_rate`. |
-| `actual_scenario_runtime` | thời gian scenario chạy thật | summary / tự tính | `count / rate` với Counter | Thời gian thật cho đến khi pool iteration chạy xong. |
-| `average_iteration_rate` | tốc độ iteration trung bình | summary | `completed_iterations / actual_scenario_runtime` | Summary `iterations...: count rate/s`. |
+| `actual_scenario_runtime` | thời gian scenario chạy thật theo cách nhìn của bài | summary / tự tính | gần với thời gian đến khi pool iteration chạy xong | Hữu ích để hiểu executor, nhưng không phải lúc nào cũng trùng mẫu số `/s` của summary. |
+| `average_iteration_rate` | tốc độ iteration trung bình nhìn từ summary | summary | `completed_iterations / summary_runtime_base` | Với demo 1 scenario sạch, `summary_runtime_base` thường gần runtime của scenario. |
 | `vus` metric | số VU active tại sample | summary/progress | Gauge `value/min/max` | Có bao nhiêu VU đang active theo sample. |
 | `vus_max` metric | số VU initialized | summary | Gauge `value/min/max` | Số VU đã tạo sẵn/reserve. |
 | `iteration_duration` | thời gian một iteration | summary | Trend `avg/min/med/max/p...` | Đo cả JS, HTTP, check, sleep trong function. |
@@ -422,11 +422,11 @@ sum(iterations_per_vu_i) = total_iterations_target
 
 ### 3.3. Runtime và rate
 
-Với metric `Counter`:
+Với metric `Counter`, core summary dùng:
 
 ```text
-rate = count / actual_scenario_runtime
-actual_scenario_runtime = count / rate
+rate = count / summary_runtime_base
+summary_runtime_base = count / rate
 ```
 
 Ví dụ:
@@ -434,9 +434,16 @@ Ví dụ:
 ```text
 iterations.........: 12  2.317275/s
 
-actual_scenario_runtime
+summary_runtime_base
   = 12 / 2.317275
   ≈ 5.1785s
+```
+
+Lưu ý:
+
+```text
+đây là mẫu số mà summary Counter dùng cho cột /s của cả test run
+trong demo 1 scenario, startTime=0, không setup/teardown thì nó mới gần runtime của scenario
 ```
 
 Khi cần ước lượng tốc độ mỗi VU, dùng thời gian VU bị bận:

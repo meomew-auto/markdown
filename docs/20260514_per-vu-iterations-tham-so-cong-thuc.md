@@ -468,9 +468,9 @@ lúc đó thường hợp hơn với:
 | `vu_runtime_i` | thời gian chạy hết việc của VU thứ i | tự tính | `vu_runtime_i ≈ iterations_per_vu * t_i` | Thời gian VU thứ i cần để chạy đủ `iterations_per_vu`. |
 | `total_iterations` | tổng số iteration theo kế hoạch | tự tính | `total_iterations = vus * iterations_per_vu` | Nếu không bị interrupt/drop: `vus * iterations_per_vu`. |
 | `completed_iterations` | số iteration hoàn thành thật | k6 output | đọc từ progress `... complete` hoặc summary `iterations` | Số complete trong progress hoặc metric `iterations` cuối test. |
-| `actual_scenario_runtime` | thời gian scenario chạy thật | output / tự ước lượng | `actual_scenario_runtime ≈ max(vu_runtime_i)` | Với `per-vu-iterations`, thường gần thời gian của VU chậm nhất. |
+| `actual_scenario_runtime` | thời gian scenario chạy thật theo mô hình giải thích của bài | output / tự ước lượng | `actual_scenario_runtime ≈ max(vu_runtime_i)` | Với `per-vu-iterations`, thường gần thời gian của VU chậm nhất. Đây là đại lượng trực giác để hiểu scenario, không phải lúc nào cũng trùng mẫu số `/s` của summary. |
 | `peak_iteration_rate_if_all_vus_active` | tốc độ iteration cao nhất khi tất cả VU còn active | tự tính | `sum(1 / t_i)` | Không phải metric core k6. Dùng để dự đoán peak. |
-| `average_iteration_rate` | tốc độ iteration trung bình toàn test | k6 summary / tự tính | `completed_iterations / actual_scenario_runtime` | Summary `iterations...: 200 19.98/s` là giá trị này. |
+| `average_iteration_rate` | tốc độ iteration trung bình nhìn từ summary | k6 summary / tự tính | `completed_iterations / summary_runtime_base` | Trong demo 1 scenario sạch, `summary_runtime_base` thường gần `actual_scenario_runtime`, nên hai cách nhìn gần nhau. |
 | `vus` metric | số VU active tại thời điểm sample | k6 metric | đọc trong progress `02/10 VUs` hoặc summary `vus` | Gauge, lấy từ active VU count trong core. |
 | `vus_max` metric | số VU đã initialized | k6 metric | đọc trong header / summary `vus_max` | Gauge, thường bằng số VU được tạo/reserve. |
 | `iteration_duration` metric | thời gian 1 iteration hoàn chỉnh | k6 metric | đọc trong summary `iteration_duration`; core tính `endTime - startTime` | Trend, đo từ lúc k6 bắt đầu gọi JS function đến lúc function xong. |
@@ -2319,29 +2319,53 @@ estimated_http_reqs_rate = 2 * iterations/s
 
 #### D.2. Nếu lấy `actual_scenario_runtime` làm gốc thì suy ra gì?
 
-Với các metric kiểu `Counter`, `actual_scenario_runtime` là mẫu số chung:
+Đoạn này cần nói rất chặt:
 
 ```text
-rate = count / actual_scenario_runtime
+core summary của Counter dùng test run duration của cả test làm mẫu số cho cột /s
 ```
 
-Nên nếu đã biết runtime thật của scenario, ta suy ra được ngay:
+Trong các ví dụ của bài này, vì test thường là:
+
+```text
+1 scenario
+startTime = 0
+không setup/teardown
+```
+
+nên mẫu số của summary thường gần với runtime thật của scenario.
+Vì vậy để giải thích đời thường, ta hay nhìn:
+
+```text
+actual_scenario_runtime ≈ summary_runtime_base
+```
+
+Nhưng nếu có nhiều scenario, có `startTime`, có `setup()`, hoặc có phần đuôi khác, đừng đồng nhất
+hai đại lượng đó.
+
+Với các metric kiểu `Counter`, summary dùng:
+
+```text
+rate = count / summary_runtime_base
+```
+
+Nên nếu đã biết mẫu số summary, ta suy ra được:
 
 ```text
 iterations_rate
-  = completed_iterations / actual_scenario_runtime
+  = completed_iterations / summary_runtime_base
 
 http_reqs_rate
-  = total_http_requests / actual_scenario_runtime
+  = total_http_requests / summary_runtime_base
 
 checks_total_rate
-  = total_checks / actual_scenario_runtime
+  = total_checks / summary_runtime_base
 ```
 
 Chiều ngược lại, nếu biết `count` và `rate` của cùng một Counter:
 
 ```text
-actual_scenario_runtime
+summary_runtime_base
   = count / rate
 ```
 

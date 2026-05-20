@@ -23,7 +23,7 @@ docs/20260514_per-vu-iterations-tham-so-cong-thuc.md
 | QuickPizza 1 request / iteration | [Demo QuickPizza](./20260514_per-vu-iterations-tham-so-cong-thuc.md#77-demo-chạy-thật-với-quickpizza) |
 | Bảng map output QuickPizza về công thức | [Map ngược output](./20260514_per-vu-iterations-tham-so-cong-thuc.md#772-map-ngược-từ-output-về-các-giá-trị-ở-đầu-file) |
 | Công thức `http_reqs: count rate/s` | [`http_reqs` formula](./20260514_per-vu-iterations-tham-so-cong-thuc.md#d1-công-thức-riêng-cho-http_reqs-12--2780988s) |
-| Dùng `actual_scenario_runtime` để suy ra các rate/count | [`runtime` làm gốc](./20260514_per-vu-iterations-tham-so-cong-thuc.md#d2-nếu-lấy-actual_scenario_runtime-làm-gốc-thì-suy-ra-gì) |
+| Dùng `summary runtime base` để suy ra các rate/count | [`runtime` làm gốc](./20260514_per-vu-iterations-tham-so-cong-thuc.md#d2-nếu-lấy-actual_scenario_runtime-làm-gốc-thì-suy-ra-gì) |
 | Công thức `1 VU chạy bao nhiêu iteration/s` | [`per_vu_rate`](./20260514_per-vu-iterations-tham-so-cong-thuc.md#e2-nếu-đã-biết-iteration_duration-thì-1-vu-1-giây-chạy-được-bao-nhiêu-iteration) |
 | Các loại metric và công thức tổng quát | [Metric types and formulas](./20260515_k6_metric_types_and_formulas.md) |
 | TPS, RPS, peak vs average throughput | [TPS / Throughput](./20260515_tps-throughput-jmeter-vs-k6.md) |
@@ -60,18 +60,18 @@ per_vu_rate ≈ 1 / effective_iteration_time
 
 peak_total_rate ≈ active_vus * per_vu_rate
 
-average_iteration_rate = completed_iterations / actual_scenario_runtime
+average_iteration_rate = completed_iterations / summary_runtime_base
 
 summary iterations/s = average_iteration_rate, không nhân thêm vus
 
 http_reqs_count = completed_iterations * http_requests_per_iteration
 
-http_reqs_rate = http_reqs_count / actual_scenario_runtime
+http_reqs_rate = http_reqs_count / summary_runtime_base
 
-checks_total_rate = total_checks / actual_scenario_runtime
+checks_total_rate = total_checks / summary_runtime_base
 
 Với Counter:
-  actual_scenario_runtime = count / rate
+  summary_runtime_base = count / rate
 
 Nếu 1 completed iteration luôn chạy đủ N HTTP requests:
   estimated_http_reqs_rate ≈ N * iterations/s
@@ -89,7 +89,7 @@ Nếu 1 completed iteration luôn chạy đủ N HTTP requests:
 | `completed_iterations` | số iteration đã chạy xong thật | dòng summary `iterations` hoặc progress `complete` |
 | `dropped_iterations` | iteration chưa kịp start vì hết `maxDuration` | metric `dropped_iterations`, thường chỉ có khi chạm `maxDuration` |
 | `interrupted_iterations` | iteration đã start nhưng bị cắt giữa chừng | progress cuối `interrupted iterations` |
-| `actual_scenario_runtime` | thời gian chạy thật dùng để tính `/s` | lấy gần đúng bằng `Counter count / Counter rate` |
+| `summary_runtime_base` | thời gian mà summary Counter dùng làm mẫu số cho cột `/s` | lấy từ `Counter count / Counter rate` |
 | `http_requests_per_iteration` | mỗi iteration gọi bao nhiêu HTTP request | đọc trong code demo/script |
 | `iterations/s` | completed iteration trung bình mỗi giây | dòng summary `iterations...: count rate/s` |
 
@@ -98,4 +98,11 @@ Nếu 1 completed iteration luôn chạy đủ N HTTP requests:
 ```text
 summary iterations/s đã là tốc độ trung bình toàn scenario
 không nhân thêm với vus nữa
+```
+
+Và thêm 1 caveat quan trọng:
+
+```text
+core summary chia Counter rate theo test run duration của cả test
+trong các demo 1 scenario, startTime=0, không setup/teardown thì nó thường gần bằng runtime của scenario
 ```

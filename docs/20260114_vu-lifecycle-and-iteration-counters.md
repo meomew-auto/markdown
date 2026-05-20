@@ -892,13 +892,18 @@ Key point: **ReturnVU = trả về pool để có thể reuse; không phải des
 
 ### 4.3 VU Reuse Behavior
 - ✅ VUs **CÓ THỂ** được reuse giữa scenarios
-- ⚠️ Trong practice, reuse chỉ xảy ra khi:
-  1. Scenarios chạy **tuần tự** (không song song)
-  2. Số VUs available < tổng VUs cần cho tất cả scenarios
+- ⚠️ Điều kiện đúng là:
+  1. VU đó đã `ReturnVU()` về pool chung
+  2. Có executor khác cần `GetPlannedVU()` sau thời điểm đó
+
+Scenario chạy tuần tự là case dễ thấy nhất, nhưng không phải điều kiện duy nhất.
+Ngay cả trong một timeline có scale-down giữa chừng, một VU cũng có thể được trả về pool rồi
+được chỗ khác mượn lại nếu timing phù hợp.
 
 ### 4.4 Pre-initialization
-- k6 tính `MaxPlannedVUs` = tổng VUs cần cho tất cả scenarios
-- Tất cả VUs được init **trước khi** test bắt đầu
+- k6 tính `MaxPlannedVUs` = mức **peak planned VUs** trên toàn execution plan theo thời gian
+- Scheduler chỉ init trước **planned VUs**
+- `unplanned VUs` có thể được sinh thêm giữa lúc test đang chạy
 - Nếu scenarios chạy song song, mỗi scenario lấy VUs riêng từ pool
 
 ---
@@ -910,7 +915,7 @@ Key point: **ReturnVU = trả về pool để có thể reuse; không phải des
 │                     INITIALIZATION PHASE                            │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
-│  MaxPlannedVUs = scenario_a.vus + scenario_b.vus = 4                │
+│  MaxPlannedVUs = peak planned VUs của execution plan = 4            │
 │                                                                     │
 │  initVU() → VU #1 (ID=1, iteration=0, scenarioIter={}) ──┐         │
 │  initVU() → VU #2 (ID=2, iteration=0, scenarioIter={}) ──┼──▶ vus  │
@@ -927,16 +932,16 @@ Key point: **ReturnVU = trả về pool để có thể reuse; không phải des
 │  [Scenario A - Executor]                                            │
 │    GetPlannedVU() → VU #1                                           │
 │    Activate(scenario="a")                                           │
-│    RunOnce() → iteration=1, scenarioIter={"a": 0}                   │
-│    RunOnce() → iteration=2, scenarioIter={"a": 1}                   │
-│    RunOnce() → iteration=3, scenarioIter={"a": 2}                   │
+│    RunOnce() → lần chạy 1 (__ITER=0, scenarioIter={"a": 0})         │
+│    RunOnce() → lần chạy 2 (__ITER=1, scenarioIter={"a": 1})         │
+│    RunOnce() → lần chạy 3 (__ITER=2, scenarioIter={"a": 2})         │
 │    ReturnVU(VU #1)                                                  │
 │                                                                     │
 │  [Scenario B - Executor] (reuses VU #1)                             │
 │    GetPlannedVU() → VU #1 (same VU!)                                │
 │    Activate(scenario="b")                                           │
-│    RunOnce() → iteration=4, scenarioIter={"a": 2, "b": 0}  ← NEW!   │
-│    RunOnce() → iteration=5, scenarioIter={"a": 2, "b": 1}           │
+│    RunOnce() → lần chạy 4 (__ITER=3, scenarioIter={"a": 2, "b": 0})│
+│    RunOnce() → lần chạy 5 (__ITER=4, scenarioIter={"a": 2, "b": 1})│
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -1011,7 +1016,8 @@ vus_max: 2
 ### Giải thích
 
 1. **k6 init 2 VUs** (không phải 1 như dự đoán ban đầu)
-2. **Lý do**: k6 tính overlap dựa trên `maxDuration`, không phải thời gian thực tế
+2. **Lý do**: k6 tính overlap dựa trên execution plan reserve, nên ở ví dụ này nhìn theo
+   `maxDuration` của từng scenario chứ không theo thời gian thực tế
    - `first`: 0s → 5s (maxDuration)
    - `second`: 3s → 8s (startTime + maxDuration)
    - **Overlap on paper**: 3s → 5s → cần 2 VUs concurrent
@@ -1025,7 +1031,9 @@ MaxPlannedVUs = max(sum of VUs at each time point based on maxDuration)
               ≠ max(sum of VUs at each time point based on actual runtime)
 ```
 
-k6 **pre-calculates** VU requirements **trước khi test chạy**, dựa trên worst-case scenario (maxDuration), không thể biết iterations sẽ xong sớm hơn.
+k6 **pre-calculates** planned VU requirements **trước khi test chạy**.
+Nó dựa trên execution plan của các scenario, nên với nhóm executor này thường nhìn như worst-case
+theo `maxDuration`; nhưng đây là **planned VUs**, không phải toàn bộ VUs có thể tồn tại trong run.
 
 ### Để force VU reuse
 
@@ -1035,5 +1043,13 @@ scenarios: {
     second: { vus: 1, iterations: 2, startTime: '3s', maxDuration: '2s' },  // 3s → 5s
 }
 // No overlap: 2s < 3s → MaxPlannedVUs = 1 → VU reuse!
+```
+
+Lưu ý: ví dụ này đang ngầm bỏ qua `gracefulStop`.
+Nếu giữ default `gracefulStop: 30s`, trên execution plan hai scenario vẫn có thể chồng nhau.
+Muốn ví dụ "không overlap" đúng tuyệt đối theo core, nên set rõ:
+
+```javascript
+gracefulStop: '0s'
 ```
 

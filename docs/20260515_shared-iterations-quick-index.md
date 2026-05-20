@@ -44,13 +44,13 @@ Nếu có drop/interrupt:
   completed_iterations có thể nhỏ hơn iterations
 
 Counter:
-  rate = count / runtime
-  runtime = count / rate
+  rate = count / summary_runtime_base
+  summary_runtime_base = count / rate
 
 http_reqs_count = completed_iterations * http_requests_per_iteration
-http_reqs_rate = http_reqs_count / runtime
+http_reqs_rate = http_reqs_count / summary_runtime_base
 
-checks_total_rate = total_checks / runtime
+checks_total_rate = total_checks / summary_runtime_base
 
 Nếu 1 completed iteration luôn chạy đủ N HTTP requests:
   estimated_http_reqs_rate ≈ N * iterations/s
@@ -64,7 +64,7 @@ Per VU speed:
 
 Peak vs average:
   peak_total_rate ≈ active_vus * per_vu_rate
-  average_total_rate = completed_iterations / actual_runtime
+  average_total_rate = completed_iterations / summary_runtime_base
   summary iterations/s = average_total_rate, không nhân thêm vus
 
 Shared distribution:
@@ -79,7 +79,7 @@ Shared distribution:
 | `iterations` | tổng số iteration của cả scenario | config `iterations` |
 | `iterations_per_vu_i` | VU số i thực tế chạy bao nhiêu vòng | phải log `__VU`, `__ITER` hoặc `exec.vu.*` |
 | `completed_iterations` | số iteration hoàn tất thật | summary `iterations` |
-| `runtime` / `actual_runtime` | thời gian chạy thật dùng để tính rate | `count / rate` từ Counter summary |
+| `summary_runtime_base` | thời gian mà Counter summary dùng làm mẫu số cho cột `/s` | `count / rate` từ Counter summary |
 | `http_requests_per_iteration` | mỗi iteration thường gọi mấy request | đọc trong code script |
 | `effective_iteration_time` | thời gian một VU bị bận cho một vòng | thường lấy từ `iteration_duration`, nhớ caveat `minIterationDuration` |
 
@@ -88,6 +88,13 @@ Shared distribution:
 ```text
 shared-iterations không chia đều iteration theo VU
 VU nhanh có thể lấy thêm việc
+```
+
+Và thêm 1 caveat:
+
+```text
+Counter summary dùng test run duration của cả test làm mẫu số
+trong demo 1 scenario, startTime=0, không setup/teardown thì nó mới gần với runtime của scenario
 ```
 
 ## Nhớ khác biệt với `per-vu-iterations`

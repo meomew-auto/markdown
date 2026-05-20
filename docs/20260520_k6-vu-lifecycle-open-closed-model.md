@@ -1018,6 +1018,10 @@ không cộng tất cả scenario của cả bài test bất kể chúng có ch�
 
 Nhưng nếu nhiều scenario chạy chồng thời gian lên nhau, thì k6 có cộng.
 
+Các ví dụ 1, 2, 3 dưới đây đang **cố ý bỏ qua `gracefulStop`** để dễ nhìn ý chính.
+Nếu giữ default `gracefulStop: 30s`, execution plan thật có thể dài hơn phần `duration` viết trong
+ví dụ, nên mốc overlap cũng sẽ khác.
+
 Ví dụ 1: hai scenario chạy cùng lúc
 
 ```text
@@ -1066,6 +1070,12 @@ từ 30s đến 50s:
 
 => mức cao nhất là 30
 => k6 chuẩn bị 30 planned VU
+```
+
+Muốn đúng tuyệt đối theo core trong các ví dụ kiểu "không overlap", hãy hiểu ngầm là:
+
+```text
+gracefulStop = 0s
 ```
 
 Sau đó scheduler tạo VU và đẩy vào pool chung:

@@ -208,9 +208,9 @@ vus = active VUs tại thời điểm sample
 vus_max = initialized VUs tại thời điểm sample
 ```
 
-`active VUs` ở đây là VUs đang chạy iteration, hoặc đang trong đoạn graceful wind-down của
-iteration đó. VU đã init xong nhưng đang rảnh chờ slot mới thì chưa tính vào `vus`; nó thuộc
-initialized VUs.
+`active VUs` ở đây nên đọc sát core là: VU đang thật sự bận chạy iteration.
+Nếu VU đã nhận lệnh dừng nhưng vẫn chưa thoát khỏi iteration, nó vẫn còn được tính là đang bận.
+VU đã init xong nhưng đang rảnh chờ slot mới thì chưa tính vào `vus`; nó thuộc initialized VUs.
 
 `iterations` và `iteration_duration` vẫn được emit bởi JS runner sau full iteration.
 Nếu có `minIterationDuration`, phần sleep bù không nằm trong `iteration_duration`
@@ -227,6 +227,8 @@ nhưng vẫn giữ VU bận.
 | `stage.target` | nhịp đích ở cuối stage | iterations/timeUnit | code/header | Đây là nhịp start, không phải VU. |
 | `preAllocatedVUs` | VU chuẩn bị sẵn | VUs | code/header | Số worker có sẵn từ đầu để đỡ phải tạo gấp. |
 | `maxVUs` | trần VU tối đa | VUs | code/header | Giới hạn cao nhất của worker; nếu bỏ qua thì bằng `preAllocatedVUs`. |
+| `startTime` | delay trước khi cả đường ramp bắt đầu | duration | code/header | Dời toàn bộ đường ramp trên timeline tổng; không đổi toán bên trong từng stage. |
+| `gracefulStop` | thời gian cho iteration đã start được finish sau `total_regular_duration` | duration | code/header | Sau mốc này iteration đang dở có thể bị interrupt. |
 | `total_regular_duration` | tổng thời gian của các stage | duration | tự tính | `sum(stage.duration)`, chưa tính `gracefulStop`. |
 | `lambda_start` | nhịp start lúc mở màn | iterations/s | tự tính | `startRate / timeUnit`. |
 | `lambda_peak` | nhịp cao nhất trong cả timeline | iterations/s | tự tính | max của `startRate` và mọi `stage.target`. |
@@ -412,6 +414,43 @@ Trong `cal()`:
 Ví dụ stage trước kết thúc ở `9.8` events thì `0.8` không mất đi. Core giữ phần đó trong
 `doneSoFar`, rồi stage sau chỉ cần cộng tiếp phần còn lại để tìm khi nào slot kế tiếp xảy ra.
 
+Hai caveat rất quan trọng:
+
+```text
+ramping-arrival-rate không có một ticker_period cố định cho toàn run
+```
+
+Khác `constant-arrival-rate`, gap giữa các slot thay đổi theo stage curve.
+`tickerPeriod` trong `Run()` chỉ là khoảng cách hiện tại giữa hai slot liên tiếp để update progress/UI.
+
+Và:
+
+```text
+slot đầu không mặc định ở t=0
+```
+
+`cal()` phát các mốc start tuyệt đối theo số event nguyên đầu tiên cần đạt.
+Nói đời thường:
+
+```text
+k6 không hiểu là "vừa vào bài thì phải bấm start ngay ở t=0"
+k6 chờ đến lúc diện tích tích lũy đủ cho event nguyên đầu tiên
+```
+
+Mini ví dụ:
+
+```text
+startRate = 2/s
+stage 1 ramp 2 -> 4 trong 2s
+
+slot 1: xuất hiện ở mốc đầu tiên đủ 1 event
+slot 2: xuất hiện ở mốc tiếp theo đủ 2 events cộng dồn
+slot 3: xuất hiện ở mốc tiếp theo đủ 3 events cộng dồn
+```
+
+Vì vậy khi so `scheduled_iterations_total` với số completed thực tế, lệch 1 slot ở biên đầu/cuối có
+thể chỉ là timing của slot, chưa chắc đã là drop hay interrupt.
+
 ### 3.2. Nhịp cao nhất và nhịp bình quân
 
 ```text
@@ -484,19 +523,62 @@ W_effective ~= max(iteration_duration, minIterationDuration) nếu có minIterat
 ### 3.4. Rate của summary
 
 ```text
-actual_summary_iterations_rate = completed_iterations / actual_scenario_runtime
-http_reqs_rate = total_http_requests / actual_scenario_runtime
-checks_total_rate = total_checks / actual_scenario_runtime
+actual_summary_iterations_rate = completed_iterations / summary_runtime_base
+http_reqs_rate = total_http_requests / summary_runtime_base
+checks_total_rate = total_checks / summary_runtime_base
 ```
 
 Đây là rate của metric summary thật, đọc từ `count / runtime` của Counter.
-`actual_scenario_runtime` là thời gian thực tế từ lúc scenario bắt đầu tới lúc nó thật sự dừng,
-thường có thể dài hơn `total_regular_duration` nếu còn `gracefulStop`.
+`summary_runtime_base` là mẫu số mà core summary dùng cho cột `/s` của cả test run.
+Trong demo 1 scenario, `startTime=0`, không `setup()/teardown`, nó thường gần với thời gian scenario
+thật sự chạy, nhưng hai đại lượng không nên đồng nhất trong trường hợp tổng quát.
 Nó khác `average_target_rate` ở trên:
 
 ```text
 average_target_rate = rate lịch start trung bình
 actual_summary_iterations_rate = rate completed iteration thực tế
+```
+
+### 3.5. `dropped` khác `interrupted` như nào?
+
+Đây là 2 loại rất dễ lẫn:
+
+```text
+dropped
+  = slot đã đến giờ nhưng chưa từng start được iteration
+  = lý do thường gặp: không có VU rảnh đúng lúc
+
+interrupted
+  = iteration đã start rồi nhưng bị cancel trước khi chạy xong
+  = lý do thường gặp: hết grace, context bị hủy, abort
+```
+
+Nói rất ngắn:
+
+```text
+dropped = chưa start được
+interrupted = đã start nhưng không finish
+```
+
+Trong core arrival-rate:
+
+```text
+TryRunIteration() fail
+  -> dropped_iterations tăng
+
+RunOnce() đã vào rồi nhưng context chết giữa chừng
+  -> interrupted iterations tăng ở progress/footer
+```
+
+Vì vậy khi đọc output:
+
+```text
+dropped_iterations
+  = metric riêng trong summary
+
+interrupted iterations
+  = số ở progress/footer cuối run
+  không phải Counter summary riêng giống iterations hay http_reqs
 ```
 
 Nếu 1 completed iteration chạy đủ N request:

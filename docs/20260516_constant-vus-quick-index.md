@@ -63,9 +63,9 @@ per_vu_rate_i = 1 / t_i
 
 peak_iteration_rate_if_all_vus_active = sum(1 / t_i)
 
-average_iteration_rate = completed_iterations / actual_runtime
+average_iteration_rate = completed_iterations / summary_runtime_base
 
-actual_runtime = counter_count / counter_rate
+summary_runtime_base = counter_count / counter_rate
 ```
 
 Không có:
@@ -90,12 +90,19 @@ completed_iterations = summary iterations count
 | `t_i` | thời gian một iteration của VU i giữ VU bận | ước lượng từ `iteration_duration`, cộng caveat `minIterationDuration` |
 | `per_vu_rate_i` | 1 VU đó trung bình chạy được bao nhiêu iteration/s | `1 / t_i` |
 | `peak_iteration_rate_if_all_vus_active` | nếu mọi VU đều đang bận chạy thì cả nhóm đẩy được bao nhiêu iteration/s | cộng các `1 / t_i` |
-| `average_iteration_rate` | tốc độ iteration trung bình thật của run | summary `iterations...: count rate/s` hoặc `count / runtime` |
-| `actual_runtime` | thời gian chạy thật dùng để tính rate | `Counter count / Counter rate` |
+| `average_iteration_rate` | tốc độ iteration trung bình thật của run | summary `iterations...: count rate/s` hoặc `count / summary_runtime_base` |
+| `summary_runtime_base` | thời gian mà Counter summary dùng làm mẫu số cho cột `/s` | `Counter count / Counter rate` |
 
 Điểm dễ nhầm nhất:
 
 ```text
 constant-vus không có target iteration count từ đầu
 nó chỉ giữ số VU cố định trong một khoảng thời gian
+```
+
+Và thêm 1 caveat:
+
+```text
+core summary chia Counter rate theo test run duration của cả test
+trong demo 1 scenario, startTime=0, không setup/teardown thì nó thường gần với runtime của scenario
 ```
