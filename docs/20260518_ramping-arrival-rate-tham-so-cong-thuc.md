@@ -818,5 +818,5 @@ W_effective ~= max(iteration_duration, minIterationDuration) nếu có minIterat
 ```
 
 ```text
-actual_summary_iterations_rate = completed_iterations / actual_scenario_runtime
+actual_summary_iterations_rate = completed_iterations / summary_runtime_base
 ```

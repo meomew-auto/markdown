@@ -91,6 +91,7 @@ N = số request/check trong mỗi iteration của đúng demo/script
 | `completed_iterations` | số iteration hoàn tất thật | summary `iterations` |
 | `summary_runtime_base` | thời gian mà Counter summary dùng làm mẫu số cho cột `/s` | `count / rate` từ Counter summary |
 | `http_requests_per_iteration` | mỗi iteration thường gọi mấy request | đọc trong code script |
+| `checks_per_iteration` | mỗi iteration thường chạy mấy check | đọc trong code script |
 | `effective_iteration_time` | thời gian một VU bị bận cho một vòng | thường lấy từ `iteration_duration`, nhớ caveat `minIterationDuration` |
 
 Điểm dễ nhầm nhất:

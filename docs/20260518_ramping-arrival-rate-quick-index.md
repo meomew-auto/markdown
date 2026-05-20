@@ -84,3 +84,10 @@ iteration luôn đi cùng một code path.
 ramping-arrival-rate sizing theo đoạn peak
 không theo rate trung bình của cả timeline
 ```
+
+Và thêm 2 note ngắn:
+
+```text
+ramping-arrival-rate không có ticker_period cố định cho toàn run
+slot đầu cũng không mặc định ở t=0; nó xuất hiện khi tích lũy đủ event đầu tiên
+```

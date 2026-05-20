@@ -103,8 +103,11 @@ safe_vus ~= ceil(lambda_peak * W_effective_p95 * safety_factor)
 Nếu run sạch:
 
 ```text
-iterations rate = completed_iterations / actual_scenario_runtime
+iterations rate = completed_iterations / summary_runtime_base
 ```
+
+Trong worked example này, vì test là 1 scenario đơn, `startTime=0`, và không có `setup()/teardown`,
+`summary_runtime_base` thường rất gần với thời gian scenario thật sự chạy.
 
 và:
 

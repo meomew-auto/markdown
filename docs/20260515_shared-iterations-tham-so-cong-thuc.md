@@ -794,12 +794,12 @@ total_http_requests = 12 * 2 = 24
 checks_per_iteration = 2
 total_checks = 12 * 2 = 24
 
-actual_scenario_runtime
+summary_runtime_base
   = 12 / 2.317275
   ≈ 5.1785s
 
 average_total_rate
-  = completed_iterations / actual_scenario_runtime
+  = completed_iterations / summary_runtime_base
   = 12 / 5.1785
   ≈ 2.317275 iter/s
 
@@ -858,7 +858,7 @@ completed_iterations
   = iterations nếu không bị drop/interrupt
 
 average_iteration_rate
-  = completed_iterations / actual_scenario_runtime
+  = completed_iterations / summary_runtime_base
 
 summary iterations/s
   = average_iteration_rate của toàn scenario
@@ -870,11 +870,11 @@ per_vu_rate
 peak_total_rate
   ≈ active_vus * per_vu_rate
 
-http_reqs_count
+estimated_http_reqs_count_if_fixed_path
   = completed_iterations * http_requests_per_iteration
 
-http_reqs_rate
-  = http_reqs_count / actual_scenario_runtime
+estimated_http_reqs_rate_if_fixed_path
+  = estimated_http_reqs_count_if_fixed_path / summary_runtime_base
 
 VU nhanh
   có thể chạy nhiều iteration hơn VU chậm

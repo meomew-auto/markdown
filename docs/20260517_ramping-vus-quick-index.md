@@ -105,6 +105,7 @@ completed_iterations = summary iterations count
 | `regular_duration` | tổng thời gian của các stage | cộng toàn bộ `stage.duration` |
 | `t_i` / `effective_iteration_time` | một iteration giữ VU bận bao lâu | thường lấy từ `iteration_duration`, có caveat `minIterationDuration` |
 | `active_vus` | số VU đang bận chạy tại thời điểm đó | progress `x/y VUs`, metric `vus` |
+| `summary_runtime_base` | mẫu số mà Counter summary dùng cho cột `/s` | `count / rate` từ summary Counter |
 | `average_iteration_rate` | completed iteration trung bình mỗi giây của cả run | summary `iterations...: count rate/s` |
 
 Điểm dễ nhầm nhất:
