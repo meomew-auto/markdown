@@ -1900,9 +1900,9 @@ summary completed rate thấp hơn vì runtime thực tế kéo dài tới lúc 
 Runtime suy ra từ summary:
 
 ```text
-actual_runtime ~= completed_iterations / iterations_rate
-               ~= 13 / 1.729617
-               ~= 7.52s
+summary_runtime_base ~= completed_iterations / iterations_rate
+                      ~= 13 / 1.729617
+                      ~= 7.52s
 ```
 
 Run kéo dài hơn 6s vì các iteration đã start gần cuối vẫn cần chạy nốt trong `gracefulStop`.

@@ -562,9 +562,9 @@ per_vu_rate ~= 1 / 0.703 = 1.42 iter/s/VU
 peak_iteration_rate ~= 2 * 1.42 = 2.84 iter/s
 
 summary iterations/s = 2.828882 iter/s
-actual_runtime ~= completed_iterations / iterations_rate
-               ~= 10 / 2.828882
-               ~= 3.53s
+summary_runtime_base ~= completed_iterations / iterations_rate
+                      ~= 10 / 2.828882
+                      ~= 3.53s
 ```
 
 Vì mỗi iteration mất khoảng `0.7s`, mỗi VU bắt đầu iteration ở khoảng:

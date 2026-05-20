@@ -275,9 +275,9 @@ iterations_rate = 1.729617/s
 Suy ra runtime mà k6 dùng để tính rate:
 
 ```text
-actual_runtime ~= completed_iterations / iterations_rate
-               ~= 13 / 1.729617
-               ~= 7.52s
+summary_runtime_base ~= completed_iterations / iterations_rate
+                      ~= 13 / 1.729617
+                      ~= 7.52s
 ```
 
 Progress cuối cũng ghi:
@@ -584,9 +584,9 @@ total_checks = completed_iterations * 2
 ```
 
 ```text
-actual_runtime ~= completed_iterations / iterations_rate
-               ~= 13 / 1.729617
-               ~= 7.52s
+summary_runtime_base ~= completed_iterations / iterations_rate
+                      ~= 13 / 1.729617
+                      ~= 7.52s
 ```
 
 ## 10. Điều nên nhớ sau bài này

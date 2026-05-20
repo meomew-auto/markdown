@@ -425,6 +425,45 @@ executor.Run()
   = lúc executor bắt đầu làm việc thật: lấy VU, activate VU, chạy iteration, hoặc tạo slot
 ```
 
+Nếu muốn nhìn cả luồng trong 1 hình duy nhất, có thể đọc như sau:
+
+```text
+test script
+  -> options
+      -> shortcut hoặc scenarios explicit
+          -> scenario config
+              -> executor type
+                  -> NewExecutor()
+                      -> Scheduler
+                          -> execution plan
+                              -> pool chung es.vus
+                                  -> GetPlannedVU()
+                                      -> Activate()
+                                          -> ActiveVU
+                                              -> RunOnce()
+                                                  -> 1 iteration
+```
+
+Nhánh closed/open tách nhau ở đoạn executor điều phối:
+
+```text
+closed model
+  executor giữ VU rồi để VU tự lặp:
+  RunOnce() xong -> nếu còn việc thì start iteration tiếp
+
+open model
+  executor giữ VU trong pool nội bộ:
+  tới slot mới -> TryRunIteration() -> VU rảnh nào nhận được thì mới RunOnce()
+```
+
+Vì vậy:
+
+```text
+script không nói trực tiếp "hãy tạo VU #1 chạy ngay"
+script chỉ khai báo config
+core mới là bên dựng executor, tính plan, lấy VU, rồi cho iteration chạy
+```
+
 `startTime` không phải slot. `startTime` chỉ trả lời câu hỏi:
 
 ```text
