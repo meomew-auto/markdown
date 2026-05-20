@@ -25,7 +25,7 @@ docs/20260514_per-vu-iterations-tham-so-cong-thuc.md
 | Công thức `http_reqs: count rate/s` | [`http_reqs` formula](./20260514_per-vu-iterations-tham-so-cong-thuc.md#d1-công-thức-riêng-cho-http_reqs-12--2780988s) |
 | Dùng `summary runtime base` để suy ra các rate/count | [`runtime` làm gốc](./20260514_per-vu-iterations-tham-so-cong-thuc.md#d2-nếu-lấy-actual_scenario_runtime-làm-gốc-thì-suy-ra-gì) |
 | Công thức `1 VU chạy bao nhiêu iteration/s` | [`per_vu_rate`](./20260514_per-vu-iterations-tham-so-cong-thuc.md#e2-nếu-đã-biết-iteration_duration-thì-1-vu-1-giây-chạy-được-bao-nhiêu-iteration) |
-| Các loại metric và công thức tổng quát | [Metric types and formulas](./20260515_k6_metric_types_and_formulas.md) |
+| Các loại metric và công thức tổng quát | [k6 metrics căn bản](./20260520_k6-metrics-types-builtins-core-guide.md) |
 | TPS, RPS, peak vs average throughput | [TPS / Throughput](./20260515_tps-throughput-jmeter-vs-k6.md) |
 | QuickPizza 2 requests / iteration | [2 HTTP requests demo](./20260514_per-vu-iterations-tham-so-cong-thuc.md#773-demo-quickpizza-với-1-iteration--2-http-requests) |
 | Worked example riêng cho QuickPizza 2 requests | [QuickPizza 2 requests worked example](./20260515_quickpizza_two_requests_worked_example.md) |

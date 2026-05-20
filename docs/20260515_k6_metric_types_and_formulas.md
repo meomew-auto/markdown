@@ -7,6 +7,19 @@ metric trong k6 có những loại nào
 và mỗi loại đọc / tính theo công thức nào
 ```
 
+Nếu đang học từ đầu hoặc muốn xem demo nằm ngay trong từng loại metric, đọc bài đầy đủ hơn:
+
+```text
+docs/20260520_k6-metrics-types-builtins-core-guide.md
+```
+
+File này giữ vai trò bản tra nhanh:
+
+```text
+nhìn công thức nhanh
+đối chiếu nhanh khi đang đọc các bài executor
+```
+
 Phạm vi của file:
 
 - bám theo core k6
@@ -58,6 +71,15 @@ Ví dụ:
 - `iterations`: đã hoàn thành bao nhiêu iteration
 - `http_reqs`: đã gửi bao nhiêu request
 
+Ví dụ mini:
+
+```text
+demo_orders.add(1)
+demo_orders.add(2)
+
+=> Counter cuối cùng = 3
+```
+
 ### 2.2. Summary thường in gì?
 
 Ví dụ:
@@ -84,7 +106,7 @@ thì đọc là:
 
 ```text
 toàn bộ run đã hoàn thành 12 iteration
-và tốc độ trung bình của cả scenario là 2.317275 iteration mỗi giây
+và cột /s của Counter đang cho biết trung bình khoảng 2.317275 iteration mỗi giây
 ```
 
 `2.317275/s` nghĩa là:
@@ -105,16 +127,16 @@ và cũng **không phải**:
 tốc độ của riêng 1 VU
 ```
 
-Nó là tốc độ trung bình của **toàn scenario**:
+Để tránh nhầm, ta đặt tên mẫu số đó là:
 
 ```text
-iterations_rate = total_iterations / actual_scenario_runtime
+summary_runtime_base
 ```
 
 Ví dụ:
 
 ```text
-actual_scenario_runtime
+summary_runtime_base
   = 12 / 2.317275
   ≈ 5.18s
 ```
@@ -122,8 +144,16 @@ actual_scenario_runtime
 Nên có thể đọc thành câu:
 
 ```text
-test này chạy xong 12 iteration trong khoảng 5.18 giây
-nên tốc độ trung bình là 2.317275 iteration/s
+Counter summary này đang lấy 12 chia cho khoảng 5.18 giây
+nên in ra tốc độ trung bình 2.317275 iteration/s
+```
+
+Với demo một scenario sạch thì `summary_runtime_base` thường gần với thời gian test bạn nhìn thấy.
+Nhưng nói chính xác theo core thì đây là:
+
+```text
+mẫu số mà Counter summary dùng cho cột /s
+không phải lúc nào cũng là runtime thật của riêng scenario
 ```
 
 ### 2.3. Công thức từ core
@@ -137,13 +167,13 @@ rate = count / duration
 Suy ngược:
 
 ```text
-duration = count / rate
+summary_runtime_base = count / rate
 ```
 
-Khi học executor, ta thường gọi `duration` này là:
+Ở file tra nhanh này, nên đọc `duration` đó thành:
 
 ```text
-actual_scenario_runtime
+summary_runtime_base
 ```
 
 Phân biệt nhanh với `Trend`:
@@ -165,7 +195,7 @@ iterations.........: 12    2.255308/s
 Suy ra:
 
 ```text
-runtime
+summary_runtime_base
   = 12 / 2.255308
   ≈ 5.3208s
 ```
@@ -176,10 +206,10 @@ Với:
 http_reqs..........: 24    4.510616/s
 ```
 
-thì cũng ra cùng runtime:
+thì cũng ra cùng mẫu số:
 
 ```text
-runtime
+summary_runtime_base
   = 24 / 4.510616
   ≈ 5.3208s
 ```
@@ -207,6 +237,16 @@ Ví dụ:
 - `vus`
 - `vus_max`
 
+Ví dụ mini:
+
+```text
+queue_depth lần lượt nhận các sample: 5, 9, 3
+
+=> value cuối = 3
+=> min = 3
+=> max = 9
+```
+
 ### 3.2. Summary thường in gì?
 
 Ví dụ:
@@ -229,7 +269,7 @@ max   = sample lớn nhất
 `Gauge` không có công thức kiểu:
 
 ```text
-rate = count / runtime
+rate = count / summary_runtime_base
 ```
 
 Nó không phải metric để chia theo runtime.
@@ -273,6 +313,17 @@ Ví dụ:
 
 - `http_req_duration`
 - `iteration_duration`
+
+Ví dụ mini:
+
+```text
+demo_latency có 4 sample: 100, 200, 300, 400
+
+=> avg = 250
+=> min = 100
+=> max = 400
+=> med = p50 = 250
+```
 
 ### 4.2. Summary thường in gì?
 
@@ -475,6 +526,16 @@ Ví dụ:
 - `checks`
 - `http_req_failed`
 
+Ví dụ mini:
+
+```text
+checkout_ok lần lượt add: true, false, true
+
+=> total = 3
+=> trues = 2
+=> rate = 2 / 3 = 66.67%
+```
+
 ### 5.2. Công thức từ core
 
 Core tính:
@@ -527,7 +588,7 @@ checks_failed......: 0.00%   0 out of 24
 
 ```text
 checks_total rate
-  = total_checks / runtime
+  = total_checks / summary_runtime_base
 ```
 
 đây là summary phụ trợ để dễ đọc,
@@ -543,7 +604,7 @@ failed_rate = failed_checks / total_checks
 
 | Loại | Summary hay thấy | Công thức chính |
 | --- | --- | --- |
-| `Counter` | `count`, `rate/s` | `rate = count / runtime` |
+| `Counter` | `count`, `rate/s` | `rate = count / summary_runtime_base` |
 | `Gauge` | `value`, `min`, `max` | không chia theo runtime |
 | `Trend` | `avg`, `min`, `med`, `max`, `p(90)`, `p(95)` | `avg = sum / count`, `med = p50` |
 | `Rate` | `%`, `x out of y`, `passes`, `fails` | `rate = trues / total` |
@@ -565,13 +626,15 @@ failed_rate = failed_checks / total_checks
 
 ## 8. Nhìn output thì nên hỏi theo thứ tự nào?
 
-### Nếu hỏi "test chạy bao lâu?"
+### Nếu hỏi "Counter summary đang dùng mẫu số thời gian nào cho cột /s?"
 
 Nhìn `Counter`:
 
 ```text
-runtime = count / rate
+summary_runtime_base = count / rate
 ```
+
+Nếu là single-scenario clean run thì số này thường gần với thời gian test bạn nhìn thấy.
 
 ### Nếu hỏi "1 iteration mất bao lâu?"
 

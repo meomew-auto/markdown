@@ -17,7 +17,7 @@ File này là bản điều hướng nhanh cho bộ bài `shared-iterations`.
 | Đếm mỗi VU chạy bao nhiêu vòng | [Demo đếm từng VU](./20260515_shared-iterations-tham-so-cong-thuc.md#51-demo-đếm-từng-vu-nhanhchậm) |
 | QuickPizza 2 requests / iteration | [Demo QuickPizza](./20260515_shared-iterations-tham-so-cong-thuc.md#6-demo-quickpizza-2-requests--iteration) |
 | Worked example QuickPizza | [Worked example](./20260515_shared_iterations_quickpizza_two_requests_worked_example.md) |
-| Các loại metric và công thức | [Metric types and formulas](./20260515_k6_metric_types_and_formulas.md) |
+| Các loại metric và công thức | [k6 metrics căn bản](./20260520_k6-metrics-types-builtins-core-guide.md) |
 | TPS, RPS, peak vs average throughput | [TPS / Throughput](./20260515_tps-throughput-jmeter-vs-k6.md) |
 
 ## File demo để chạy
