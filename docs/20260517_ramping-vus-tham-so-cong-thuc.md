@@ -461,7 +461,7 @@ iterations...........: count rate/s
 công thức là:
 
 ```text
-average_iteration_rate = completed_iterations / actual_runtime
+average_iteration_rate = completed_iterations / summary_runtime_base
 ```
 
 Ví dụ demo timeline:
@@ -474,7 +474,7 @@ iterations_rate = 4.045744/s
 Suy ra:
 
 ```text
-actual_runtime
+summary_runtime_base
   = 51 / 4.045744
   ≈ 12.61s
 ```
@@ -490,7 +490,7 @@ running (12.6s)
 Với Counter:
 
 ```text
-http_reqs_rate = total_http_requests / actual_runtime
+http_reqs_rate = total_http_requests / summary_runtime_base
 ```
 
 Ví dụ QuickPizza:
@@ -503,7 +503,7 @@ http_reqs_rate = 3.543856/s
 Suy ra:
 
 ```text
-actual_runtime
+summary_runtime_base
   = 24 / 3.543856
   ≈ 6.77s
 ```
@@ -512,6 +512,13 @@ Khớp progress cuối:
 
 ```text
 running (6.8s)
+```
+
+Lưu ý:
+
+```text
+summary_runtime_base là mẫu số Counter summary dùng cho cột /s của cả test run
+trong demo 1 scenario, startTime=0, không setup/teardown thì nó gần với runtime của scenario
 ```
 
 ## 3.7. Quan hệ giữa iteration và request ở demo QuickPizza
@@ -1023,13 +1030,13 @@ checks_total.: 24
 Từ Counter:
 
 ```text
-actual_runtime = count / rate
+summary_runtime_base = count / rate
 ```
 
 Từ `iterations`:
 
 ```text
-actual_runtime
+summary_runtime_base
   = 12 / 1.771928
   ≈ 6.77s
 ```
@@ -1037,7 +1044,7 @@ actual_runtime
 Từ `http_reqs`:
 
 ```text
-actual_runtime
+summary_runtime_base
   = 24 / 3.543856
   ≈ 6.77s
 ```

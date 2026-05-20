@@ -376,8 +376,8 @@ Với `per-vu-iterations`, executor có 2 mốc thời gian quan trọng:
 
 | Field | Ý nghĩa |
 | --- | --- |
-| `maxDuration` | Thời gian tối đa executor được chạy bình thường để hoàn thành số iteration |
-| `gracefulStop` | Thời gian chờ thêm để iteration đã bắt đầu được finish trước khi bị interrupt |
+| `maxDuration` | Hết mốc này executor không start iteration mới nữa |
+| `gracefulStop` | Cửa sổ chờ để các iteration đã start được finish; hết cửa sổ này thì iteration còn dở có thể bị interrupt |
 
 Timeline dễ hiểu:
 

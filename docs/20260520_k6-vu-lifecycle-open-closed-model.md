@@ -788,7 +788,7 @@ vus: 3,
 iterations: 10,
 ```
 
-Ở đây 10 iteration là của cả pool chung. VU nào rảnh trước thì lấy việc trước.
+Ở đây 10 iteration là của **kho iteration chung của scenario**. VU nào rảnh trước thì lấy việc trước.
 Số iteration không bị chia đều cứng cho từng VU.
 
 ### 2.2 Open model

@@ -480,7 +480,7 @@ per-vu-iterations:
   -> VU nhanh xong quota thì idle
 
 shared-iterations:
-  tất cả VU lấy việc từ pool chung
+  tất cả VU lấy việc từ kho iteration chung của scenario
   ví dụ vus=4, iterations=12
   -> tổng toàn scenario = 12
   -> VU nào xong trước thì lấy tiếp

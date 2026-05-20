@@ -298,14 +298,14 @@ checks_total.......: 24
 Với các metric Counter:
 
 ```text
-rate = count / actual_runtime
-=> actual_runtime = count / rate
+rate = count / summary_runtime_base
+=> summary_runtime_base = count / rate
 ```
 
 Từ `iterations`:
 
 ```text
-actual_runtime
+summary_runtime_base
   = 12 / 1.771928
   ≈ 6.7722s
 ```
@@ -313,7 +313,7 @@ actual_runtime
 Từ `http_reqs`:
 
 ```text
-actual_runtime
+summary_runtime_base
   = 24 / 3.543856
   ≈ 6.7722s
 ```
@@ -324,11 +324,18 @@ Khớp progress cuối:
 running (6.8s)
 ```
 
+Trong worked example này:
+
+```text
+summary_runtime_base gần với runtime thật của scenario
+vì test chỉ có 1 scenario, startTime=0, và không có setup/teardown
+```
+
 ### 5.5. Average iteration rate
 
 ```text
 average_iteration_rate
-  = completed_iterations / actual_runtime
+  = completed_iterations / summary_runtime_base
   = 12 / 6.7722
   ≈ 1.771928 iter/s
 ```
@@ -343,7 +350,7 @@ iterations.....................: 12    1.771928/s
 
 ```text
 average_http_request_rate
-  = total_http_requests / actual_runtime
+  = total_http_requests / summary_runtime_base
   = 24 / 6.7722
   ≈ 3.543856 req/s
 ```

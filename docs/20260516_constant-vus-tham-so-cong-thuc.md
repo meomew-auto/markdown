@@ -610,7 +610,7 @@ peak lý thuyết khi cả 4 VU active:
 Nhưng summary `iterations/s` là **average total rate** trên runtime thật:
 
 ```text
-average_iteration_rate = completed_iterations / actual_scenario_runtime
+average_iteration_rate = completed_iterations / summary_runtime_base
 ```
 
 Nó có thể thấp hơn peak lý thuyết vì:
@@ -632,11 +632,11 @@ Nếu code có:
 thì:
 
 ```text
-total_http_requests = completed_iterations * R
-total_checks = completed_iterations * C
+estimated_http_requests_if_fixed_path = completed_iterations * R
+estimated_checks_if_fixed_path = completed_iterations * C
 
-http_reqs_rate = total_http_requests / actual_scenario_runtime
-checks_rate = total_checks / actual_scenario_runtime
+estimated_http_reqs_rate_if_fixed_path = estimated_http_requests_if_fixed_path / summary_runtime_base
+estimated_checks_rate_if_fixed_path = estimated_checks_if_fixed_path / summary_runtime_base
 ```
 
 Và:
@@ -1268,9 +1268,9 @@ per_vu_rate_i = 1 / t_i
 
 peak_iteration_rate_if_all_vus_active = sum(1 / t_i)
 
-average_iteration_rate = completed_iterations / actual_runtime
+average_iteration_rate = completed_iterations / summary_runtime_base
 
-actual_runtime = counter_count / counter_rate
+summary_runtime_base = counter_count / counter_rate
 ```
 
 Nếu các VU đều gần giống nhau:
@@ -1283,8 +1283,8 @@ peak_iteration_rate ~= vus / W_effective
 Với HTTP:
 
 ```text
-total_http_requests = completed_iterations * http_requests_per_iteration
-http_reqs_rate = total_http_requests / actual_runtime
+estimated_http_requests_if_fixed_path = completed_iterations * http_requests_per_iteration
+estimated_http_reqs_rate_if_fixed_path = estimated_http_requests_if_fixed_path / summary_runtime_base
 ```
 
 Không đọc nhầm:
