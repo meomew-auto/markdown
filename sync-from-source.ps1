@@ -2,7 +2,8 @@ param(
   [string]$SourceRoot = 'E:\Khoa hoc\k6',
   [string]$Message = 'Update docs',
   [switch]$Watch,
-  [int]$IntervalSeconds = 5
+  [int]$IntervalSeconds = 5,
+  [int]$PushIntervalSeconds = 300
 )
 
 $ErrorActionPreference = 'Stop'
@@ -121,11 +122,21 @@ function Invoke-Sync {
 }
 
 if ($Watch) {
-  Write-Host "Watching $SourceRoot -> $repoDocs every $IntervalSeconds seconds. Ctrl+C to stop."
+  if ($PushIntervalSeconds -lt 1) {
+    throw 'PushIntervalSeconds must be at least 1.'
+  }
+
+  $nextPushAt = (Get-Date).AddSeconds($PushIntervalSeconds)
+  Write-Host "Watching $SourceRoot -> $repoDocs every $IntervalSeconds seconds. Auto build/commit/push every $PushIntervalSeconds seconds. Ctrl+C to stop."
   while ($true) {
     $started = Get-Date
     try {
-      Invoke-Sync
+      if ((Get-Date) -ge $nextPushAt) {
+        Invoke-Sync -Push
+        $nextPushAt = (Get-Date).AddSeconds($PushIntervalSeconds)
+      } else {
+        Invoke-Sync
+      }
     } catch {
       Write-Host $_
     }

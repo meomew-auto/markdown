@@ -10,6 +10,7 @@ biết metric đó thuộc loại nào
 biết vì sao nó in ra count/rate/avg/p95/min/max
 biết metric đó nằm ở đâu trong core
 biết khi nào nên tự tạo custom metric
+có demo chi tiết cho từng loại metric
 ```
 
 Bài này khác bài công thức ngắn:
@@ -26,6 +27,7 @@ File cũ dùng để tra nhanh. File này giải thích từ đầu và list đ�
 - [2. Core nhìn metric như nào?](#2-core-nhìn-metric-như-nào)
 - [3. Bốn loại metric trong k6](#3-bốn-loại-metric-trong-k6)
 - [4. Cách đọc từng loại metric](#4-cách-đọc-từng-loại-metric)
+- [4.5 Tổng hợp: chọn type theo câu hỏi](#45-tổng-hợp-chọn-type-theo-câu-hỏi)
 - [5. Value type: default, time, data](#5-value-type-default-time-data)
 - [6. Built-in metrics đầy đủ theo docs và core](#6-built-in-metrics-đầy-đủ-theo-docs-và-core)
 - [7. Custom metrics trong script](#7-custom-metrics-trong-script)
@@ -245,6 +247,11 @@ Rate
 
 ## 4. Cách đọc từng loại metric
 
+Mục này cố ý đặt demo ngay bên trong từng type.
+Nghĩa là học `Counter` thì có script `Counter` ngay dưới đó, học `Gauge` thì có script
+`Gauge` ngay dưới đó.
+Đừng đợi tới cuối bài mới xem ví dụ, vì mỗi type có cách cộng sample khác nhau.
+
 ### 4.1 `Counter`
 
 `Counter` dùng khi bạn muốn đếm tổng.
@@ -344,6 +351,137 @@ duration_seconds ~= count / rate
                  ~= 7.52s
 ```
 
+#### Demo `Counter` ngay tại đây
+
+Script nhỏ:
+
+```js
+import { Counter } from "k6/metrics";
+
+export const options = {
+  scenarios: {
+    demo_counter: {
+      executor: "shared-iterations",
+      vus: 1,
+      iterations: 1,
+      maxDuration: "10s",
+    },
+  },
+};
+
+const demoOrders = new Counter("demo_orders");
+
+export default function () {
+  demoOrders.add(1);
+  demoOrders.add(2);
+}
+```
+
+Output cuối test sẽ có hình dạng tương tự:
+
+```text
+demo_orders.............: 3      123.456/s
+```
+
+Số `/s` có thể khác trên máy bạn vì test chạy rất nhanh.
+Trong demo này, điểm cần đọc trước là:
+
+```text
+demo_orders = 3
+```
+
+Cắt nghĩa từng dòng:
+
+```js
+demoOrders.add(1);
+demoOrders.add(2);
+```
+
+Nghĩa là ta đẩy 2 sample vào metric `demo_orders`:
+
+```text
+sample 1: value = 1
+sample 2: value = 2
+```
+
+Core dùng `CounterSink`.
+Logic chính:
+
+```go
+c.Value += s.Value
+```
+
+Diễn biến:
+
+```text
+ban đầu:
+  Value = 0
+
+sau demoOrders.add(1):
+  Value = 0 + 1 = 1
+
+sau demoOrders.add(2):
+  Value = 1 + 2 = 3
+```
+
+Vì vậy summary in:
+
+```text
+demo_orders: 3 ...
+```
+
+Đọc đúng:
+
+```text
+trong toàn bộ test, demo_orders được cộng tổng cộng 3 đơn vị
+```
+
+Nếu đây là business metric:
+
+```text
+demo_orders = 3
+```
+
+có thể hiểu là:
+
+```text
+test đã ghi nhận tổng cộng 3 order
+```
+
+Nhưng phải nhớ:
+
+```text
+Counter cộng theo value bạn add
+```
+
+Nếu bạn viết:
+
+```js
+demoOrders.add(10);
+```
+
+thì counter tăng 10, không phải tăng 1.
+
+Đối chiếu built-in:
+
+```text
+http_reqs
+  thường mỗi request add 1
+
+iterations
+  thường mỗi iteration hoàn thành add 1
+
+data_sent
+  mỗi sample add số byte gửi đi
+```
+
+Vậy `Counter` không có nghĩa là "cứ event là cộng 1".
+Nó có nghĩa là:
+
+```text
+tổng = tổng tất cả sample.Value
+```
+
 #### Khi nào dùng `Counter` custom?
 
 Dùng khi câu hỏi của bạn là:
@@ -420,6 +558,115 @@ Không phải:
 ```text
 5 + 9 + 3 = 17
 ```
+
+#### Demo `Gauge` ngay tại đây
+
+Script nhỏ:
+
+```js
+import { Gauge } from "k6/metrics";
+
+export const options = {
+  scenarios: {
+    demo_gauge: {
+      executor: "shared-iterations",
+      vus: 1,
+      iterations: 1,
+      maxDuration: "10s",
+    },
+  },
+};
+
+const demoQueueDepth = new Gauge("demo_queue_depth");
+
+export default function () {
+  demoQueueDepth.add(5);
+  demoQueueDepth.add(9);
+  demoQueueDepth.add(3);
+}
+```
+
+Output cuối test sẽ có hình dạng tương tự:
+
+```text
+demo_queue_depth........: 3      min=3      max=9
+```
+
+Cắt nghĩa từng dòng:
+
+```js
+demoQueueDepth.add(5);
+demoQueueDepth.add(9);
+demoQueueDepth.add(3);
+```
+
+Ta đang mô phỏng queue thay đổi theo thời gian:
+
+```text
+lần đo 1: queue đang có 5 item
+lần đo 2: queue đang có 9 item
+lần đo 3: queue đang có 3 item
+```
+
+Core dùng `GaugeSink`.
+Logic chính:
+
+```go
+g.Value = s.Value
+if s.Value > g.Max {
+    g.Max = s.Value
+}
+if s.Value < g.Min || !g.minSet {
+    g.Min = s.Value
+    g.minSet = true
+}
+```
+
+Diễn biến:
+
+```text
+ban đầu:
+  chưa có value
+  min chưa set
+  max = 0
+
+sau add(5):
+  value = 5
+  min   = 5
+  max   = 5
+
+sau add(9):
+  value = 9
+  min   = 5
+  max   = 9
+
+sau add(3):
+  value = 3
+  min   = 3
+  max   = 9
+```
+
+Vì vậy summary in:
+
+```text
+demo_queue_depth: 3 min=3 max=9
+```
+
+Đọc đúng:
+
+```text
+giá trị cuối cùng đo được là 3
+trong cả test, nhỏ nhất từng thấy là 3
+trong cả test, lớn nhất từng thấy là 9
+```
+
+Không đọc thành:
+
+```text
+5 + 9 + 3 = 17
+```
+
+Đó là cách đọc sai vì `Gauge` không cộng dồn.
 
 #### Vì sao `vus` là Gauge?
 
@@ -505,6 +752,156 @@ checks..............: 98.00% 490 out of 500
 ```text
 http_req_failed = trong 400 request, có 5 request bị xem là failed
 checks          = trong 500 check, có 490 check pass
+```
+
+#### Demo `Rate` ngay tại đây
+
+Script nhỏ:
+
+```js
+import { Rate } from "k6/metrics";
+
+export const options = {
+  scenarios: {
+    demo_rate: {
+      executor: "shared-iterations",
+      vus: 1,
+      iterations: 1,
+      maxDuration: "10s",
+    },
+  },
+};
+
+const demoCheckoutOk = new Rate("demo_checkout_ok");
+
+export default function () {
+  demoCheckoutOk.add(true);
+  demoCheckoutOk.add(false);
+  demoCheckoutOk.add(true);
+}
+```
+
+Output cuối test sẽ có hình dạng tương tự:
+
+```text
+demo_checkout_ok........: 66.67% 2 out of 3
+```
+
+Cắt nghĩa từng dòng:
+
+```js
+demoCheckoutOk.add(true);
+demoCheckoutOk.add(false);
+demoCheckoutOk.add(true);
+```
+
+Core custom metric đổi boolean như sau:
+
+```text
+true  -> 1
+false -> 0
+```
+
+Nên 3 sample thật sự là:
+
+```text
+sample 1: value = 1
+sample 2: value = 0
+sample 3: value = 1
+```
+
+Core dùng `RateSink`.
+Logic chính:
+
+```go
+r.Total++
+if s.Value != 0 {
+    r.Trues++
+}
+```
+
+Diễn biến:
+
+```text
+ban đầu:
+  Total = 0
+  Trues = 0
+
+sau add(true):
+  sample.Value = 1
+  Total = 1
+  Trues = 1
+
+sau add(false):
+  sample.Value = 0
+  Total = 2
+  Trues = 1
+
+sau add(true):
+  sample.Value = 1
+  Total = 3
+  Trues = 2
+```
+
+Công thức:
+
+```text
+rate = Trues / Total
+     = 2 / 3
+     = 0.666666...
+     = 66.67%
+```
+
+Vì vậy summary in:
+
+```text
+demo_checkout_ok: 66.67% 2 out of 3
+```
+
+Đọc đúng:
+
+```text
+có 3 lần đo checkout_ok
+trong đó 2 lần là true
+tỉ lệ true là 66.67%
+```
+
+Không đọc thành:
+
+```text
+66.67 request mỗi giây
+```
+
+Sai, vì đây là `Rate` metric.
+
+Đối chiếu built-in:
+
+```text
+checks
+  Rate của các check pass
+
+http_req_failed
+  Rate của request bị xem là failed
+```
+
+Ví dụ:
+
+```text
+http_req_failed: 2.00% 10 out of 500
+```
+
+Đọc là:
+
+```text
+500 request được xét
+10 request failed
+tỉ lệ failed là 2%
+```
+
+Không phải:
+
+```text
+2 request/s
 ```
 
 #### `Rate` khác `Counter rate` như nào?
@@ -613,6 +1010,186 @@ med = percentile 50
 p(90), p(95) = percentile 90, percentile 95
 ```
 
+#### Demo `Trend` ngay tại đây
+
+Script nhỏ:
+
+```js
+import { Trend } from "k6/metrics";
+
+export const options = {
+  scenarios: {
+    demo_trend: {
+      executor: "shared-iterations",
+      vus: 1,
+      iterations: 1,
+      maxDuration: "10s",
+    },
+  },
+  summaryTrendStats: ["avg", "min", "med", "max", "p(90)", "p(95)"],
+};
+
+const demoLatency = new Trend("demo_latency", true);
+
+export default function () {
+  demoLatency.add(100);
+  demoLatency.add(200);
+  demoLatency.add(300);
+  demoLatency.add(400);
+}
+```
+
+Output cuối test sẽ có hình dạng tương tự:
+
+```text
+demo_latency............: avg=250ms min=100ms med=250ms max=400ms p(90)=370ms p(95)=385ms
+```
+
+Cắt nghĩa từng dòng:
+
+```js
+demoLatency.add(100);
+demoLatency.add(200);
+demoLatency.add(300);
+demoLatency.add(400);
+```
+
+Ta tạo 4 sample:
+
+```text
+100ms
+200ms
+300ms
+400ms
+```
+
+Vì constructor viết:
+
+```js
+new Trend("demo_latency", true)
+```
+
+nên metric này có `Contains = Time`.
+Các số `100`, `200`, `300`, `400` được hiểu là milliseconds trong output.
+
+Core dùng `TrendSink`.
+Logic chính:
+
+```go
+t.values = append(t.values, s.Value)
+t.count++
+t.sum += s.Value
+```
+
+Sau 4 lần add:
+
+```text
+values = [100, 200, 300, 400]
+count  = 4
+sum    = 100 + 200 + 300 + 400 = 1000
+min    = 100
+max    = 400
+```
+
+Tính `avg`:
+
+```text
+avg = sum / count
+    = 1000 / 4
+    = 250ms
+```
+
+Tính `med`:
+
+```text
+med = percentile 50
+```
+
+Với 4 giá trị:
+
+```text
+[100, 200, 300, 400]
+```
+
+điểm giữa nằm giữa `200` và `300`, nên:
+
+```text
+med = 250ms
+```
+
+Core tính percentile trong `TrendSink.P()` bằng nội suy tuyến tính.
+Với `p(90)`:
+
+```text
+count = 4
+pct   = 0.90
+
+i = pct * (count - 1)
+  = 0.90 * 3
+  = 2.7
+```
+
+Index 2 là `300`, index 3 là `400`.
+Vì `i = 2.7`, nó nằm 70% đường từ `300` tới `400`:
+
+```text
+p(90) = 300 + (400 - 300) * 0.7
+      = 370ms
+```
+
+Với `p(95)`:
+
+```text
+i = 0.95 * 3
+  = 2.85
+
+p(95) = 300 + (400 - 300) * 0.85
+      = 385ms
+```
+
+Vì vậy summary in:
+
+```text
+demo_latency: avg=250ms min=100ms med=250ms max=400ms p(90)=370ms p(95)=385ms
+```
+
+Đọc đúng:
+
+```text
+trung bình latency là 250ms
+nhanh nhất là 100ms
+chậm nhất là 400ms
+giá trị giữa là 250ms
+90% sample nhỏ hơn hoặc bằng khoảng 370ms
+95% sample nhỏ hơn hoặc bằng khoảng 385ms
+```
+
+Không đọc:
+
+```text
+p(95)=385ms nghĩa là 95% pass
+```
+
+Sai.
+`p(95)` chỉ nói vị trí trong tập giá trị latency.
+Pass hay fail phải dùng `Rate` hoặc threshold.
+
+Đối chiếu built-in:
+
+```text
+http_req_duration
+  Trend thời gian request HTTP
+
+iteration_duration
+  Trend thời gian một iteration
+
+group_duration
+  Trend thời gian một group
+
+grpc_req_duration
+  Trend thời gian request gRPC
+```
+
 #### `p(95)` là gì?
 
 `p(95)` nghĩa là percentile 95.
@@ -703,6 +1280,80 @@ avg min med max p(90) p(95)
 ```
 
 Nếu config `summaryTrendStats`, k6 sẽ dùng danh sách bạn chọn.
+
+### 4.5 Tổng hợp: chọn type theo câu hỏi
+
+Khi viết script thật, đừng chọn metric type theo cảm giác.
+Hãy bắt đầu từ câu hỏi bạn muốn trả lời.
+
+| Câu hỏi | Nên dùng | Vì sao |
+| --- | --- | --- |
+| Tổng cộng tạo bao nhiêu order? | `Counter` | cần cộng dồn |
+| Trung bình mỗi giây có bao nhiêu order? | `Counter` | summary có `rate = count / duration` |
+| Hiện tại queue đang dài bao nhiêu? | `Gauge` | cần giá trị mới nhất, có thể tăng/giảm |
+| Checkout thành công bao nhiêu phần trăm? | `Rate` | cần true/total |
+| API checkout chậm như nào? | `Trend` | cần avg/p95/max |
+
+Ví dụ một flow checkout:
+
+```js
+import http from "k6/http";
+import { Counter, Gauge, Rate, Trend } from "k6/metrics";
+
+const checkoutStarted = new Counter("checkout_started");
+const cartItems = new Gauge("cart_items");
+const checkoutOk = new Rate("checkout_ok");
+const checkoutDuration = new Trend("checkout_duration", true);
+
+export default function () {
+  checkoutStarted.add(1);
+  cartItems.add(3);
+
+  const start = Date.now();
+  const res = http.get("https://quickpizza.grafana.com");
+  const duration = Date.now() - start;
+
+  checkoutOk.add(res.status >= 200 && res.status < 400);
+  checkoutDuration.add(duration);
+}
+```
+
+Cắt nghĩa:
+
+```text
+checkoutStarted
+  dùng Counter vì mỗi lần bắt đầu checkout thì cộng tổng lên
+
+cartItems
+  dùng Gauge vì tại thời điểm đó giỏ hàng có bao nhiêu item
+
+checkoutOk
+  dùng Rate vì kết quả chỉ là thành công/thất bại
+
+checkoutDuration
+  dùng Trend vì mỗi lần checkout có một duration,
+  ta cần avg, p95, max để biết độ chậm
+```
+
+Nếu output là:
+
+```text
+checkout_started........: 1000   50/s
+cart_items..............: 3      min=1 max=8
+checkout_ok.............: 99.20% 992 out of 1000
+checkout_duration.......: avg=180ms min=80ms med=150ms max=1200ms p(90)=260ms p(95)=400ms
+```
+
+Đọc thành câu đời thường:
+
+```text
+test đã bắt đầu checkout 1000 lần
+tốc độ trung bình là 50 checkout/s
+giỏ hàng cuối cùng có 3 item, nhỏ nhất từng thấy là 1, lớn nhất từng thấy là 8
+992/1000 checkout thành công, tức 99.20%
+95% checkout hoàn thành trong khoảng 400ms hoặc nhanh hơn
+có ít nhất một checkout chậm tới 1200ms
+```
 
 ## 5. Value type: default, time, data
 
