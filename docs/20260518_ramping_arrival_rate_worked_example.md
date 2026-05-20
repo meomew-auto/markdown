@@ -118,7 +118,8 @@ vus = active VUs sample
 Nếu `iterations` không bằng 30:
 
 ```text
-có drop hoặc interrupt
+lệch nhiều thì thường có drop hoặc interrupt
+lệch 1 slot ở biên cuối vẫn có thể chỉ là timing của slot cuối đúng mép regular duration
 ```
 
 ## 5. Điều cần nhớ

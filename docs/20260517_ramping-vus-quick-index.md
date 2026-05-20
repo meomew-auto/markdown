@@ -69,9 +69,9 @@ effective_iteration_time ~= max(iteration_duration, minIterationDuration) nếu 
 
 peak_iteration_rate_if_all_active ~= active_vus / effective_iteration_time
 
-average_iteration_rate = completed_iterations / actual_runtime
+average_iteration_rate = completed_iterations / summary_runtime_base
 
-average_http_request_rate = total_http_requests / actual_runtime
+average_http_request_rate = total_http_requests / summary_runtime_base
 ```
 
 Trong đó:
@@ -80,6 +80,7 @@ Trong đó:
 t_i = thời gian một iteration của VU i giữ VU bận
 per_vu_rate_i = 1 / t_i = riêng VU đó trung bình chạy được bao nhiêu iteration/s
 active_vus = số VU đang bận ở thời điểm đang xét
+summary_runtime_base = mẫu số mà Counter summary dùng cho cột `/s`
 ```
 
 Không có:

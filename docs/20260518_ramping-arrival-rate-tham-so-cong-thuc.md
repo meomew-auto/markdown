@@ -245,10 +245,11 @@ nhưng vẫn giữ VU bận.
 | `scheduled_iterations_i` | số mốc start được schedule trong stage i | Với ramp tuyến tính: `d_i * (lambda_prev + lambda_next) / 2`. |
 | `scheduled_iterations_total` | tổng số mốc start theo lịch cho toàn timeline | `sum(scheduled_iterations_i)`. |
 | `average_target_rate` | nhịp start trung bình của cả timeline | `scheduled_iterations_total / total_regular_duration`. |
-| `actual_summary_iterations_rate` | tốc độ completed iteration thật sự của summary | `completed_iterations / actual_scenario_runtime`. |
+| `actual_summary_iterations_rate` | tốc độ completed iteration thật sự của summary | `completed_iterations / summary_runtime_base`. |
 | `drop_rate` | số slot bị drop ước lượng theo giây | Chỉ là ước lượng, không phải metric core. |
 | `W_effective_p95` | p95 của effective busy time | dùng khi sizing theo tail. |
 | `safety_factor` | hệ số an toàn | margin > 1 để bù jitter/dao động. |
+| `summary_runtime_base` | mẫu số mà Counter summary dùng cho cột `/s` | trong demo 1 scenario sạch, thường gần runtime của scenario. |
 
 ## 3. Công thức nền
 

@@ -47,10 +47,11 @@ Counter:
   rate = count / summary_runtime_base
   summary_runtime_base = count / rate
 
-http_reqs_count = completed_iterations * http_requests_per_iteration
-http_reqs_rate = http_reqs_count / summary_runtime_base
+estimated_http_reqs_count_if_fixed_path = completed_iterations * http_requests_per_iteration
+estimated_http_reqs_rate_if_fixed_path = estimated_http_reqs_count_if_fixed_path / summary_runtime_base
 
-checks_total_rate = total_checks / summary_runtime_base
+estimated_checks_total_if_fixed_path = completed_iterations * checks_per_iteration
+estimated_checks_total_rate_if_fixed_path = estimated_checks_total_if_fixed_path / summary_runtime_base
 
 Nếu 1 completed iteration luôn chạy đủ N HTTP requests:
   estimated_http_reqs_rate ≈ N * iterations/s
@@ -70,6 +71,15 @@ Peak vs average:
 Shared distribution:
   iterations_per_vu_i phải đo bằng log __VU và __ITER
   không suy chắc từ iterations / vus
+```
+
+Legend ngắn:
+
+```text
+count = cột trái của Counter summary
+rate = cột phải `/s` của Counter summary
+summary_runtime_base = count / rate
+N = số request/check trong mỗi iteration của đúng demo/script
 ```
 
 Đọc từng biến:

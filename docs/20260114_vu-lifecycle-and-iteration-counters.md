@@ -349,6 +349,10 @@ thời gian chạy của scenario
   chỉ bắt đầu sau khi planned VUs init xong
 ```
 
+Ví dụ này đang giả sử **không có `setup()`** để nhìn mốc thời gian cho gọn.
+Nếu có `setup()`, wall-clock tổng còn cộng thêm thời gian `setup()`, và `startTime` của scenario
+được chờ sau khi `setup()` xong.
+
 Ví dụ:
 
 ```text

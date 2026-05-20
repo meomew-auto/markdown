@@ -48,10 +48,21 @@ W_effective ~= max(iteration_duration, minIterationDuration) nếu có minIterat
 ```
 
 ```text
-estimated_http_reqs_rate_if_no_drop ~= requests_per_iteration * iterations/s
+observed_http_reqs_rate ~= N_req * actual_summary_iterations_rate
+target_http_reqs_rate_if_no_drop ~= N_req * average_target_rate
 ```
 
-Chỉ đúng khi mỗi completed iteration chạy đủ request trên cùng code path.
+Trong đó:
+
+```text
+N_req = số HTTP request trong mỗi iteration của đúng demo/script đang nói tới
+actual_summary_iterations_rate = iterations/s ở summary
+average_target_rate = nhịp target trung bình của cả timeline
+```
+
+`observed_http_reqs_rate` là cách đọc từ output thật.
+`target_http_reqs_rate_if_no_drop` là cách ước lượng theo lịch target nếu không rơi slot và mỗi
+iteration luôn đi cùng một code path.
 
 Đọc từng biến:
 
@@ -61,9 +72,11 @@ Chỉ đúng khi mỗi completed iteration chạy đủ request trên cùng code
 | `stage.target` | nhịp start ở cuối stage | config `stages[]` |
 | `stage.duration` | stage kéo dài bao lâu | config `stages[]` |
 | `lambda_peak` | nhịp start cao nhất trong cả timeline | lấy max của `startRate` và mọi `stage.target`, rồi đổi về `/s` |
+| `average_target_rate` | nhịp target trung bình của cả timeline | `scheduled_iterations_total / total_regular_duration` |
 | `W_effective` | một iteration giữ VU bận bao lâu | thường lấy từ `iteration_duration`, nhớ caveat `minIterationDuration` |
 | `required_vus_min_peak` | số VU tối thiểu gần đúng để chịu được đoạn peak | `ceil(lambda_peak * W_effective)` |
-| `iterations/s` | completed iteration rate trung bình của summary | dòng `iterations...: count rate/s` |
+| `actual_summary_iterations_rate` | completed iteration rate trung bình của summary | dòng `iterations...: count rate/s` |
+| `N_req` | số request trong mỗi iteration của đúng demo/script | đọc trong code |
 
 Điểm dễ nhầm nhất:
 

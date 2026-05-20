@@ -52,6 +52,15 @@ rtk k6 run .\examples\constant_vus_quickpizza_two_requests_demo.js
 constant-vus = fixed VUs over time
 ```
 
+Legend ngắn:
+
+```text
+t_i = thời gian VU i bị bận cho 1 iteration
+counter_count = cột trái của Counter summary
+counter_rate = cột phải `/s` của Counter summary
+summary_runtime_base = counter_count / counter_rate
+```
+
 Công thức hay dùng:
 
 ```text

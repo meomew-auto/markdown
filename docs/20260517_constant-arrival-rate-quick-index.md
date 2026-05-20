@@ -110,6 +110,9 @@ Trong đó:
 W_effective = thời gian VU bị bận cho full default/exec function
 không có minIterationDuration thì W_effective thường lấy từ iteration_duration
 có minIterationDuration thì dùng max(iteration_duration, minIterationDuration)
+M = số VU đang giả sử có để nhận việc trong công thức capacity
+http_requests_per_iteration = số request mỗi iteration của đúng demo/script đang nói tới
+completed_iterations = số iteration chạy xong thật trong summary
 ```
 
 Không đọc nhầm:

@@ -64,11 +64,13 @@ average_iteration_rate = completed_iterations / summary_runtime_base
 
 summary iterations/s = average_iteration_rate, không nhân thêm vus
 
-http_reqs_count = completed_iterations * http_requests_per_iteration
+estimated_http_reqs_count_if_fixed_path = completed_iterations * http_requests_per_iteration
 
-http_reqs_rate = http_reqs_count / summary_runtime_base
+estimated_http_reqs_rate_if_fixed_path = estimated_http_reqs_count_if_fixed_path / summary_runtime_base
 
-checks_total_rate = total_checks / summary_runtime_base
+estimated_checks_total_if_fixed_path = completed_iterations * checks_per_iteration
+
+estimated_checks_total_rate_if_fixed_path = estimated_checks_total_if_fixed_path / summary_runtime_base
 
 Với Counter:
   summary_runtime_base = count / rate
@@ -77,6 +79,15 @@ Nếu 1 completed iteration luôn chạy đủ N HTTP requests:
   estimated_http_reqs_rate ≈ N * iterations/s
   chỉ đúng khi mỗi completed iteration chạy đủ N requests trên cùng code path
   nếu có branch/error/interrupt làm thiếu request thì đọc http_reqs thực tế
+```
+
+Legend ngắn:
+
+```text
+t_i = thời gian VU i bị bận cho 1 iteration
+count = cột trái của Counter summary
+rate = cột phải `/s` của Counter summary
+N = số request/check trong mỗi iteration của đúng demo/script
 ```
 
 Đọc từng biến:
@@ -91,6 +102,7 @@ Nếu 1 completed iteration luôn chạy đủ N HTTP requests:
 | `interrupted_iterations` | iteration đã start nhưng bị cắt giữa chừng | progress cuối `interrupted iterations` |
 | `summary_runtime_base` | thời gian mà summary Counter dùng làm mẫu số cho cột `/s` | lấy từ `Counter count / Counter rate` |
 | `http_requests_per_iteration` | mỗi iteration gọi bao nhiêu HTTP request | đọc trong code demo/script |
+| `checks_per_iteration` | mỗi iteration chạy bao nhiêu check | đọc trong code demo/script |
 | `iterations/s` | completed iteration trung bình mỗi giây | dòng summary `iterations...: count rate/s` |
 
 Điểm dễ nhầm nhất:
