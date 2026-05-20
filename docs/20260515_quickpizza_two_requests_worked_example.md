@@ -233,8 +233,8 @@ nhưng nguồn gốc metric gốc là Rate, không phải Counter builtin
 Với các metric `Counter`:
 
 ```text
-rate = count / actual_scenario_runtime
-=> actual_scenario_runtime = count / rate
+rate = count / summary_runtime_base
+=> summary_runtime_base = count / rate
 ```
 
 Ghi chú nguồn gốc từ core:
@@ -248,8 +248,14 @@ Trong core k6:
 - `iterations` và `http_reqs` đều là metric kiểu `Counter`
 - summary của `Counter` tính `rate = count / duration`
 
-Tên `actual_scenario_runtime` trong file này là cách mình gọi lại chính cái `duration` đó cho dễ học.
-Trong code summary, nó được truyền như `testRunDuration`.
+Trong file này nên hiểu đúng hơn là:
+
+```text
+summary_runtime_base = duration mà Counter summary dùng làm mẫu số cho cột /s
+```
+
+Trong clean run 1 scenario, `startTime=0`, không `setup()/teardown`, nó thường rất gần runtime thật
+của scenario, nhưng không nên đồng nhất trong trường hợp tổng quát.
 
 Từ `iterations`:
 
@@ -769,7 +775,7 @@ iterations_rate
   ≈ 2.255308 iter/s
 
 average_total_rate
-  = completed_iterations / actual_runtime
+  = completed_iterations / summary_runtime_base
   = 2.255308 iter/s
   = summary iterations/s của toàn scenario
 

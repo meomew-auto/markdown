@@ -318,7 +318,7 @@ iterations_rate
   ≈ 2.317275 iter/s
 
 average_total_rate
-  = completed_iterations / actual_runtime
+  = completed_iterations / summary_runtime_base
   = 2.317275 iter/s
   = summary iterations/s của toàn scenario
 

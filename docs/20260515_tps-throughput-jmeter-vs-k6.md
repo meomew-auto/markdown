@@ -133,7 +133,13 @@ peak_total_rate
   ≈ active_vus * per_vu_rate
 
 average_total_rate
-  = completed_iterations / actual_runtime
+  = completed_iterations / summary_runtime_base
+```
+
+Trong đó:
+
+```text
+summary_runtime_base = mẫu số mà Counter summary dùng cho cột /s
 ```
 
 Không lấy:

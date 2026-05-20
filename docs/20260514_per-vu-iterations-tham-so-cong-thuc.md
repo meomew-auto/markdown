@@ -2122,7 +2122,7 @@ iterations_per_vu = 3
   = 12 / 4
   = 3
 
-actual_scenario_runtime ≈ 4.315s
+summary_runtime_base ≈ 4.315s
   = 12 / 2.780988
   ≈ 4.315s
   progress line làm tròn thành 04.3s
@@ -2222,7 +2222,7 @@ total_checks = total_iterations * 1
              = 12
 
 average_iteration_rate
-  = total_iterations / actual_scenario_runtime
+  = total_iterations / summary_runtime_base
   = 12 / 4.315
   ≈ 2.780988 iters/s
 
@@ -2276,7 +2276,7 @@ Với run này:
 
 ```text
 total_http_requests = 12
-actual_scenario_runtime ≈ 4.315s
+summary_runtime_base ≈ 4.315s
 ```
 
 nên:
@@ -2692,7 +2692,7 @@ total_checks = 12                                 (1 * 12)
 http_req_duration_avg = 255.96ms                  (đọc từ summary)
 iteration_duration_avg = 1.43s                    (đọc từ summary)
 
-actual_scenario_runtime ≈ 4.315s                  (12 / 2.780988)
+summary_runtime_base ≈ 4.315s                     (12 / 2.780988)
 average_iteration_rate ≈ 2.780988 iters/s         (12 / 4.315)
 average_http_request_rate ≈ 2.780988 req/s        (12 / 4.315)
 ```
