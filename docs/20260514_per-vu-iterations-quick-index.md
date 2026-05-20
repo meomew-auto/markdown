@@ -78,3 +78,24 @@ Nếu 1 completed iteration luôn chạy đủ N HTTP requests:
   chỉ đúng khi mỗi completed iteration chạy đủ N requests trên cùng code path
   nếu có branch/error/interrupt làm thiếu request thì đọc http_reqs thực tế
 ```
+
+Đọc từng biến:
+
+| Biến / biểu thức | Nghĩa đời thường | Lấy ở đâu |
+| --- | --- | --- |
+| `vus` | số VU được executor lấy ra chạy | config scenario |
+| `iterations_per_vu` | mỗi VU phải chạy bao nhiêu vòng | chính là config `iterations` của `per-vu-iterations` |
+| `planned_total_iterations` | tổng số vòng dự kiến nếu không bị dừng sớm | `vus * iterations_per_vu` |
+| `completed_iterations` | số iteration đã chạy xong thật | dòng summary `iterations` hoặc progress `complete` |
+| `dropped_iterations` | iteration chưa kịp start vì hết `maxDuration` | metric `dropped_iterations`, thường chỉ có khi chạm `maxDuration` |
+| `interrupted_iterations` | iteration đã start nhưng bị cắt giữa chừng | progress cuối `interrupted iterations` |
+| `actual_scenario_runtime` | thời gian chạy thật dùng để tính `/s` | lấy gần đúng bằng `Counter count / Counter rate` |
+| `http_requests_per_iteration` | mỗi iteration gọi bao nhiêu HTTP request | đọc trong code demo/script |
+| `iterations/s` | completed iteration trung bình mỗi giây | dòng summary `iterations...: count rate/s` |
+
+Điểm dễ nhầm nhất:
+
+```text
+summary iterations/s đã là tốc độ trung bình toàn scenario
+không nhân thêm với vus nữa
+```

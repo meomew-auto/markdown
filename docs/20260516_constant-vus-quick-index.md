@@ -80,3 +80,22 @@ Vì vậy tổng iteration chỉ biết chắc sau khi chạy:
 ```text
 completed_iterations = summary iterations count
 ```
+
+Đọc từng biến:
+
+| Biến / biểu thức | Nghĩa đời thường | Lấy ở đâu |
+| --- | --- | --- |
+| `duration` | khoảng thời gian regular mà executor còn được start iteration mới | config scenario |
+| `gracefulStop` | thời gian chờ để iteration đang chạy xong nốt | config hoặc default `30s` từ base config |
+| `t_i` | thời gian một iteration của VU i giữ VU bận | ước lượng từ `iteration_duration`, cộng caveat `minIterationDuration` |
+| `per_vu_rate_i` | 1 VU đó trung bình chạy được bao nhiêu iteration/s | `1 / t_i` |
+| `peak_iteration_rate_if_all_vus_active` | nếu mọi VU đều đang bận chạy thì cả nhóm đẩy được bao nhiêu iteration/s | cộng các `1 / t_i` |
+| `average_iteration_rate` | tốc độ iteration trung bình thật của run | summary `iterations...: count rate/s` hoặc `count / runtime` |
+| `actual_runtime` | thời gian chạy thật dùng để tính rate | `Counter count / Counter rate` |
+
+Điểm dễ nhầm nhất:
+
+```text
+constant-vus không có target iteration count từ đầu
+nó chỉ giữ số VU cố định trong một khoảng thời gian
+```

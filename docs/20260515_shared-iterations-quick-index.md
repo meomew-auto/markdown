@@ -72,6 +72,24 @@ Shared distribution:
   không suy chắc từ iterations / vus
 ```
 
+Đọc từng biến:
+
+| Biến / biểu thức | Nghĩa đời thường | Lấy ở đâu |
+| --- | --- | --- |
+| `iterations` | tổng số iteration của cả scenario | config `iterations` |
+| `iterations_per_vu_i` | VU số i thực tế chạy bao nhiêu vòng | phải log `__VU`, `__ITER` hoặc `exec.vu.*` |
+| `completed_iterations` | số iteration hoàn tất thật | summary `iterations` |
+| `runtime` / `actual_runtime` | thời gian chạy thật dùng để tính rate | `count / rate` từ Counter summary |
+| `http_requests_per_iteration` | mỗi iteration thường gọi mấy request | đọc trong code script |
+| `effective_iteration_time` | thời gian một VU bị bận cho một vòng | thường lấy từ `iteration_duration`, nhớ caveat `minIterationDuration` |
+
+Điểm dễ nhầm nhất:
+
+```text
+shared-iterations không chia đều iteration theo VU
+VU nhanh có thể lấy thêm việc
+```
+
 ## Nhớ khác biệt với `per-vu-iterations`
 
 ```text

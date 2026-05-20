@@ -148,3 +148,25 @@ vus = active VUs tại thời điểm scheduler sample
 vus_max = initialized VUs tại thời điểm scheduler sample, không phải configured maxVUs
 vus/vus_max là sample mỗi giây, không phải high-watermark tuyệt đối từng millisecond
 ```
+
+Đọc từng biến:
+
+| Biến / biểu thức | Nghĩa đời thường | Lấy ở đâu |
+| --- | --- | --- |
+| `rate` | mỗi `timeUnit` muốn start bao nhiêu iteration | config scenario |
+| `timeUnit_seconds` | `timeUnit` đổi ra giây | ví dụ `1s -> 1`, `1m -> 60` |
+| `lambda` | target start rate theo giây | `rate / timeUnit_seconds` |
+| `ticker_period` | khoảng cách giữa 2 mốc start liên tiếp | `1 / lambda` |
+| `W_effective` | 1 iteration giữ 1 VU bận bao lâu | thường lấy từ `iteration_duration`, nhớ caveat `minIterationDuration` |
+| `preAllocatedVUs` | VU chuẩn bị sẵn từ đầu | config scenario |
+| `maxVUs` | trần tổng VU tối đa được phép dùng | config scenario |
+| `completed_iterations` | số iteration chạy xong thật | summary `iterations` |
+| `dropped_iterations` | số mốc start đến hạn nhưng không có VU rảnh | metric `dropped_iterations` |
+| `interrupted_iterations` | iteration đã start nhưng bị cắt ở cuối scenario | progress cuối `interrupted iterations` |
+
+Điểm dễ nhầm nhất:
+
+```text
+summary iterations/s là tốc độ completed iteration trung bình
+không phải target start rate
+```

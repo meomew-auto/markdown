@@ -86,3 +86,21 @@ Vì vậy tổng iteration chỉ biết chắc sau khi chạy:
 ```text
 completed_iterations = summary iterations count
 ```
+
+Đọc từng biến:
+
+| Biến / biểu thức | Nghĩa đời thường | Lấy ở đâu |
+| --- | --- | --- |
+| `stage.duration` | stage kéo dài bao lâu | config `stages[]` |
+| `stage.target` | cuối stage muốn có bao nhiêu VU | config `stages[]` |
+| `regular_duration` | tổng thời gian của các stage | cộng toàn bộ `stage.duration` |
+| `t_i` / `effective_iteration_time` | một iteration giữ VU bận bao lâu | thường lấy từ `iteration_duration`, có caveat `minIterationDuration` |
+| `active_vus` | số VU đang bận chạy tại thời điểm đó | progress `x/y VUs`, metric `vus` |
+| `average_iteration_rate` | completed iteration trung bình mỗi giây của cả run | summary `iterations...: count rate/s` |
+
+Điểm dễ nhầm nhất:
+
+```text
+ramping-vus đổi số VU theo timeline
+chứ không đặt lịch start iteration cố định như arrival-rate
+```

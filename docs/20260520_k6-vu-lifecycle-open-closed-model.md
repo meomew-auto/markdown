@@ -1150,17 +1150,17 @@ ActiveVU trong code
 
 counter GetCurrentlyActiveVUsCount()
   = số VU hiện đang thực thi script test
-  = cũng tính cả VU đang hoàn tất phần còn dở trước khi được tính là không còn bận
+  = cũng tính cả VU đã nhận lệnh dừng nhưng vẫn chưa thoát khỏi RunOnce()
 ```
 
-Đoạn "đang hoàn tất phần còn dở trước khi được tính là không còn bận" nghĩa là:
+Đoạn "đã nhận lệnh dừng nhưng vẫn chưa thoát khỏi RunOnce()" nghĩa là:
 
 ```text
 test/scenario đã đến lúc dừng
 nhưng VU đang ở giữa một iteration
 k6 không coi VU đó là rảnh ngay lập tức
-VU đó còn phải thoát khỏi đoạn script đang chạy sau khi nhận tín hiệu dừng
-sau đó mới được tính là không còn bận
+VU đó còn phải kết thúc iteration đang chạy, hoặc bị context interrupt
+sau đó counter active VU mới giảm
 ```
 
 Nó không có nghĩa là VU đang ngồi chờ việc trong pool.
@@ -1404,7 +1404,7 @@ từ 10s đến 30s:
 Core còn có counter riêng cho việc này:
 
 - `GetInitializedVUsCount()` = tổng VU đã được tạo xong
-- `GetCurrentlyActiveVUsCount()` = VU đang thực thi script, hoặc đang hoàn tất phần còn dở trước khi được tính là không còn bận
+- `GetCurrentlyActiveVUsCount()` = VU đang bận trong `RunOnce()`, kể cả lúc đã nhận lệnh dừng nhưng chưa thoát khỏi iteration
 
 ### 3.3 VU có thể được tạo hết lúc init không?
 
@@ -1474,7 +1474,7 @@ iterations: 2,
 ### Active VUs
 
 ```text
-VU đang thực sự chạy script, hoặc đang hoàn tất phần còn dở trước khi được tính là không còn bận
+VU đang thực sự chạy script, hoặc đã nhận lệnh dừng nhưng chưa thoát khỏi iteration
 ```
 
 Đây là số VU đang "bận việc", không phải số VU đang ngồi chờ trong pool.
@@ -1483,7 +1483,7 @@ Ví dụ:
 
 ```text
 2 VU đang chạy request
-1 VU đang ở giữa một iteration và chưa thoát ra xong
+1 VU đã nhận lệnh dừng nhưng vẫn chưa thoát khỏi iteration
 => active VUs = 3
 ```
 
@@ -1510,7 +1510,9 @@ t = 20s
 ### Nhìn nhanh theo core
 
 `es.vus` là pool chung chứa VU đã init xong nhưng chưa dùng ngay.
-Executors chỉ mượn rồi trả lại, không tự giữ riêng.
+Executors mượn VU từ pool chung rồi trả lại khi executor không cần VU đó nữa.
+Riêng arrival-rate executors còn có pool nội bộ trong lúc chạy: VU đã được mượn khỏi pool chung,
+đã `Activate()`, nhưng đang rảnh để chờ slot kế tiếp.
 
 | Loại | Nghĩa | Khi nào có |
 |------|------|------------|

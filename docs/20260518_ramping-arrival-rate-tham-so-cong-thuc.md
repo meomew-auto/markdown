@@ -257,7 +257,38 @@ lambda_start = startRate / timeUnit_seconds
 lambda_i_end = stage.target / timeUnit_seconds
 ```
 
-`cal()` của core tạo mốc start bằng cách tích lũy diện tích dưới đường rate.
+`cal()` của core tạo mốc start bằng cách tích lũy "phần việc đã hẹn theo thời gian".
+Trong toán học người ta hay gọi đó là **diện tích dưới đường rate**, nhưng khi học k6 có thể
+đọc đời thường hơn:
+
+```text
+rate = mỗi giây k6 muốn bấm start bao nhiêu lần
+thời gian = stage kéo dài bao nhiêu giây
+rate * thời gian = tổng số mốc start trong đoạn đó
+```
+
+Nếu rate không đổi, ví dụ 4/s trong 3s:
+
+```text
+4 lần/s * 3s = 12 mốc start
+```
+
+Nếu rate tăng đều từ 2/s lên 4/s, mỗi giây không còn giống nhau nữa.
+Ta không lấy riêng đầu stage là 2/s, cũng không lấy riêng cuối stage là 4/s.
+Vì nó tăng đều, lấy nhịp trung bình:
+
+```text
+nhịp trung bình = (nhịp đầu + nhịp cuối) / 2
+```
+
+Rồi nhân với thời gian stage.
+Đó chính là ý của cụm "diện tích dưới đường rate".
+Nó không phải diện tích hình học xa lạ; trong bài này nó chỉ trả lời câu hỏi:
+
+```text
+trong cả stage này, tổng cộng k6 cần hẹn bao nhiêu mốc start?
+```
+
 Với stage ramp tuyến tính từ `lambda_prev` sang `lambda_next` trong `d_i`:
 
 ```text
@@ -275,6 +306,11 @@ scheduled_iterations_i = d_i * (lambda_prev + lambda_next) / 2
 
 Trong mấy công thức dưới, cứ đọc `lambda` là "nhịp start".
 Nó chỉ là cách viết gọn của tốc độ k6 phải bấm start trong 1 giây.
+Không cần hiểu `lambda` là ký hiệu gì phức tạp; nó tương đương:
+
+```text
+lambda = bao nhiêu iteration start mỗi giây
+```
 
 Tưởng tượng k6 như người bấm nút start theo lịch:
 

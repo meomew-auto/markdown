@@ -109,6 +109,24 @@ t = 1.00s
 
 Ở mỗi mốc này, k6 cần 1 VU rảnh. Nếu không có VU rảnh, mốc đó bị tính là `dropped_iterations`; k6 không chờ VU rảnh rồi chạy bù lại mốc cũ.
 
+Nói rất đời thường:
+
+```text
+slot không phải là "khoảng 1 giây"
+slot cũng không phải "một ô chứa việc"
+slot chỉ là "đến đúng giờ này thì k6 muốn bấm start thêm 1 iteration"
+```
+
+Với `rate: 4, timeUnit: "1s"` thì vì 1 giây được chia thành 4 mốc start, nên khoảng cách gần đúng
+giữa các slot là `0.25s`.
+Nhưng bản chất vẫn là:
+
+```text
+slot = mốc thời gian
+không phải tài nguyên
+không phải VU
+```
+
 Không hiểu là:
 
 ```text
