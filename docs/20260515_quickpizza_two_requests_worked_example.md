@@ -228,7 +228,7 @@ checks_total_rate có công thức giống Counter-rate
 nhưng nguồn gốc metric gốc là Rate, không phải Counter builtin
 ```
 
-### 5.4. Runtime thật của scenario
+### 5.4. Mẫu số thời gian mà Counter summary đang dùng
 
 Với các metric `Counter`:
 
@@ -260,7 +260,7 @@ của scenario, nhưng không nên đồng nhất trong trường hợp tổng q
 Từ `iterations`:
 
 ```text
-actual_scenario_runtime
+summary_runtime_base
   = 12 / 2.255308
   ≈ 5.3208s
 ```
@@ -268,7 +268,7 @@ actual_scenario_runtime
 Từ `http_reqs`:
 
 ```text
-actual_scenario_runtime
+summary_runtime_base
   = 24 / 4.510616
   ≈ 5.3208s
 ```
@@ -276,7 +276,7 @@ actual_scenario_runtime
 Từ `checks_total` cũng ra cùng runtime:
 
 ```text
-actual_scenario_runtime
+summary_runtime_base
   = 24 / 4.510616
   ≈ 5.3208s
 ```
@@ -295,29 +295,37 @@ Khớp với progress line bị làm tròn:
 running (05.3s)
 ```
 
-## 6. Từ runtime suy ra rate như thế nào?
+Trong demo sạch này có thể nói đời thường:
+
+```text
+summary_runtime_base gần như trùng với thời gian run bạn đang nhìn thấy
+```
+
+nhưng khi giải thích công thức, vẫn nên bám tên đúng là `summary_runtime_base`.
+
+## 6. Từ `summary_runtime_base` suy ra rate như thế nào?
 
 Lấy:
 
 ```text
-actual_scenario_runtime ≈ 5.3208s
+summary_runtime_base ≈ 5.3208s
 ```
 
 thì:
 
 ```text
 iterations_rate
-  = completed_iterations / runtime
+  = completed_iterations / summary_runtime_base
   = 12 / 5.3208
   ≈ 2.255308 iter/s
 
 http_reqs_rate
-  = total_http_requests / runtime
+  = total_http_requests / summary_runtime_base
   = 24 / 5.3208
   ≈ 4.510616 req/s
 
 checks_total_rate
-  = total_checks / runtime
+  = total_checks / summary_runtime_base
   = 24 / 5.3208
   ≈ 4.510616 /s
 ```
@@ -599,7 +607,7 @@ iteration_duration
 `Trend` không có công thức kiểu:
 
 ```text
-rate = count / runtime
+rate = count / summary_runtime_base
 ```
 
 Nó không đo "bao nhiêu event mỗi giây". Nó đo "mỗi event mất bao lâu".

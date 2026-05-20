@@ -151,7 +151,7 @@ nghĩa là:
 
 ```text
 toàn bộ run hoàn thành 12 iteration
-tốc độ trung bình của cả scenario là 2.333723 iteration mỗi giây
+và cột `/s` của Counter đang cho biết trung bình khoảng 2.333723 iteration mỗi giây trên cả run
 ```
 
 Không nên đọc nhầm thành:
@@ -282,22 +282,22 @@ Nó là dòng summary helper dựng từ metric `checks` kiểu `Rate`, nhưng r
 `checks_total` vẫn đọc được theo:
 
 ```text
-checks_total_rate = total_checks / runtime
+checks_total_rate = total_checks / summary_runtime_base
 ```
 
-### 5.4. Runtime thật của scenario
+### 5.4. Mẫu số thời gian mà Counter summary đang dùng
 
 Với Counter:
 
 ```text
-rate = count / runtime
-runtime = count / rate
+rate = count / summary_runtime_base
+summary_runtime_base = count / rate
 ```
 
 Từ `iterations`:
 
 ```text
-actual_scenario_runtime
+summary_runtime_base
   = 12 / 2.333723
   = 5.142s
 ```
@@ -305,7 +305,7 @@ actual_scenario_runtime
 Từ `http_reqs`:
 
 ```text
-actual_scenario_runtime
+summary_runtime_base
   = 24 / 4.667445
   = 5.142s
 ```
@@ -313,7 +313,7 @@ actual_scenario_runtime
 Từ `checks_total`:
 
 ```text
-actual_scenario_runtime
+summary_runtime_base
   = 24 / 4.667445
   = 5.142s
 ```
@@ -324,21 +324,23 @@ Khớp với:
 running (05.1s)
 ```
 
-Runtime thật lớn hơn `duration=5s` một chút vì còn overhead và iteration cuối hoàn tất sát sau regular duration.
+Trong demo sạch này, `summary_runtime_base` lớn hơn `duration=5s` một chút vì còn overhead và
+iteration cuối hoàn tất sát sau regular duration. Nói đời thường thì nó cũng gần runtime thật mà
+ta đang nhìn thấy, nhưng khi giải thích công thức vẫn nên giữ tên đúng là `summary_runtime_base`.
 
-## 6. Từ runtime suy ra rate
+## 6. Từ `summary_runtime_base` suy ra rate
 
 Lấy:
 
 ```text
-actual_scenario_runtime ~= 5.142s
+summary_runtime_base ~= 5.142s
 ```
 
 thì:
 
 ```text
 iterations_rate
-  = completed_iterations / actual_scenario_runtime
+  = completed_iterations / summary_runtime_base
   = 12 / 5.142
   = 2.333723 iter/s
 ```
@@ -361,7 +363,7 @@ Với HTTP:
 
 ```text
 http_reqs_rate
-  = total_http_requests / actual_scenario_runtime
+  = total_http_requests / summary_runtime_base
   = 24 / 5.142
   = 4.667445 req/s
 ```
@@ -370,7 +372,7 @@ Với checks:
 
 ```text
 checks_total_rate
-  = total_checks / actual_scenario_runtime
+  = total_checks / summary_runtime_base
   = 24 / 5.142
   = 4.667445 checks/s
 ```

@@ -132,7 +132,7 @@ nghĩa là:
 
 ```text
 toàn bộ run đã hoàn thành 12 iteration
-và tốc độ trung bình của cả scenario là 2.317275 iteration mỗi giây
+và cột `/s` của Counter đang cho biết trung bình khoảng 2.317275 iteration mỗi giây trên cả run
 ```
 
 Tức là:
@@ -268,22 +268,22 @@ Nó là summary helper dựng từ metric `checks` kiểu `Rate`, nhưng rate c�
 `checks_total` vẫn dùng:
 
 ```text
-checks_total_rate = total_checks / runtime
+checks_total_rate = total_checks / summary_runtime_base
 ```
 
-### 5.4. Runtime thật của scenario
+### 5.4. Mẫu số thời gian mà Counter summary đang dùng
 
 Với Counter:
 
 ```text
-rate = count / runtime
-runtime = count / rate
+rate = count / summary_runtime_base
+summary_runtime_base = count / rate
 ```
 
 Từ `iterations`:
 
 ```text
-actual_scenario_runtime
+summary_runtime_base
   = 12 / 2.317275
   ≈ 5.1785s
 ```
@@ -291,7 +291,7 @@ actual_scenario_runtime
 Từ `http_reqs`:
 
 ```text
-actual_scenario_runtime
+summary_runtime_base
   = 24 / 4.634551
   ≈ 5.1785s
 ```
@@ -302,12 +302,15 @@ Khớp với:
 running (05.2s)
 ```
 
-## 6. Từ runtime suy ra rate
+Trong demo sạch này, số đó cũng gần với thời gian run bạn nhìn thấy.
+Nhưng khi cắt nghĩa công thức thì nên gọi đúng là `summary_runtime_base`.
+
+## 6. Từ `summary_runtime_base` suy ra rate
 
 Lấy:
 
 ```text
-runtime ≈ 5.1785s
+summary_runtime_base ≈ 5.1785s
 ```
 
 thì:
@@ -339,6 +342,7 @@ http_reqs_rate
   ≈ 4.634551 req/s
 
 checks_total_rate
+  = total_checks / summary_runtime_base
   = 24 / 5.1785
   ≈ 4.634551 /s
 ```
