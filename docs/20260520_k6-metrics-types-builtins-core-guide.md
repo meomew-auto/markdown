@@ -346,9 +346,25 @@ mỗi giây luôn đúng 1.729617 iteration
 Ví dụ suy ngược:
 
 ```text
-duration_seconds ~= count / rate
-                 ~= 13 / 1.729617
-                 ~= 7.52s
+summary_runtime_base ~= count / rate
+                     ~= 13 / 1.729617
+                     ~= 7.52s
+```
+
+`summary_runtime_base` ở đây là:
+
+```text
+khoảng thời gian mà Counter summary dùng làm mẫu số cho cột /s
+```
+
+Nó thường gần với thời gian bạn nhìn thấy ở demo đơn giản một scenario, `startTime=0`,
+không `setup()`/`teardown()`.
+
+Nhưng về nghĩa chính xác thì phải đọc là:
+
+```text
+đây là mẫu số của Counter summary
+không phải lúc nào cũng là "runtime thật của riêng scenario"
 ```
 
 #### Demo `Counter` ngay tại đây
