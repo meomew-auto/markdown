@@ -111,13 +111,44 @@ metrics/sample.go
 
 ### 2.1 Metric không tự có số, nó nhận sample
 
-Trong lúc test chạy, các module của k6 liên tục đẩy `Sample` vào metric.
+Muốn hiểu metric trong k6, phải tách 2 lớp:
+
+```text
+Metric
+  = định nghĩa đại lượng cần đo
+  = tên gì, type gì, value type gì
+  = ví dụ: http_reqs là Counter, http_req_duration là Trend
+
+Sample
+  = một lần ghi nhận giá trị cho metric đó
+  = ví dụ: request này xong, ghi http_reqs value=1
+```
+
+Nói đời thường:
+
+```text
+metric giống cái cột trong bảng
+sample giống một dòng dữ liệu được ghi vào cột đó tại một thời điểm
+summary là kết quả đã gom rất nhiều dòng dữ liệu lại
+```
 
 Core định nghĩa `Sample` trong `metrics/sample.go`.
+
+Đọc sát code:
+
+```text
+type Sample struct {
+    TimeSeries
+    Time
+    Value
+    Metadata
+}
+```
+
 Hiểu ngắn:
 
 ```text
-sample = một lần đo cụ thể
+sample = một lần đo cụ thể, tại một thời điểm cụ thể, thuộc một metric cụ thể
 ```
 
 Một sample có:
@@ -139,7 +170,37 @@ Metadata
   thông tin phụ, thường dành cho dữ liệu có số lượng giá trị lớn
 ```
 
-Ví dụ khi một request HTTP kết thúc, core có thể tạo nhiều sample cùng lúc:
+Điểm dễ nhầm:
+
+```text
+sample không phải là dòng summary cuối test
+sample không phải lúc nào cũng là "mỗi giây lấy một mẫu"
+sample là mỗi lần k6 có một giá trị cần ghi
+```
+
+Ví dụ:
+
+```text
+1 HTTP request kết thúc
+  -> sinh ra sample cho http_reqs
+  -> sinh ra sample cho http_req_duration
+  -> sinh ra sample cho http_req_waiting
+  -> ...
+
+1 iteration kết thúc
+  -> sinh ra sample cho iterations
+  -> sinh ra sample cho iteration_duration
+
+customMetric.add(123)
+  -> sinh ra 1 sample cho custom metric đó
+```
+
+#### 2.1.1 Một request có thể sinh nhiều sample
+
+Trong `lib/netext/httpext/tracer.go`, khi một HTTP request kết thúc,
+`Trail.SaveSamples()` append nhiều `metrics.Sample`.
+
+Ví dụ cùng một request HTTP có thể sinh ra:
 
 ```text
 http_reqs              value=1
@@ -151,6 +212,319 @@ http_req_failed        value=0 hoặc 1
 ```
 
 Cùng một request nhưng sinh ra nhiều metric khác nhau.
+
+Đọc từng dòng:
+
+```text
+http_reqs value=1
+  = request này được tính là 1 request
+  = vì http_reqs là Counter, sink sẽ cộng 1 vào tổng
+
+http_req_duration value=117.55
+  = request này mất khoảng 117.55ms
+  = vì http_req_duration là Trend, sink sẽ đưa 117.55 vào tập duration
+
+http_req_failed value=0 hoặc 1
+  = request này failed hay không
+  = vì http_req_failed là Rate, value khác 0 được tính là true/fail
+```
+
+Vậy một request không phải chỉ tăng mỗi `http_reqs`.
+Nó là một event ở runtime, nhưng event đó tạo ra nhiều sample cho nhiều metric.
+
+#### 2.1.2 Một sample đi qua sink như nào?
+
+Luồng đơn giản:
+
+```text
+runtime có một giá trị cần ghi
+  -> tạo Sample
+  -> push vào output/sample channel
+  -> metric sink nhận Sample
+  -> sink gom theo type của metric
+  -> cuối test summary format kết quả đã gom
+```
+
+Điểm quan trọng: cùng là `sample.Value`, nhưng type khác nhau thì cách hiểu khác nhau.
+
+| Metric type | Sink làm gì với mỗi sample? | Ví dụ |
+| --- | --- | --- |
+| `Counter` | cộng `sample.Value` vào tổng | `http_reqs value=1`, `data_sent value=500` |
+| `Gauge` | lấy `sample.Value` làm giá trị mới nhất, đồng thời nhớ min/max | `vus value=4`, `queue_depth value=9` |
+| `Rate` | tăng `Total`, nếu `sample.Value != 0` thì tăng `Trues` | `checks value=1`, `http_req_failed value=0` |
+| `Trend` | đưa `sample.Value` vào tập values để tính avg/min/max/p95 | `http_req_duration value=117.55` |
+
+Ví dụ cùng một dãy value:
+
+```text
+samples: 1, 2, 3
+```
+
+Nếu metric là `Counter`:
+
+```text
+count = 1 + 2 + 3 = 6
+```
+
+Nếu metric là `Gauge`:
+
+```text
+value cuối = 3
+min = 1
+max = 3
+```
+
+Nếu metric là `Rate`:
+
+```text
+Total = 3
+Trues = 3 vì cả 1, 2, 3 đều khác 0
+rate = 3 / 3 = 100%
+```
+
+Nếu metric là `Trend`:
+
+```text
+values = [1, 2, 3]
+avg = 2
+min = 1
+max = 3
+med = 2
+```
+
+Vì vậy không thể chỉ nhìn `sample.Value` rồi kết luận ngay.
+Phải hỏi thêm:
+
+```text
+sample này thuộc metric nào?
+metric đó có type gì?
+sink của type đó gom value như nào?
+```
+
+#### 2.1.3 Custom metric `.add()` tạo sample ra sao?
+
+Với custom metric, mỗi lần gọi `.add()` là một lần k6 tạo sample cho metric đó.
+
+Ví dụ:
+
+```js
+import { Counter, Trend, Rate } from "k6/metrics";
+
+const orders = new Counter("orders");
+const checkoutDuration = new Trend("checkout_duration", true);
+const checkoutOk = new Rate("checkout_ok");
+
+export default function () {
+  orders.add(1, { flow: "checkout" });
+  checkoutDuration.add(250, { flow: "checkout" });
+  checkoutOk.add(true, { flow: "checkout" });
+}
+```
+
+Ba dòng `.add()` ở trên tạo ba sample khác nhau:
+
+```text
+orders
+  Metric = orders
+  Type   = Counter
+  Value  = 1
+  Tags   = flow=checkout
+
+checkout_duration
+  Metric = checkout_duration
+  Type   = Trend
+  Value  = 250
+  Tags   = flow=checkout
+
+checkout_ok
+  Metric = checkout_ok
+  Type   = Rate
+  Value  = 1
+  Tags   = flow=checkout
+```
+
+Trong core custom metrics, `.add(value, tags)` tạo `metrics.Sample` có:
+
+```text
+Metric = metric custom đang gọi add
+Tags = current tags + tags truyền vào add()
+Time = time.Now()
+Value = value đã convert sang float
+Metadata = metadata hiện tại nếu có
+```
+
+Với `Rate`, nếu bạn truyền boolean:
+
+```text
+true  -> value = 1
+false -> value = 0
+```
+
+Nên:
+
+```js
+checkoutOk.add(true);
+checkoutOk.add(false);
+checkoutOk.add(true);
+```
+
+tạo logic:
+
+```text
+Total = 3
+Trues = 2
+rate = 2 / 3 = 66.67%
+```
+
+#### 2.1.4 Tags làm sample bị tách thành nhiều chuỗi dữ liệu
+
+Hai sample có cùng metric name nhưng khác tags thì không còn là cùng một chuỗi dữ liệu.
+
+Ví dụ:
+
+```text
+http_req_duration{status:200} value=100
+http_req_duration{status:500} value=900
+```
+
+Cả hai đều thuộc metric `http_req_duration`, nhưng tags khác nhau:
+
+```text
+status=200
+status=500
+```
+
+Nên khi viết threshold theo tag:
+
+```js
+export const options = {
+  thresholds: {
+    "http_req_duration{status:200}": ["p(95)<300"],
+  },
+};
+```
+
+k6 chỉ xét các sample có tag `status=200`, không xét sample `status=500`.
+
+Đây là lý do phần sau cần học `TimeSeries = Metric + Tags`.
+
+#### 2.1.5 Ví dụ từ sample thô ra summary
+
+Giả sử script chỉ chạy đúng 1 iteration và có custom metrics như sau:
+
+```js
+import { Counter, Rate, Trend } from "k6/metrics";
+
+const orders = new Counter("orders");
+const checkoutOk = new Rate("checkout_ok");
+const checkoutDuration = new Trend("checkout_duration", true);
+
+export default function () {
+  orders.add(1);
+  orders.add(2);
+
+  checkoutOk.add(true);
+  checkoutOk.add(false);
+
+  checkoutDuration.add(100);
+  checkoutDuration.add(300);
+}
+```
+
+Nếu bỏ qua tags để nhìn đơn giản, runtime đã tạo các sample như sau:
+
+```text
+orders              value=1
+orders              value=2
+checkout_ok         value=1
+checkout_ok         value=0
+checkout_duration   value=100
+checkout_duration   value=300
+```
+
+k6 không in từng sample này trong summary mặc định.
+k6 gom chúng qua sink rồi mới in kết quả cuối.
+
+Với `orders`:
+
+```text
+type = Counter
+sample values = [1, 2]
+count = 1 + 2 = 3
+```
+
+Summary sẽ có dạng:
+
+```text
+orders................: 3    .../s
+```
+
+Với `checkout_ok`:
+
+```text
+type = Rate
+sample values = [1, 0]
+Total = 2
+Trues = 1
+rate = 1 / 2 = 50%
+```
+
+Summary sẽ có dạng:
+
+```text
+checkout_ok...........: 50.00% 1 out of 2
+```
+
+Với `checkout_duration`:
+
+```text
+type = Trend
+sample values = [100, 300]
+avg = (100 + 300) / 2 = 200ms
+min = 100ms
+max = 300ms
+med = 200ms
+```
+
+Summary sẽ có dạng:
+
+```text
+checkout_duration.....: avg=200ms min=100ms med=200ms max=300ms ...
+```
+
+Điểm cần nhớ:
+
+```text
+sample là dữ liệu thô lúc runtime ghi nhận
+summary là dữ liệu đã được sink gom lại
+```
+
+Vì vậy khi đọc summary, đừng tưởng dòng summary là một sample.
+Nó thường là kết quả của rất nhiều sample.
+
+#### 2.1.6 Checklist đọc sample cho đúng
+
+Khi thấy một dòng metric hoặc khi tự viết custom metric, đọc theo thứ tự này:
+
+```text
+1. Metric name là gì?
+   ví dụ http_reqs, http_req_duration, checkout_ok
+
+2. Type là gì?
+   Counter, Gauge, Rate, hay Trend
+
+3. sample.Value nghĩa là gì?
+   1 request, số ms, true/false, số byte, queue depth...
+
+4. sample này sinh ra khi nào?
+   request kết thúc, iteration kết thúc, hay lúc mình gọi .add()
+
+5. Tags là gì?
+   status, method, url, scenario, group, custom tag...
+
+6. Sink sẽ gom nó ra sao?
+   cộng dồn, lấy value cuối, tính true/total, hay đưa vào tập duration
+```
 
 ### 2.2 TimeSeries là gì?
 
