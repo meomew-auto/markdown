@@ -309,7 +309,7 @@ export default function() {
 }
 ```
 
-Dạng đầy đủ dễ nhìn:
+Dạng dài tối thiểu dễ nhìn:
 ```javascript
 export const options = {
     scenarios: {

@@ -1079,10 +1079,10 @@ total_http_requests = completed_iterations * 2
 total_checks = completed_iterations * 2
 ```
 
-Ước lượng request rate từ lịch iteration:
+Ước lượng target request rate từ lịch iteration:
 
 ```text
-estimated_http_req_rate_if_no_drop ~= lambda * http_requests_per_iteration
+target_http_req_rate_if_no_drop ~= lambda * http_requests_per_iteration
 ```
 
 Cần nhớ:
@@ -1964,7 +1964,7 @@ observed_scheduled_slots ~= completed_iterations + interrupted_iterations + drop
 ```
 
 ```text
-estimated_http_req_rate_if_no_drop ~= lambda * http_requests_per_iteration
+target_http_req_rate_if_no_drop ~= lambda * http_requests_per_iteration
 ```
 
 Trong đó:

@@ -1025,7 +1025,7 @@ http_reqs....: 24
 checks_total.: 24
 ```
 
-### 7.2. Runtime thật của scenario
+### 7.2. Mẫu số `summary_runtime_base` của Counter summary
 
 Từ Counter:
 

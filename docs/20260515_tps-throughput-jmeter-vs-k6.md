@@ -139,7 +139,9 @@ average_total_rate
 Trong đó:
 
 ```text
-summary_runtime_base = mẫu số mà Counter summary dùng cho cột /s
+summary_runtime_base
+  = khoảng thời gian của test run mà k6 summary dùng làm mẫu số cho Counter rate
+  = không phải thời gian của riêng 1 VU
 ```
 
 Không lấy:
@@ -148,7 +150,8 @@ Không lấy:
 lấy summary iterations/s rồi nhân thêm vus
 ```
 
-vì `summary iterations/s` đã là throughput của **toàn scenario** rồi.
+vì `summary iterations/s` đã là throughput của **toàn metric/run mà summary đang báo** rồi.
+Trong demo 1 scenario sạch thì nó gần như cũng chính là throughput của scenario đó.
 
 Ví dụ docs Grafana:
 
@@ -495,7 +498,15 @@ iteration_duration avg=1.72s
 | Số business flow mỗi giây | Throughput của Transaction Controller sample | `iterations/s` nếu `1 iteration = 1 flow` | `TPS` |
 | Thời gian 1 request | Average / Median / Percentiles của HTTP sample | `http_req_duration` | latency |
 | Thời gian 1 flow | Average / Median / Percentiles của transaction sample | `iteration_duration` nếu `1 iteration = 1 flow` | transaction latency |
-| Điều khiển target throughput | `Constant Throughput Timer` | thường là arrival-rate executors | pacing / rate control |
+| Điều khiển target throughput | `Constant Throughput Timer` | thường là arrival-rate executors nếu mục tiêu là target iteration start rate | pacing / rate control |
+
+Với k6 cần nhớ thêm:
+
+```text
+arrival-rate executor target nhịp start của iteration
+muốn đổi sang RPS hay TPS thì còn phải biết 1 iteration chứa bao nhiêu request
+hoặc đại diện cho bao nhiêu business transaction
+```
 
 ## 7. Ví dụ đầy đủ: cùng một business flow
 

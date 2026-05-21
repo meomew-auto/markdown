@@ -1,7 +1,7 @@
 # constant-vus Executor và k6 Execution Phases
 
 **Ngày phân tích**: 2026-01-15
-**Mục đích**: Phân tích chi tiết executor time-based đơn giản nhất - `constant-vus`, và các giai đoạn thực thi của k6
+**Mục đích**: Phân tích chi tiết executor time-based cơ bản nhất - `constant-vus`, và các giai đoạn thực thi của k6
 **Liên quan**: 
 - [constant_vus.go](file:///e:/Projects/k6/lib/executor/constant_vus.go)
 - [execution.go](file:///e:/Projects/k6/lib/execution.go)
@@ -192,10 +192,15 @@ PHASE 1: INIT                    PHASE 3: EXECUTION
 │                     │          │        └──> go handleVU(VU#3)     │
 │                     │          │                                   │
 │                     │          │  Each handleVU() runs:            │
-│                     │          │    for { runIteration(vu) }       │
-│                     │          │    until regDurationDone          │
+│                     │          │    check regDurationDone          │
+│                     │          │    runIteration(maxDurationCtx)   │
+│                     │          │    repeat while còn được start mới│
 │                     │          │                                   │
-│                     │          │  End of duration:                 │
+│                     │          │  Sau khi hết duration:            │
+│                     │          │    không start iteration mới nữa  │
+│                     │          │    iteration đã start có thể chạy │
+│                     │          │    nốt trong gracefulStop         │
+│                     │          │    xong hoặc bị interrupt rồi     │
 │                     │          │    ReturnVU() ──> es.vus <- vu    │
 │                     │          │                                   │
 └─────────────────────┘          └───────────────────────────────────┘
@@ -247,7 +252,7 @@ export const options = {
     duration: '30s',
 };
 
-// Internally converted to:
+// Dạng dài tối thiểu k6 suy ra:
 export const options = {
     scenarios: {
         default: {
@@ -350,6 +355,13 @@ export const options = {
     },
   },
 };
+```
+
+Và khi chạy, core còn áp thêm default ngầm:
+
+```text
+gracefulStop = 30s từ BaseConfig
+exec mặc định = default
 ```
 
 Các tham số chính:
@@ -464,8 +476,8 @@ vì executor này không có tham số `iterations`.
 Cách ước lượng số iteration hoàn tất khi `W` khá đều và `G` đủ cho iteration cuối finish:
 
 ```text
-iterations_per_vu_approx ~= ceil(D / W)
-completed_iterations_approx ~= V * ceil(D / W)
+iterations_per_vu_approx ~= ceil(D / W_effective)
+completed_iterations_approx ~= V * ceil(D / W_effective)
 ```
 
 Nếu `G` không đủ, iteration cuối có thể bị interrupt, khi đó completed thấp hơn ước lượng.

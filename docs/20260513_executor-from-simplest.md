@@ -2231,7 +2231,7 @@ Kết luận từ demo:
 Peak iteration rate cao nhất chỉ xảy ra khi tất cả VU còn active.
 Khi VU nhanh finish sớm, chúng idle.
 Scenario vẫn phải chờ VU chậm nhất.
-Average iteration rate = total completed iterations / total duration.
+Average iteration rate trong summary = completed_iterations / summary_runtime_base.
 ```
 
 Nếu mục tiêu của bài test là **giữ iterations/s ổn định trong suốt cả test**, thì
@@ -2642,17 +2642,22 @@ total iterations = 1
 
 `DeriveScenariosFromShortcuts()` chọn executor theo shortcut:
 
-| Options user khai báo | Executor được derive |
-|-----------------------|----------------------|
-| Không khai báo gì | `per-vu-iterations` |
-| `iterations` | `shared-iterations` |
-| `duration` | `constant-vus` |
-| `stages` | `ramping-vus` |
-| `vus` đơn lẻ | `shared-iterations` với `iterations = vus` |
-| `scenarios` | Dùng đúng scenario user khai báo |
+| Điều kiện match theo switch | Executor / hành vi được derive |
+|----------------------------|--------------------------------|
+| Không có execution params nào match | `per-vu-iterations` mặc định |
+| Có `iterations` | `shared-iterations` |
+| Không có `iterations`, nhưng có `duration` | `constant-vus` |
+| Không có `iterations`/`duration`, nhưng có `stages` | `ramping-vus` |
+| Không có `iterations`/`duration`/`stages`, nhưng có root `vus` | `shared-iterations` với `iterations = vus` |
+| Không vướng các nhánh trên, và `scenarios` không rỗng | Dùng đúng scenario user khai báo |
 
-Ghi chú: `vus` đơn lẻ không còn là "chạy vô hạn"; code tạo `shared-iterations` với số
-iterations bằng số VUs.
+Ghi chú:
+
+```text
+iterations có ưu tiên cao hơn duration
+duration có ưu tiên cao hơn stages
+root vus có thể override scenarios nếu các nhánh trước không match
+```
 
 ---
 

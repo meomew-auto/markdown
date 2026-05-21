@@ -419,7 +419,8 @@ NewExecutor()
   = bước core biến config thành executor object thật trong Go
 
 startTime
-  = mốc bắt đầu của cả scenario/executor so với đầu test
+  = độ trễ cấu hình trước khi scenario/executor bắt đầu execution phase
+  = được tính sau khi init/setup đã xong, không phải đơn giản là wall-clock từ lúc bấm `k6 run`
 
 executor.Run()
   = lúc executor bắt đầu làm việc thật: lấy VU, activate VU, chạy iteration, hoặc tạo slot
@@ -546,7 +547,8 @@ Với open model như `constant-arrival-rate`:
 ```text
 executor.Run()
   -> lấy preAllocatedVUs
-  -> active chúng vào pool nội bộ
+  -> Activate thành `ActiveVU` wrapper rồi đưa vào pool nội bộ
+  -> chưa nhất thiết làm counter active tăng theo nghĩa "đang chạy RunOnce()" ngay tại bước này
   -> tính tickerPeriod từ rate/timeUnit
   -> tới từng slot thì gọi TryRunIteration()
   -> thiếu VU rảnh thì ghi dropped_iterations
@@ -992,7 +994,7 @@ Giả sử chỉ có 1 VU và 1 iteration mất khoảng `400ms`, thì:
 0.00s -> mốc 1 đến hạn, VU rảnh -> chạy iteration 1
 0.25s -> mốc 2 đến hạn, VU vẫn bận -> bỏ qua mốc 2, tăng dropped_iterations
 0.40s -> VU rảnh lại, nhưng mốc 2 đã qua rồi, k6 không chạy bù mốc 2
-0.50s -> mốc 3 đến hạn, VU rảnh -> chạy iteration 3
+0.50s -> mốc 3 đến hạn, VU rảnh -> slot/mốc 3 chạy được
 0.75s -> mốc 4 đến hạn, VU vẫn bận -> bỏ qua mốc 4, tăng dropped_iterations
 ```
 
@@ -1533,8 +1535,8 @@ VU đang thực sự chạy script, hoặc đã nhận lệnh dừng nhưng chư
 Ví dụ:
 
 ```text
-2 VU đang chạy request
-1 VU đã nhận lệnh dừng nhưng vẫn chưa thoát khỏi iteration
+2 VU đang ở trong iteration, có thể đang request, sleep, hoặc chạy JS
+1 VU đã nhận lệnh dừng nhưng vẫn chưa thoát khỏi iteration hiện tại
 => active VUs = 3
 ```
 

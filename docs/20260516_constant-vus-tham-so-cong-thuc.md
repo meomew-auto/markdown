@@ -941,7 +941,7 @@ W ~= 0.70315s
 executor_wall_time_after_start = D + G = 5s
 
 iterations_per_vu_started_approx
-  ~= ceil(D / W)
+  ~= ceil(D / W_effective)
   ~= ceil(3 / 0.70315)
   ~= ceil(4.27)
   = 5

@@ -72,7 +72,8 @@ Ví dụ rất ngắn:
 
 ```text
 closed model:
-  1 VU chạy xong request trước rồi mới chạy request sau
+  1 VU chạy xong iteration/vòng `default()` trước rồi mới bắt đầu iteration sau
+  request chỉ là một bước có thể nằm bên trong iteration đó
 
 open model:
   ví dụ constant-arrival-rate local run:
@@ -224,7 +225,20 @@ Hiểu ngắn:
 
 ```text
 VU đang ngồi chờ việc = VU đã có sẵn trong pool, nhưng chưa được tính active
-VU active = VU đang làm việc thật
+VU active = VU đang bị executor giữ ở trạng thái làm việc theo logic đếm active của executor đó
+```
+
+Tách kỹ hơn để đỡ nhầm:
+
+```text
+Initialized VU / planned VU
+  = VU đã được tạo và đang nằm trong pool `es.vus`
+
+ActiveVU
+  = wrapper/runtime mà executor tạo ra khi Activate một Initialized VU
+
+active VUs counter
+  = bộ đếm mà executor/scheduler tăng giảm để phản ánh số VU đang active theo logic thực thi
 ```
 
 Ví dụ `per-vu-iterations`:
@@ -647,7 +661,7 @@ Luồng runtime:
 
 ```text
 arrival-rate đến giờ start iteration
-  -> thử lấy VU rảnh từ pool local
+  -> thử lấy VU rảnh từ `activeVUPool` nội bộ của arrival-rate executor
   -> nếu có VU rảnh: chạy iteration
   -> nếu không có VU rảnh:
        bỏ mốc start hiện tại
@@ -658,6 +672,7 @@ arrival-rate đến giờ start iteration
            GetUnplannedVU()
            InitializeNewVU()
            scheduler.initVU()
+            Activate() rồi đưa vào `activeVUPool`
            Runner.NewVU()
            Activate() VU mới
 ```
