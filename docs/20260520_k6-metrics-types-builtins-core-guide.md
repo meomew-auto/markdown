@@ -2407,6 +2407,13 @@ append sample:
   value  = failed
 ```
 
+Một chi tiết trong core: `transport.go` chỉ append `http_req_failed` khi
+`responseCallback != nil`.
+Nếu bạn tắt callback bằng `http.setResponseCallback(null)`, request có thể
+không sinh sample `http_req_failed`.
+Demo này không dùng `null` vì mục tiêu là làm metric `http_req_failed` hiện rõ
+để học cách đọc.
+
 `responseCallback` mặc định nằm ở `js/modules/k6/http/http.go`:
 
 ```text
@@ -2697,7 +2704,7 @@ HTTP
   http_req_failed............: 33.33% 2 out of 6
     { endpoint:status_200 }..........: 0.00%   0 out of 2
     { endpoint:status_500_default }..: 100.00% 2 out of 2
-    { endpoint:status_500_expected }.: 0.00%   0 out of 2
+    { endpoint:status_500_expected }...: 0.00%   0 out of 2
   http_reqs..................: 6
 
 NETWORK
