@@ -2035,6 +2035,302 @@ Ví dụ 10 request:
 `avg` có thể bị kéo lên bởi request rất chậm.
 `p(95)` hoặc `max` giúp thấy đuôi chậm.
 
+##### Demo chạy được: 9 request nhanh, 1 request rất chậm
+
+File demo:
+
+```text
+examples/trend_tail_latency_demo.js
+```
+
+Chạy:
+
+```bash
+k6 run examples/trend_tail_latency_demo.js
+```
+
+Demo này không gọi HTTP thật.
+Nó dùng custom `Trend` để tạo 10 sample latency cố định, nhờ vậy số trong summary không bị nhiễu bởi mạng thật.
+
+Trong file demo:
+
+```javascript
+const tailLatency = new Trend("tail_latency", true);
+
+export default function () {
+  const values = [100, 100, 100, 100, 100, 100, 100, 100, 100, 5000];
+
+  for (const value of values) {
+    tailLatency.add(value);
+    console.log(`[tail-latency-sample] value=${value}ms`);
+  }
+}
+```
+
+Cắt nghĩa:
+
+```text
+tail_latency
+```
+
+là tên metric tự tạo.
+
+```text
+new Trend("tail_latency", true)
+```
+
+nghĩa là tạo một metric loại `Trend`.
+Tham số `true` nói với k6 rằng giá trị này là thời gian, nên summary sẽ in theo `ms` hoặc `s`.
+
+```text
+tailLatency.add(100)
+```
+
+nghĩa là thêm một sample có giá trị `100ms`.
+Mỗi lần gọi `.add()` là thêm một sample vào metric `tail_latency`.
+
+Danh sách này:
+
+```text
+[100, 100, 100, 100, 100, 100, 100, 100, 100, 5000]
+```
+
+nghĩa là:
+
+```text
+9 sample nhanh: 100ms
+1 sample rất chậm: 5000ms
+```
+
+Output chính:
+
+```text
+tail_latency.........: count=10 avg=590ms min=100ms med=100ms max=5s p(90)=589.99ms p(95)=2.79s
+```
+
+Cắt nghĩa từng cột:
+
+```text
+count=10
+```
+
+Metric này nhận đúng 10 sample.
+
+```text
+min=100ms
+```
+
+Sample nhanh nhất là `100ms`.
+
+```text
+max=5s
+```
+
+Sample chậm nhất là `5000ms`, k6 format thành `5s`.
+
+```text
+med=100ms
+```
+
+Giá trị ở giữa vẫn là `100ms`.
+Vì trong 10 sample có tới 9 sample bằng `100ms`.
+Nhìn `med` sẽ thấy phần lớn request thật ra vẫn nhanh.
+
+```text
+avg=590ms
+```
+
+Core tính trung bình bằng:
+
+```text
+avg = tổng giá trị / số sample
+```
+
+Với demo này:
+
+```text
+tổng giá trị = 9 * 100 + 5000
+             = 900 + 5000
+             = 5900ms
+
+số sample = 10
+
+avg = 5900 / 10
+    = 590ms
+```
+
+Điểm dễ hiểu nhầm nằm ở đây:
+
+```text
+Không có request nào thật sự mất 590ms.
+```
+
+Thực tế chỉ có:
+
+```text
+9 request mất 100ms
+1 request mất 5000ms
+```
+
+Nhưng `avg` bị request `5000ms` kéo lên thành `590ms`.
+Nếu chỉ nhìn `avg=590ms`, bạn có thể tưởng hệ thống thường xuyên trả lời quanh `590ms`.
+Điều đó sai với bộ sample này.
+
+Core phần `Trend` nằm ở `metrics/sink.go`.
+Khi có sample mới, `TrendSink.Add()` làm các việc chính:
+
+```text
+lưu value vào danh sách values
+tăng count
+cộng value vào sum
+cập nhật min/max
+```
+
+Sau đó `Avg()` trả về:
+
+```text
+sum / count
+```
+
+Vì vậy `avg` không biết sample nào là request bình thường, sample nào là request rất chậm.
+Nó chỉ lấy tổng chia đều.
+
+##### Vì sao `p(95)=2.79s` trong demo này?
+
+Core `TrendSink.P()` trong `metrics/sink.go` tính percentile bằng cách:
+
+```text
+1. sort toàn bộ values tăng dần
+2. tính vị trí i = percentile * (count - 1)
+3. nếu i nằm giữa 2 sample thì nội suy tuyến tính
+```
+
+Danh sách sau khi sort vẫn là:
+
+```text
+index: 0    1    2    3    4    5    6    7    8    9
+value: 100  100  100  100  100  100  100  100  100  5000
+```
+
+Với `p(90)`:
+
+```text
+percentile = 0.90
+count = 10
+
+i = 0.90 * (10 - 1)
+  = 0.90 * 9
+  = 8.1
+```
+
+Vị trí `8.1` nằm giữa:
+
+```text
+index 8 = 100ms
+index 9 = 5000ms
+```
+
+Phần lẻ là:
+
+```text
+0.1
+```
+
+Nên core nội suy:
+
+```text
+p(90) = 100 + (5000 - 100) * 0.1
+      = 100 + 490
+      = 590ms
+```
+
+Khi in summary, do biểu diễn số thực và format thời gian, bạn có thể thấy:
+
+```text
+p(90)=589.99ms
+```
+
+Hiểu thực tế là khoảng `590ms`.
+
+Với `p(95)`:
+
+```text
+percentile = 0.95
+count = 10
+
+i = 0.95 * (10 - 1)
+  = 0.95 * 9
+  = 8.55
+```
+
+Vị trí `8.55` nằm giữa:
+
+```text
+index 8 = 100ms
+index 9 = 5000ms
+```
+
+Phần lẻ là:
+
+```text
+0.55
+```
+
+Nên core nội suy:
+
+```text
+p(95) = 100 + (5000 - 100) * 0.55
+      = 100 + 4900 * 0.55
+      = 100 + 2695
+      = 2795ms
+      ~= 2.79s
+```
+
+Vì vậy summary in:
+
+```text
+p(95)=2.79s
+```
+
+Lưu ý quan trọng:
+
+```text
+p(95) ở đây không phải một request thật có duration đúng 2795ms.
+```
+
+Trong demo này request thật chỉ có `100ms` hoặc `5000ms`.
+`2795ms` là giá trị nội suy do core tính ra từ tập sample.
+
+Với chỉ 10 sample, `p(95)` rất dễ dao động và không nên dùng để kết luận lớn.
+Demo này chỉ để thấy rõ vì sao không nên đọc mỗi `avg`.
+Khi test thật, cần đủ nhiều sample hơn và nên đọc cùng lúc:
+
+```text
+avg
+med
+p(90)
+p(95)
+max
+error rate
+```
+
+Đọc demo này theo cách thực tế:
+
+```text
+med=100ms
+  phần lớn request nhanh
+
+avg=590ms
+  bị request 5000ms kéo lên
+
+max=5s
+  có ít nhất một request rất chậm
+
+p(95)=2.79s
+  phần đuôi latency đã bị ảnh hưởng bởi request rất chậm
+  nhưng vì chỉ có 10 sample nên p95 là số nội suy, chưa đủ để kết luận chắc
+```
+
 Với performance test, thường nhìn:
 
 ```text
