@@ -4252,29 +4252,131 @@ cách client thật sử dụng kết nối.
 
 ### 6.3 Network metrics
 
-Trong official docs, `data_sent` và `data_received` nằm trong standard built-in metrics.
-Trong phần summary cuối test, k6 thường nhóm chúng vào mục `NETWORK`, nên bài này tách lại một mục riêng để dễ đọc output.
+Mục này là bytes trên network, không phải số request.
+Trong summary, k6 thường nhóm chúng vào `NETWORK`.
 
-| Metric | Type trong core | Contains | Nghĩa |
-| --- | --- | --- | --- |
-| `data_sent` | `Counter` | `Data` | tổng bytes gửi đi |
-| `data_received` | `Counter` | `Data` | tổng bytes nhận về |
-
-Hai metric này là `Counter`, nhưng không phải đếm số request.
-Nó cộng byte.
-
-Ví dụ:
+Core chính:
 
 ```text
-data_received....: 6.8 kB 19 kB/s
+metrics/builtin.go
+  -> register data_sent/data_received là Counter + Data
+
+lib/netext/dialer.go
+  -> Conn.Write cộng BytesWritten
+  -> Conn.Read cộng BytesRead
+  -> IOSamples() flush bytes thành sample DataSent/DataReceived
+
+internal/js/runner.go
+  -> gọi Dialer.IOSamples() ở cuối iteration
+```
+
+Đọc theo đời thường:
+
+```text
+data_sent
+  = tổng bytes k6 đã gửi ra network trong iteration đó
+
+data_received
+  = tổng bytes k6 đã nhận về từ network trong iteration đó
+```
+
+Hai metric này là `Counter`, nhưng đơn vị không phải “số lần”.
+Đơn vị là byte, nên summary sẽ hiện theo kiểu `kB`, `MB`, `kB/s`.
+
+| Metric | Core định nghĩa/tính value như nào | Thực tế nên nói như nào | Khi số xấu thì nghĩ gì? |
+| --- | --- | --- | --- |
+| `data_sent` | `Conn.Write()` cộng số byte đã ghi vào `BytesWritten`, `IOSamples()` lấy số này ra rồi reset về `0`, sau đó emit sample `DataSent`. | Tổng bytes đã gửi đi trên socket. | Cao thì nghi request body lớn, nhiều request, headers nhiều, redirect/retry, hoặc TLS handshake có nhiều byte. |
+| `data_received` | `Conn.Read()` cộng số byte đã đọc vào `BytesRead`, `IOSamples()` lấy số này ra rồi reset về `0`, sau đó emit sample `DataReceived`. | Tổng bytes đã nhận về trên socket. | Cao thì nghi response body lớn, nhiều response, headers nhiều, redirect/retry, hoặc traffic tải về lớn. |
+
+Điểm quan trọng:
+
+```text
+data_sent/data_received không phải latency
+không có p95/p99
+không phải số request
+```
+
+Nó trả lời câu hỏi:
+
+```text
+trong giai đoạn test này, k6 đã bơm bao nhiêu byte lên/xuống network?
+```
+
+Vì value được flush ở cuối iteration, một sample network có thể là tổng bytes của nhiều HTTP request trong cùng iteration đó.
+
+Trong file demo chung `examples/http_metrics_types_demo.js`, 3 lệnh `http.get()` trong `default function`
+làm phát sinh traffic thật, nên summary sẽ có block `NETWORK`.
+
+Ví dụ output:
+
+```text
+NETWORK
+  data_received..............: 26 kB   5.8 kB/s
+  data_sent..................: 12 kB   2.6 kB/s
 ```
 
 Đọc là:
 
 ```text
-tổng cộng nhận 6.8 kB
-trung bình khoảng 19 kB mỗi giây trong thời gian test
+data_received = tổng cộng nhận 26 kB
+data_sent = tổng cộng gửi 12 kB
+kB/s = tốc độ trung bình trong suốt thời gian test
 ```
+
+Lưu ý:
+
+```text
+data_sent không chỉ là body
+data_received không chỉ là response body
+chúng là byte đã đi qua connection, nên headers và handshake bytes cũng có thể góp phần
+```
+
+Vì vậy nếu payload nhỏ mà `data_sent` vẫn khá lớn, đừng vội kết luận request body lớn.
+Có thể do nhiều request, headers dài, reconnect, hoặc TLS handshake.
+
+#### 6.3.1 Bằng chứng từ core
+
+Trong core, `data_sent` và `data_received` không được sinh từ `http_req_*`.
+Chúng đi qua `Dialer`:
+
+```text
+Conn.Write()
+  -> tăng BytesWritten
+
+Conn.Read()
+  -> tăng BytesRead
+
+Dialer.IOSamples()
+  -> atomic.SwapInt64(BytesWritten, 0)
+  -> atomic.SwapInt64(BytesRead, 0)
+  -> emit sample DataSent/DataReceived
+```
+
+`internal/js/runner.go` gọi `u.Dialer.IOSamples(endTime, ctm, builtinMetrics)` ở cuối iteration.
+Nghĩa là network metrics được flush theo nhịp iteration, không phải theo từng request riêng lẻ.
+
+#### 6.3.2 Demo chạy được
+
+Không cần file demo riêng.
+Trong `examples/http_metrics_types_demo.js`, chính 3 request HTTP này tạo ra network traffic:
+
+```js
+const ok = http.get("https://quickpizza.grafana.com/api/status/200", {
+  tags: { endpoint: "status_200" },
+});
+
+const failByDefault = http.get("https://quickpizza.grafana.com/api/status/500", {
+  tags: { endpoint: "status_500_default" },
+});
+
+const expected500 = http.get("https://quickpizza.grafana.com/api/status/500", {
+  tags: { endpoint: "status_500_expected" },
+  responseCallback: http.expectedStatuses(500),
+});
+```
+
+Khi chạy demo đó, summary sẽ có `NETWORK`.
+Hai dòng `data_sent/data_received` là kết quả phụ của cùng traffic HTTP ở trên.
 
 ### 6.4 WebSocket metrics
 
