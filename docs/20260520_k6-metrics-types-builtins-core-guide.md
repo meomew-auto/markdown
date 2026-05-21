@@ -3154,7 +3154,90 @@ Dưới đây là review từng metric theo đúng format:
 metric là gì
   -> core định nghĩa ở đâu
   -> core tính value như nào
-  -> demo làm gì để thấy nó
+  -> demo dùng file nào, đoạn nào tạo ra value đó
+```
+
+Tất cả ví dụ trong mục `6.2` dùng chung một file demo mặc định:
+
+```text
+examples/http_metrics_types_demo.js
+```
+
+Bản full file nằm ở mục `6.2.3`.
+Khi từng metric bên dưới nói "demo chứng minh", hãy hiểu là đang trỏ về file này.
+
+Map nhanh từ metric sang đoạn code tạo ra value:
+
+| Metric | Đoạn trong file demo tạo ra value |
+| --- | --- |
+| `http_reqs` | `options.scenarios.http_metrics_types_demo.iterations = 2` và 3 lệnh `http.get()` trong `default function` |
+| `http_req_failed` | 3 request có tag `endpoint`: `status_200`, `status_500_default`, `status_500_expected`; riêng `status_500_expected` có `responseCallback: http.expectedStatuses(500)` |
+| `http_req_duration` | function `traceResponse()` log `duration` và tự cộng `sending + waiting + receiving` |
+| `http_req_blocked` | function `traceResponse()` log `timings.blocked`; option `noConnectionReuse: true` giúp dễ thấy số hơn |
+| `http_req_connecting` | function `traceResponse()` log `timings.connecting`; option `noConnectionReuse: true` giúp tạo connection mới |
+| `http_req_tls_handshaking` | function `traceResponse()` log `timings.tls_handshaking`; URL dùng `https://...` |
+| `http_req_sending` | function `traceResponse()` log `timings.sending` |
+| `http_req_waiting` | function `traceResponse()` log `timings.waiting` |
+| `http_req_receiving` | function `traceResponse()` log `timings.receiving` |
+
+Lưu ý:
+
+```text
+Với HTTP built-in metrics, script không tự gọi .add() để tạo sample.
+Chỉ cần script gọi http.get()/http.post(), core sẽ đo request và tự emit sample.
+```
+
+Vì vậy trong demo:
+
+```text
+3 lệnh http.get()
+  -> tạo HTTP request thật
+  -> core tạo Trail
+  -> Trail.SaveSamples() sinh sample cho http_reqs và các timing metric
+  -> transport.go sinh thêm http_req_failed nếu có responseCallback
+  -> traceResponse() chỉ log lại response.timings để ta nhìn thấy cùng nguồn value
+```
+
+Đoạn tạo 3 request chính:
+
+```js
+const ok = http.get("https://quickpizza.grafana.com/api/status/200", {
+  tags: { endpoint: "status_200" },
+});
+
+const failByDefault = http.get("https://quickpizza.grafana.com/api/status/500", {
+  tags: { endpoint: "status_500_default" },
+});
+
+const expected500 = http.get("https://quickpizza.grafana.com/api/status/500", {
+  tags: { endpoint: "status_500_expected" },
+  responseCallback: http.expectedStatuses(500),
+});
+```
+
+Đoạn log các timing:
+
+```js
+function traceResponse(label, response) {
+  const timings = response.timings;
+  const recomputedDuration =
+    timings.sending + timings.waiting + timings.receiving;
+
+  console.log(
+    [
+      `[metric-trace] endpoint=${label}`,
+      `status=${response.status}`,
+      `blocked=${ms(timings.blocked)}ms`,
+      `connecting=${ms(timings.connecting)}ms`,
+      `tls_handshaking=${ms(timings.tls_handshaking)}ms`,
+      `sending=${ms(timings.sending)}ms`,
+      `waiting=${ms(timings.waiting)}ms`,
+      `receiving=${ms(timings.receiving)}ms`,
+      `duration=${ms(timings.duration)}ms`,
+      `sending+waiting+receiving=${ms(recomputedDuration)}ms`,
+    ].join(" "),
+  );
+}
 ```
 
 ##### `http_reqs`
@@ -3181,7 +3264,30 @@ lib/netext/httpext/tracer.go
 Nghĩa là mỗi request HTTP khi kết thúc sẽ đóng góp một sample `value=1`.
 Vì metric này là `Counter`, summary cộng các sample lại.
 
-Demo chứng minh:
+Trong file demo chung, phần tạo ra `count=6` là:
+
+```js
+export const options = {
+  scenarios: {
+    http_metrics_types_demo: {
+      executor: "shared-iterations",
+      vus: 1,
+      iterations: 2,
+      maxDuration: "30s",
+    },
+  },
+};
+```
+
+và trong `default function` có 3 lệnh HTTP:
+
+```js
+http.get("https://quickpizza.grafana.com/api/status/200", ...);
+http.get("https://quickpizza.grafana.com/api/status/500", ...);
+http.get("https://quickpizza.grafana.com/api/status/500", ...);
+```
+
+Vì vậy demo tạo:
 
 ```text
 iterations = 2
@@ -3286,7 +3392,18 @@ Nếu bạn tắt callback bằng `http.setResponseCallback(null)`, request có 
 không sinh sample `http_req_failed`.
 Demo này không dùng `null` vì mục tiêu là làm metric `http_req_failed` hiện rõ.
 
-Demo chứng minh bằng 3 endpoint tag:
+Trong file demo chung, phần tạo ra `http_req_failed value=0` hoặc `value=1`
+là 3 request này.
+
+Request thứ nhất:
+
+```js
+const ok = http.get("https://quickpizza.grafana.com/api/status/200", {
+  tags: { endpoint: "status_200" },
+});
+```
+
+Đọc theo core:
 
 ```text
 status_200
@@ -3294,13 +3411,47 @@ status_200
   default expected = 200..399
   expected_response=true
   http_req_failed value=0
+```
 
+Request thứ hai:
+
+```js
+const failByDefault = http.get("https://quickpizza.grafana.com/api/status/500", {
+  tags: { endpoint: "status_500_default" },
+});
+```
+
+Đọc theo core:
+
+```text
 status_500_default
   status trả về = 500
   default expected = 200..399
   expected_response=false
   http_req_failed value=1
+```
 
+Đây là đoạn tạo fail thật trong demo:
+
+```text
+status 500 + default expectedStatuses(200..399)
+  -> responseCallback trả false
+  -> failed = 1
+  -> http_req_failed nhận sample value=1
+```
+
+Request thứ ba:
+
+```js
+const expected500 = http.get("https://quickpizza.grafana.com/api/status/500", {
+  tags: { endpoint: "status_500_expected" },
+  responseCallback: http.expectedStatuses(500),
+});
+```
+
+Đọc theo core:
+
+```text
 status_500_expected
   status trả về = 500
   request tự khai báo responseCallback: http.expectedStatuses(500)
@@ -3358,7 +3509,9 @@ http_req_duration không gồm blocked / connecting / tls_handshaking
 nó chỉ gồm sending + waiting + receiving
 ```
 
-Demo chứng minh bằng console log:
+Trong file demo chung, phần để nhìn ra value của `http_req_duration` là
+`traceResponse()`.
+Nó log `timings.duration` và tự cộng lại 3 phần:
 
 ```text
 [metric-trace] endpoint=...
@@ -3417,7 +3570,7 @@ http_req_blocked = thời gian từ lúc bắt đầu lấy/tạo connection
 Nó không phải thời gian server xử lý.
 Nếu connection được reuse rất nhanh, giá trị này có thể rất nhỏ.
 
-Demo chứng minh:
+Trong file demo chung, phần làm `http_req_blocked` dễ hiện số là:
 
 ```js
 noConnectionReuse: true
@@ -3457,7 +3610,7 @@ Trail.SaveSamples()
 Nếu request dùng lại connection cũ, có thể không có mốc connect mới.
 Khi đó `http_req_connecting` có thể bằng `0`.
 
-Demo chứng minh:
+Trong file demo chung, phần làm `http_req_connecting` dễ hiện số là:
 
 ```js
 noConnectionReuse: true
@@ -3502,7 +3655,15 @@ Trail.SaveSamples()
 Metric này thường chỉ có ý nghĩa rõ với HTTPS.
 Nếu là HTTP thường, hoặc connection HTTPS đã được reuse, giá trị có thể bằng `0`.
 
-Demo dùng URL `https://quickpizza.grafana.com/api/status/...` và `noConnectionReuse: true`, nên dễ thấy:
+Trong file demo chung, phần làm `http_req_tls_handshaking` dễ hiện số là:
+
+```js
+noConnectionReuse: true
+http_req_tls_handshaking: ["avg>=0"]
+```
+
+Demo dùng URL `https://quickpizza.grafana.com/api/status/...`, tức là HTTPS.
+Vì vậy log có thể hiện:
 
 ```text
 http_req_tls_handshaking
@@ -3541,7 +3702,7 @@ Trail.SaveSamples()
 Với request `GET` body nhỏ, `http_req_sending` thường rất nhỏ.
 Với upload body lớn, metric này mới dễ tăng rõ.
 
-Demo chứng minh bằng:
+Trong file demo chung, phần để nhìn ra value của `http_req_sending` là:
 
 ```text
 http_req_sending
@@ -3587,7 +3748,7 @@ http_req_waiting không chỉ là CPU xử lý của server
 nó còn có network latency và thời gian server chuẩn bị byte đầu tiên
 ```
 
-Demo chứng minh bằng:
+Trong file demo chung, phần để nhìn ra value của `http_req_waiting` là:
 
 ```text
 http_req_waiting
@@ -3621,7 +3782,7 @@ Trail.SaveSamples()
 Nếu response rất nhỏ, giá trị này thường rất nhỏ.
 Nếu response lớn hoặc mạng chậm, `http_req_receiving` có thể tăng.
 
-Demo chứng minh bằng:
+Trong file demo chung, phần để nhìn ra value của `http_req_receiving` là:
 
 ```text
 http_req_receiving
