@@ -1504,6 +1504,15 @@ false -> 0
 
 `Trend` dùng cho một tập nhiều giá trị.
 
+Nói ngắn:
+
+```text
+Trend = giữ nhiều số
+min/max = 2 đầu của tập số
+med = điểm giữa
+p90/p95 = mốc cắt ở phía chậm của tập số
+```
+
 Nó trả lời kiểu câu hỏi:
 
 ```text
@@ -1511,7 +1520,7 @@ nhanh nhất là bao nhiêu?
 chậm nhất là bao nhiêu?
 trung bình là bao nhiêu?
 giá trị giữa là bao nhiêu?
-p95 là bao nhiêu?
+p90/p95 là bao nhiêu?
 ```
 
 Ví dụ:
@@ -1535,8 +1544,9 @@ Nó giữ nhiều giá trị, rồi tính:
 avg = sum / count
 min = nhỏ nhất
 max = lớn nhất
-med = percentile 50
-p(90), p(95) = percentile 90, percentile 95
+med = percentile 50 = điểm giữa
+p(90) = mốc mà khoảng 90% giá trị nằm bên trái hoặc bằng mốc đó
+p(95) = mốc mà khoảng 95% giá trị nằm bên trái hoặc bằng mốc đó
 ```
 
 #### Demo `Trend` ngay tại đây
@@ -1723,14 +1733,19 @@ grpc_req_duration
 
 `p(95)` nghĩa là percentile 95.
 
-Đọc dễ hiểu:
+Đọc dễ hiểu nhất:
 
 ```text
-95% sample có giá trị <= p(95)
-5% sample còn lại có thể lớn hơn p(95)
+95% sample có giá trị nằm ở bên trái hoặc bằng mốc này
+5% sample còn lại nằm ở bên phải mốc này
 ```
 
-Nhưng câu trên là cách đọc ý nghĩa thống kê, không phải lúc nào cũng có đúng 100 request.
+Nói đời thường:
+
+```text
+p(95) là một cái mốc cắt
+nó không phải "request thứ 95"
+```
 
 Ví dụ có 100 request:
 
@@ -1753,6 +1768,14 @@ Không đọc thành:
 
 `p(95)` không phải tỉ lệ pass/fail. Nó là vị trí trong phân phối thời gian.
 
+`p(90)` giống vậy, chỉ khác là nó cắt ở mức 90% thay vì 95%.
+Nên:
+
+```text
+p(90) = bớt nhìn 10% đuôi chậm nhất
+p(95) = bớt nhìn 5% đuôi chậm nhất
+```
+
 ##### Nếu không phải 100 request thì đọc thế nào?
 
 Nếu có 100 request thì nói "khoảng 95 request" rất dễ hiểu.
@@ -1763,7 +1786,7 @@ Nhưng nếu chỉ có 10, 20, 37, hoặc 1000 request thì không nên dịch m
 ```text
 p(95)
   = mốc latency mà khoảng 95% sample nằm bên trái hoặc bằng mốc đó
-  = phần đuôi chậm nhất khoảng 5% nằm bên phải mốc đó
+  = tức là chỉ còn khoảng 5% sample chậm hơn mốc đó
 ```
 
 Ví dụ có 20 request:
@@ -1787,6 +1810,13 @@ request số 95 mất 860ms
 ```
 
 vì test chỉ có 20 request.
+
+Nếu muốn nhớ nhanh:
+
+```text
+p90 = nhìn vùng chậm hơn của 10% đuôi cuối
+p95 = nhìn vùng chậm hơn của 5% đuôi cuối
+```
 
 ##### k6 tính `p(95)` với 20 sample ra sao?
 
