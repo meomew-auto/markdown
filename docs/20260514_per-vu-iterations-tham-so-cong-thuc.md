@@ -2063,7 +2063,7 @@ Từ output lần chạy của bạn, ta bóc ngược như sau.
 | `per_vu_rate_avg` | `≈ 0.70 iter/s` | tự tính từ summary | `1 / 1.43 ≈ 0.70`. |
 | `per_vu_rate_med` | `≈ 0.80 iter/s` | tự tính từ summary | `1 / 1.25 = 0.80`. |
 | `estimated_total_rate_from_avg` | `≈ 2.8 iter/s` | tự tính từ summary | `4 * 0.70 ≈ 2.8`. |
-| `actual_scenario_runtime` | `≈ 4.315s` | tự tính từ summary | `12 / 2.780988 ≈ 4.315s`. |
+| `summary_runtime_base` | `≈ 4.315s` | tự tính từ summary | `12 / 2.780988 ≈ 4.315s`. Đây là mẫu số mà Counter summary dùng cho cột `/s`. |
 | `average_iteration_rate` | `2.780988 iters/s` | summary | `iterations / runtime`. |
 | `average_http_request_rate` | `2.780988 req/s` | summary | Vì `1 iteration = 1 request`. |
 | `total_http_requests` | `12` | summary | `http_reqs` count. |
@@ -2317,7 +2317,7 @@ http_reqs count = total_iterations * 2
 estimated_http_reqs_rate = 2 * iterations/s
 ```
 
-#### D.2. Nếu lấy `actual_scenario_runtime` làm gốc thì suy ra gì?
+#### D.2. Nếu lấy `summary_runtime_base` làm gốc thì suy ra gì?
 
 Đoạn này cần nói rất chặt:
 
@@ -2377,36 +2377,38 @@ http_reqs..........: 24    4.723/s
 checks_total.......: 24    4.723/s
 ```
 
-Ta suy ra cùng một runtime:
+Ta suy ra cùng một mẫu số summary:
 
 ```text
-actual_scenario_runtime
+summary_runtime_base
   = 12 / 2.3615
   ≈ 5.0815s
 
-actual_scenario_runtime
+summary_runtime_base
   = 24 / 4.723
   ≈ 5.0815s
 
-actual_scenario_runtime
+summary_runtime_base
   = 24 / 4.723
   ≈ 5.0815s
 ```
 
-Nhìn theo kiểu "runtime ở giữa":
+Trong demo sạch này, số đó thường cũng gần `actual_scenario_runtime`.
+
+Nhìn theo kiểu "lấy `summary_runtime_base` làm mẫu số":
 
 ```text
-completed_iterations ---chia cho runtime---> iterations/s
-total_http_requests  ---chia cho runtime---> http_reqs/s
-total_checks         ---chia cho runtime---> checks_total/s
+completed_iterations ---chia cho summary_runtime_base---> iterations/s
+total_http_requests  ---chia cho summary_runtime_base---> http_reqs/s
+total_checks         ---chia cho summary_runtime_base---> checks_total/s
 ```
 
 Hoặc chiều ngược:
 
 ```text
-iterations/s   * runtime = completed_iterations
-http_reqs/s    * runtime = total_http_requests
-checks_total/s * runtime = total_checks
+iterations/s   * summary_runtime_base = completed_iterations
+http_reqs/s    * summary_runtime_base = total_http_requests
+checks_total/s * summary_runtime_base = total_checks
 ```
 
 Ghi chú quan trọng:
@@ -2772,7 +2774,7 @@ checks_per_iteration = 2
 total_http_requests = 12 * 2 = 24
 total_checks = 12 * 2 = 24
 
-actual_scenario_runtime
+summary_runtime_base
   ≈ 12 / 2.3615
   ≈ 5.0815s
 
@@ -2787,7 +2789,7 @@ average_http_request_rate
 
 #### Vì sao có số `5.0815s`?
 
-`5.0815s` không phải số mới từ config. Nó là runtime thật được suy ngược từ summary:
+`5.0815s` không phải số mới từ config. Nó là `summary_runtime_base` được suy ngược từ summary:
 
 ```text
 iterations.........: 12      2.3615/s
@@ -2796,11 +2798,15 @@ iterations.........: 12      2.3615/s
 Công thức:
 
 ```text
-actual_scenario_runtime
+summary_runtime_base
   = completed_iterations / average_iteration_rate
   = 12 / 2.3615
   ≈ 5.0815s
 ```
+
+Trong demo sạch này, `summary_runtime_base` gần với thời gian run bạn nhìn thấy, nên người học dễ có
+cảm giác đây là "runtime thật". Nhưng khi cắt nghĩa công thức thì nên giữ tên đúng là
+`summary_runtime_base`.
 
 Nó khớp với progress line bị làm tròn:
 

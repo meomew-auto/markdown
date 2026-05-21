@@ -724,7 +724,7 @@ mọi sample đều thấy 4 VU initialized
 `Gauge` không có công thức:
 
 ```text
-rate = count / runtime
+rate = count / summary_runtime_base
 ```
 
 Nó là metric theo sample thời điểm, không phải metric đếm.
@@ -774,7 +774,7 @@ checks_per_iteration = 2
 total_http_requests = 12 * 2 = 24
 total_checks = 12 * 2 = 24
 
-actual_scenario_runtime
+summary_runtime_base
   = 12 / 2.255308
   ≈ 5.3208s
 
@@ -785,7 +785,8 @@ iterations_rate
 average_total_rate
   = completed_iterations / summary_runtime_base
   = 2.255308 iter/s
-  = summary iterations/s của toàn scenario
+  = cột `/s` của Counter `iterations` trong summary
+  = trung bình trên cả run theo `count / summary_runtime_base`
 
 per_vu_rate
   ≈ 1 / effective_iteration_time
@@ -816,7 +817,8 @@ estimated_total_rate_from_avg
   ≈ 2.26 iter/s
 ```
 
-Ví dụ kiểu Grafana docs để tính peak:
+Ví dụ kiểu Grafana docs để tính peak trong một case giả định khác, không có `sleep(1)` như demo
+QuickPizza này:
 
 ```text
 1 iteration ≈ 515ms = 0.515s
@@ -837,7 +839,7 @@ peak_total_rate
 ## 12. Nên nhớ gì sau ví dụ này?
 
 ```text
-1. runtime là mẫu số chung của các Counter
+1. `summary_runtime_base` là mẫu số chung của các Counter trong summary
 2. checks_total không phải Counter builtin, nó là summary helper từ metric checks kiểu Rate
 3. iterations/s đo tốc độ hoàn thành iteration
 4. http_reqs/s đo tốc độ gửi request
@@ -847,5 +849,5 @@ peak_total_rate
 8. nếu không có minIterationDuration, effective_iteration_time gần bằng iteration_duration
 9. vus/vus_max là Gauge nên đọc bằng value/min/max, không chia theo runtime
 10. failed/succeeded là tỉ lệ pass/fail, không phải count/s
-11. summary iterations/s là average_total_rate của toàn scenario, không nhân thêm vus
+11. summary `iterations/s` là cột `/s` của Counter `iterations`, trung bình trên cả run; không nhân thêm `vus`
 ```

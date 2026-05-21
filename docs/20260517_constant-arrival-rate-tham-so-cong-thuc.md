@@ -95,9 +95,10 @@ một mốc start iteration theo lịch của arrival-rate executor
 ```
 
 Nó không phải là VU, không phải queue, cũng không phải một resource riêng. Nó chỉ là cách gọi ngắn
-cho thời điểm mà scheduler muốn bắt đầu một iteration mới.
+cho thời điểm mà executor `constant-arrival-rate` muốn bắt đầu một iteration mới.
 
-Ví dụ `rate: 4`, `timeUnit: "1s"` thì k6 cố start ở các mốc gần như:
+Ví dụ dưới đây là case `constant-arrival-rate` local run đơn giản. Với `rate: 4`, `timeUnit: "1s"`
+thì executor cố start ở các mốc gần như:
 
 ```text
 t = 0.00s
@@ -107,7 +108,8 @@ t = 0.75s
 t = 1.00s
 ```
 
-Ở mỗi mốc này, k6 cần 1 VU rảnh. Nếu không có VU rảnh, mốc đó bị tính là `dropped_iterations`; k6 không chờ VU rảnh rồi chạy bù lại mốc cũ.
+Ở mỗi mốc này, k6 cần 1 VU rảnh. Nếu không có VU rảnh, mốc đó bị tính là
+`dropped_iterations`; k6 không chờ VU rảnh rồi chạy bù lại mốc cũ.
 
 Nói rất đời thường:
 

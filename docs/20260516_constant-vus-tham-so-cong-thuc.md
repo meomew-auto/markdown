@@ -340,7 +340,7 @@ iteration đã start nhưng chưa finish trước duration + gracefulStop
 | `average_iteration_rate` | tốc độ iteration trung bình nhìn từ summary | summary | `completed_iterations / summary_runtime_base` | Trong demo 1 scenario sạch, `summary_runtime_base` thường gần `actual_scenario_runtime`. |
 | `http_requests_per_iteration` | số request trong 1 iteration | code | đếm `http.get/post/...` | Dùng để map `iterations` sang `http_reqs`. |
 | `checks_per_iteration` | số check trong 1 iteration | code | đếm check name / check expression | Dùng để map `iterations` sang `checks_total`. |
-| `http_reqs_rate` | tốc độ HTTP request nhìn từ summary | summary | `http_reqs / summary_runtime_base` | Đây là RPS theo HTTP request. |
+| `http_reqs_rate` | tốc độ HTTP request nhìn từ summary | summary | `http_reqs_count / summary_runtime_base` | Đây là RPS theo HTTP request. |
 | `iteration_duration` | thời gian 1 iteration hoàn chỉnh | summary | Trend `avg/min/med/max/p...` | Đo từ lúc bắt đầu gọi JS function đến lúc function trả về. |
 | `vus` metric | số VU active tại sample | summary/progress | Gauge `value/min/max` | Với constant-vus thường min=max=`vus` trong lúc chạy. |
 | `vus_max` metric | số VU initialized/reserved | summary/header | Gauge `value/min/max` | Thường bằng `vus` với constant-vus. |
@@ -607,7 +607,7 @@ peak lý thuyết khi cả 4 VU active:
 5 + 2.5 + 1.25 + 1.25 = 10 iter/s
 ```
 
-Nhưng summary `iterations/s` là **average total rate** trên runtime thật:
+Nhưng summary `iterations/s` là **average total rate** trên `summary_runtime_base`:
 
 ```text
 average_iteration_rate = completed_iterations / summary_runtime_base
@@ -1208,7 +1208,7 @@ có branch/error/interrupt làm số request không cố định, đọc `http_r
 | Field chính | `vus`, `duration` | `vus`, `iterations` | `vus`, `iterations` |
 | `iterations` nghĩa là gì? | không có | số vòng mỗi VU | tổng toàn scenario |
 | Tổng iteration biết trước? | Không | Có: `vus * iterations` | Có: `iterations` |
-| VU nhanh làm gì? | tự loop nhiều hơn trong cùng duration | xong quota thì idle | lấy thêm việc từ pool chung |
+| VU nhanh làm gì? | tự loop nhiều hơn trong cùng duration | xong quota thì idle | lấy thêm việc từ kho iteration chung của scenario |
 | Dropped do hết thời gian? | thường không có | có thể có | có thể có |
 | Interrupted? | có thể có | có thể có | có thể có |
 | Hợp với | giữ N user trong X thời gian | mỗi user/account làm đúng N vòng | nhiều worker chia tổng work |

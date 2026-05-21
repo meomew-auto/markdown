@@ -23,7 +23,7 @@ docs/20260514_per-vu-iterations-tham-so-cong-thuc.md
 | QuickPizza 1 request / iteration | [Demo QuickPizza](./20260514_per-vu-iterations-tham-so-cong-thuc.md#77-demo-chạy-thật-với-quickpizza) |
 | Bảng map output QuickPizza về công thức | [Map ngược output](./20260514_per-vu-iterations-tham-so-cong-thuc.md#772-map-ngược-từ-output-về-các-giá-trị-ở-đầu-file) |
 | Công thức `http_reqs: count rate/s` | [`http_reqs` formula](./20260514_per-vu-iterations-tham-so-cong-thuc.md#d1-công-thức-riêng-cho-http_reqs-12--2780988s) |
-| Dùng `summary runtime base` để suy ra các rate/count | [`runtime` làm gốc](./20260514_per-vu-iterations-tham-so-cong-thuc.md#d2-nếu-lấy-actual_scenario_runtime-làm-gốc-thì-suy-ra-gì) |
+| Dùng `summary runtime base` để suy ra các rate/count | [`summary_runtime_base` làm gốc](./20260514_per-vu-iterations-tham-so-cong-thuc.md#d2-nếu-lấy-summary_runtime_base-làm-gốc-thì-suy-ra-gì) |
 | Công thức `1 VU chạy bao nhiêu iteration/s` | [`per_vu_rate`](./20260514_per-vu-iterations-tham-so-cong-thuc.md#e2-nếu-đã-biết-iteration_duration-thì-1-vu-1-giây-chạy-được-bao-nhiêu-iteration) |
 | Các loại metric và công thức tổng quát | [k6 metrics căn bản](./20260520_k6-metrics-types-builtins-core-guide.md) |
 | TPS, RPS, peak vs average throughput | [TPS / Throughput](./20260515_tps-throughput-jmeter-vs-k6.md) |

@@ -86,7 +86,7 @@ VU chỉ là worker để giữ lịch đó
 Nếu mới đọc, nhớ 5 câu này trước:
 
 ```text
-slot = 1 lần k6 muốn start đúng giờ
+slot = 1 mốc start mà executor muốn bắn đúng giờ
 rate = nhịp start trong 1 giây
 peak = chỗ nhịp cao nhất
 VU = worker giữ iteration chạy
@@ -103,7 +103,8 @@ drop = đến giờ mà không có worker rảnh
 5. 3.9 chỉ khi muốn đối chiếu code
 ```
 
-`slot` ở đây là mốc start iteration theo lịch của scheduler. Mỗi slot cần 1 VU rảnh.
+`slot` ở đây là mốc start iteration theo lịch mà arrival-rate executor tự tính ra. Mỗi slot cần 1
+VU rảnh.
 Không có VU rảnh đúng mốc thì slot đó bị drop. k6 không chờ slot cũ rồi chạy bù.
 
 ### 1.1. Khi nào dùng thực tế?

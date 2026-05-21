@@ -29,7 +29,7 @@ Nguồn docs Grafana:
 
 ```text
 có một tổng số iteration chung
-các VU cùng lấy việc từ pool chung đó
+các VU cùng lấy việc từ kho iteration chung của scenario
 VU nào xong sớm thì lấy tiếp iteration mới
 scenario kết thúc khi tổng số iteration chung chạy xong
 ```
@@ -208,11 +208,11 @@ Những điểm cần lưu ý thêm khi đọc core:
   -> executor lấy 4 VUs ra khỏi pool
   -> 4 VUs chạy concurrent/song song
   ```
-  Nhưng work không chia quota riêng. Các VU cùng lấy từ pool `iterations` chung:
+  Nhưng work không chia quota riêng. Các VU cùng lấy từ kho `iterations` chung của scenario:
   ```text
   iterations = 12
-  4 VUs cùng claim từ pool 12 iteration
-  VU nào xong trước thì claim tiếp
+  4 VUs cùng lấy iteration từ kho 12 iteration đó
+  VU nào xong trước thì lấy tiếp
   ```
   Vì vậy số iteration từng VU thực tế chạy không cố định. Về cuối test, nếu pool gần hết, có thể
   không còn đủ việc để mọi VU đều bận tới giây cuối.
@@ -233,11 +233,12 @@ Những điểm cần lưu ý thêm khi đọc core:
 - **`doneIters` chỉ là progress counter nội bộ**:
   nó dùng để vẽ progress bar `xx/yy shared iters`, không phải chính metric summary `iterations`.
 
-- **`dropped_iterations` được emit nếu chưa claim hết work**:
-  nếu test chạm `maxDuration` khi còn iteration chưa được claim từ pool chung, core sẽ push phần còn lại vào
+- **`dropped_iterations` được emit nếu chưa lấy hết work**:
+  nếu test chạm `maxDuration` khi còn iteration chưa được lấy từ kho iteration chung của scenario,
+  core sẽ push phần còn lại vào
   `DroppedIterations`.
 
-- **hết `maxDuration` thì không claim iteration mới nữa**:
+- **hết `maxDuration` thì không lấy iteration mới nữa**:
   vòng lặp VU check `regDurationDone` trước khi `atomic.AddUint64(&attemptedIters, 1)`.
 
 - **không có fairness guarantee giữa các VU**:
@@ -251,11 +252,11 @@ Những điểm cần lưu ý thêm khi đọc core:
 | `shared_iterations.go:GetVUs()` | scale `vus` qua execution tuple | Local thường bằng config; segmented/distributed run phải dùng số đã scale. |
 | `shared_iterations.go:GetIterations(et)` | scale `iterations` bằng execution tuple | Với distributed/segment, instance hiện tại có thể chỉ chạy phần work được chia. |
 | `shared_iterations.go:GetExecutionRequirements()` | reserve planned VUs tới `maxDuration + gracefulStop` | Planned VUs init trước execution; không có unplanned VUs cho executor này. |
-| `shared_iterations.go:Run()` | tạo `attemptedIters` chung cho toàn scenario | Work nằm trong pool chung, không chia quota riêng theo VU. |
-| `shared_iterations.go:handleVU()` | mỗi VU claim iteration bằng `atomic.AddUint64(&attemptedIters, 1)` | VU nhanh có thể chạy nhiều hơn VU chậm; không có fairness guarantee. |
-| `shared_iterations.go:regDurationDone` | hết `maxDuration` thì VU không claim iteration mới nữa | Phần work chưa claim có thể thành `dropped_iterations`. |
-| `shared_iterations.go` defer sau `activeVUs.Wait()` | nếu `attemptedIters < totalIters`, emit `DroppedIterations = totalIters - attemptedIters` | Drop là phần work trong pool chưa từng được claim. |
-| `helpers.go:getDurationContexts()` | `maxDuration` là regular duration, `gracefulStop` là cửa sổ chờ sau đó | Hết `maxDuration` ngừng claim mới; iteration đang chạy có thể finish trong grace. |
+| `shared_iterations.go:Run()` | tạo `attemptedIters` chung cho toàn scenario | Work nằm trong kho iteration chung của scenario, không chia quota riêng theo VU. |
+| `shared_iterations.go:handleVU()` | mỗi VU lấy 1 iteration bằng `atomic.AddUint64(&attemptedIters, 1)` | Trong core hay gọi là `claim`, nhưng ở bài học này cứ hiểu là VU "lấy" 1 iteration để chạy. |
+| `shared_iterations.go:regDurationDone` | hết `maxDuration` thì VU không lấy iteration mới nữa | Phần work chưa lấy có thể thành `dropped_iterations`. |
+| `shared_iterations.go` defer sau `activeVUs.Wait()` | nếu `attemptedIters < totalIters`, emit `DroppedIterations = totalIters - attemptedIters` | Drop là phần work trong kho iteration chung chưa từng được lấy. |
+| `helpers.go:getDurationContexts()` | `maxDuration` là regular duration, `gracefulStop` là cửa sổ chờ sau đó | Hết `maxDuration` ngừng lấy mới; iteration đang chạy có thể finish trong grace. |
 | `internal/js/runner.go:RunOnce()` + `iterationSamples()` | `iterations`/`iteration_duration` chỉ emit khi full iteration hoàn tất | `completed_iterations` đọc từ metric, không lấy từ total work nếu có drop/interrupt. |
 | `internal/js/runner.go` min duration path | `iteration_duration` emit trước sleep bù `minIterationDuration` | Capacity phải dùng `effective_iteration_time`, không dùng riêng `iteration_duration` khi có min. |
 | `scheduler.go:emitVUsAndVUsMax()` | `vus`/`vus_max` sample từ active/initialized VUs | Gauge sample theo thời điểm, không phải Counter. |
@@ -273,8 +274,8 @@ Với `shared-iterations`, phải hiểu đúng là:
 
 ```text
 hết maxDuration
--> k6 không cho VU claim iteration mới từ pool nữa
--> phần work trong pool chưa được claim sẽ đi vào dropped_iterations
+-> k6 không cho VU lấy iteration mới từ kho nữa
+-> phần work trong kho chưa được lấy sẽ đi vào dropped_iterations
 ```
 
 Nếu iteration đang chạy dở mà vẫn finish kịp trong `gracefulStop`, nó vẫn được tính là `complete`,
@@ -313,13 +314,13 @@ sleep(2) trong mỗi iteration
 Timeline chạy thật:
 
 ```text
-t=0.0s  VU1 claim iter 0, VU2 claim iter 1
+t=0.0s  VU1 lấy iter 0, VU2 lấy iter 1
 t=2.0s  iter 0 va iter 1 end
-t=2.0s  VU1 claim iter 3, VU2 claim iter 2
+t=2.0s  VU1 lấy iter 3, VU2 lấy iter 2
 t=3.0s  het maxDuration
 t=4.0s  iter 2 va iter 3 end trong gracefulStop
 
-iter 4 khong duoc claim nua
+iter 4 khong duoc lay nua
 ```
 
 Output chính đã chạy:
@@ -347,7 +348,7 @@ dropped_iterations = 1
 Vì sao drop?
 
 ```text
-pool còn 1 iteration chưa được claim trước khi hết maxDuration
+kho iteration chung của scenario còn 1 iteration chưa được lấy trước khi hết maxDuration
 ```
 
 Đây chính là ý docs đang nói.
@@ -366,7 +367,7 @@ pool còn 1 iteration chưa được claim trước khi hết maxDuration
 | `gracefulStop` | thời gian chờ dừng mềm | config/base | lấy trực tiếp | Cho iteration đang chạy thêm thời gian kết thúc. |
 | `minIterationDuration` | thời gian tối thiểu mỗi iteration | global option | lấy trực tiếp | Nếu function chạy ngắn hơn min, k6 sleep bù sau function. Phần sleep bù không nằm trong `iteration_duration`, nhưng vẫn chiếm VU. |
 | `effective_iteration_time` | thời gian VU bị bận cho 1 iteration | tự tính | không min: `iteration_duration`; có min: `max(iteration_duration, minIterationDuration)` | Dùng để ước lượng `per_vu_rate`. |
-| `actual_scenario_runtime` | thời gian scenario chạy thật theo cách nhìn của bài | summary / tự tính | gần với thời gian đến khi pool iteration chạy xong | Hữu ích để hiểu executor, nhưng không phải lúc nào cũng trùng mẫu số `/s` của summary. |
+| `actual_scenario_runtime` | thời gian scenario chạy thật theo cách nhìn của bài | summary / tự tính | gần với thời gian đến khi kho iteration chung của scenario chạy xong | Hữu ích để hiểu executor, nhưng không phải lúc nào cũng trùng mẫu số `/s` của summary. |
 | `average_iteration_rate` | tốc độ iteration trung bình nhìn từ summary | summary | `completed_iterations / summary_runtime_base` | Với demo 1 scenario sạch, `summary_runtime_base` thường gần runtime của scenario. |
 | `vus` metric | số VU active tại sample | summary/progress | Gauge `value/min/max` | Có bao nhiêu VU đang active theo sample. |
 | `vus_max` metric | số VU initialized | summary | Gauge `value/min/max` | Số VU đã tạo sẵn/reserve. |
@@ -574,7 +575,7 @@ Tổng:
 
 ```text
 shared-iterations không chia đều iteration cho từng VU
-VU nhanh lấy thêm việc từ pool chung
+VU nhanh lấy thêm việc từ kho iteration chung của scenario
 ```
 
 Tự tính `iteration_duration avg`:
@@ -674,7 +675,7 @@ Vậy trong `shared-iterations`, câu hỏi "1 VU chạy được bao nhiêu ite
    đo bằng iteration_duration hoặc tự biết trong code:
    per_vu_rate_i ≈ 1 / t_i
 
-2. VU đó thực tế nhận được bao nhiêu iteration từ pool chung?
+2. VU đó thực tế nhận được bao nhiêu iteration từ kho iteration chung của scenario?
    đo bằng log __VU và __ITER:
    iterations_per_vu_i = __ITER cuối cùng của VU đó + 1
 ```

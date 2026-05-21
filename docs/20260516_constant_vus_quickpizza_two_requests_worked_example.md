@@ -160,7 +160,7 @@ Không nên đọc nhầm thành:
 1 VU chạy 2.333723 iteration/s
 ```
 
-vì đây là rate toàn scenario.
+vì đây là cột `/s` của Counter `iterations`, tức trung bình trên cả run chứ không phải rate của 1 VU.
 
 ## 4. Bóc ra các đại lượng chính
 
@@ -649,7 +649,7 @@ checks_per_iteration = 2
 total_http_requests = 12 * 2 = 24
 total_checks = 12 * 2 = 24
 
-actual_scenario_runtime
+summary_runtime_base
   = 12 / 2.333723
   = 5.142s
 

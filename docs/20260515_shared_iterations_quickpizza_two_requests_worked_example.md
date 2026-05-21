@@ -323,7 +323,8 @@ iterations_rate
 average_total_rate
   = completed_iterations / summary_runtime_base
   = 2.317275 iter/s
-  = summary iterations/s của toàn scenario
+  = cột `/s` của Counter `iterations` trong summary
+  = trung bình trên cả run theo `count / summary_runtime_base`
 
 per_vu_rate
   ≈ 1 / effective_iteration_time
@@ -711,7 +712,8 @@ estimated_total_rate_from_avg
   ≈ 2.32 iter/s
 ```
 
-Ví dụ kiểu Grafana docs để tính peak:
+Ví dụ kiểu Grafana docs để tính peak trong một case giả định khác, không có `sleep(1)` như demo
+QuickPizza này:
 
 ```text
 1 iteration ≈ 515ms = 0.515s
@@ -733,12 +735,12 @@ peak_total_rate
 
 ```text
 1. shared-iterations lấy iterations làm tổng chung
-2. VU cùng lấy việc từ pool chung
+2. VU cùng lấy việc từ kho iteration chung của scenario
 3. VU nhanh có thể chạy nhiều iteration hơn VU chậm
 4. http_reqs/s phụ thuộc số request trong mỗi iteration
 5. checks_total là summary helper, không phải Counter builtin
 6. duration metrics là Trend, đọc bằng avg/min/med/max/p...
 7. vus/vus_max là Gauge, đọc bằng value/min/max
 8. per_vu_rate nên tính từ effective_iteration_time; trong demo không có minIterationDuration nên gần bằng iteration_duration
-9. summary iterations/s là average_total_rate của toàn scenario, không nhân thêm vus
+9. summary `iterations/s` là cột `/s` của Counter `iterations`, trung bình trên cả run; không nhân thêm `vus`
 ```
