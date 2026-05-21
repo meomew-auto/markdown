@@ -442,6 +442,15 @@ status=200
 status=500
 ```
 
+Trong code JS, tags thường là một object kiểu:
+
+```js
+{ status: "200", method: "GET" }
+```
+
+Nó là object nhãn của sample, không phải object theo tên metric.
+Metric name vẫn là phần riêng, ví dụ `http_req_duration`.
+
 Nên khi viết threshold theo tag:
 
 ```js
@@ -461,15 +470,20 @@ k6 chỉ xét các sample có tag `status=200`, không xét sample `status=500`.
 Giả sử script chỉ chạy đúng 1 iteration và có custom metrics như sau:
 
 ```js
-import { Counter, Rate, Trend } from "k6/metrics";
+import { Counter, Gauge, Rate, Trend } from "k6/metrics";
 
 const orders = new Counter("orders");
+const queueDepth = new Gauge("queue_depth");
 const checkoutOk = new Rate("checkout_ok");
 const checkoutDuration = new Trend("checkout_duration", true);
 
 export default function () {
   orders.add(1);
   orders.add(2);
+
+  queueDepth.add(5);
+  queueDepth.add(9);
+  queueDepth.add(3);
 
   checkoutOk.add(true);
   checkoutOk.add(false);
@@ -484,6 +498,9 @@ Nếu bỏ qua tags để nhìn đơn giản, runtime đã tạo các sample nh�
 ```text
 orders              value=1
 orders              value=2
+queue_depth         value=5
+queue_depth         value=9
+queue_depth         value=3
 checkout_ok         value=1
 checkout_ok         value=0
 checkout_duration   value=100
@@ -492,6 +509,20 @@ checkout_duration   value=300
 
 k6 không in từng sample này trong summary mặc định.
 k6 gom chúng qua sink rồi mới in kết quả cuối.
+
+Submetric là metric đã được tách theo một bộ tags cố định.
+
+Ví dụ:
+
+```text
+http_req_duration{status:200}
+  = submetric của http_req_duration
+  = chỉ xét sample có status=200
+
+http_req_duration{status:500}
+  = submetric khác của cùng metric http_req_duration
+  = chỉ xét sample có status=500
+```
 
 Với `orders`:
 
@@ -505,6 +536,22 @@ Summary sẽ có dạng:
 
 ```text
 orders................: 3    .../s
+```
+
+Với `queue_depth`:
+
+```text
+type = Gauge
+sample values = [5, 9, 3]
+value cuối = 3
+min = 3
+max = 9
+```
+
+Summary sẽ có dạng:
+
+```text
+queue_depth..........: 3    min=3 max=9
 ```
 
 Với `checkout_ok`:
@@ -538,6 +585,22 @@ Summary sẽ có dạng:
 
 ```text
 checkout_duration.....: avg=200ms min=100ms med=200ms max=300ms ...
+```
+
+Nếu đổi qua built-in metric thì cách đọc vẫn y hệt:
+
+```text
+http_reqs
+  = Counter, cộng dồn số request sample
+
+vus
+  = Gauge, lấy value hiện tại và nhớ min/max
+
+http_req_failed
+  = Rate, true/false trên tổng sample
+
+http_req_duration
+  = Trend, giữ nhiều value để tính avg/min/max/p95
 ```
 
 Điểm cần nhớ:
