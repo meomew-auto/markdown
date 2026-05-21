@@ -115,7 +115,8 @@ Không có nghĩa là:
 summary completed iteration rate bắt buộc phải bằng 2.00/s
 ```
 
-vì summary rate tính trên runtime thực tế của các completed iterations.
+vì cột `/s` của Counter trong summary chia theo `summary_runtime_base` của test run. Ở run này suy
+ra khoảng `7.52s`, không phải chỉ `duration=6s`.
 
 ## 3. Summary output đang phân tích
 
@@ -311,7 +312,7 @@ Summary:
 iterations.....................: 13    1.729617/s
 ```
 
-là completed iteration rate trên runtime thực tế khoảng 7.52 giây.
+là completed iteration rate trên `summary_runtime_base` khoảng 7.52 giây.
 
 Hai con số này không cùng loại metric:
 
@@ -339,8 +340,8 @@ interrupted_iterations = 0
 iterInScenario = 0..12
 ```
 
-nên cách đọc đúng là: schedule start chạy ổn, còn `1.729617/s` chỉ thấp hơn vì rate summary chia
-theo runtime thực tế kéo dài tới lúc iteration cuối finish.
+nên cách đọc đúng là: schedule start chạy ổn, còn `1.729617/s` chỉ thấp hơn vì cột `/s` của
+summary Counter chia theo `summary_runtime_base` kéo dài tới lúc iteration cuối finish.
 
 ### 5.6. Mốc start scheduled trong run này
 
@@ -491,7 +492,7 @@ Output:
 http_reqs......................: 26    3.459233/s
 ```
 
-Rate này thấp hơn 4/s vì cũng được tính trên runtime thực tế khoảng 7.52s:
+Rate này thấp hơn 4/s vì cũng được tính trên `summary_runtime_base` khoảng 7.52s:
 
 ```text
 26 / 7.52s ~= 3.46/s

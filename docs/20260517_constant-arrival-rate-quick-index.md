@@ -60,6 +60,12 @@ rtk k6 run .\examples\constant_arrival_rate_quickpizza_two_requests_demo.js
 constant-arrival-rate = fixed iteration start rate
 ```
 
+Đọc đời thường:
+
+```text
+k6 cố giữ nhịp bắt đầu iteration cố định theo lịch thời gian
+```
+
 Đọc tốc độ start ở:
 
 ```text
@@ -133,7 +139,7 @@ constant-arrival-rate = đến mốc start theo lịch thì k6 cố start iterat
 Trong bài này, `slot` hay `slot thời gian` nghĩa là một mốc start iteration theo lịch. Ví dụ
 `rate: 4`, `timeUnit: "1s"` thì các mốc start cách nhau khoảng `0.25s`.
 
-Nó không phải VU hay queue; chỉ là thời điểm scheduler muốn start một iteration.
+Nó không phải VU hay queue; chỉ là thời điểm mà arrival-rate executor muốn start một iteration.
 
 Nếu không có VU rảnh đúng mốc:
 

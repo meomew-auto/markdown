@@ -54,11 +54,18 @@ Số mốc start theo diện tích:
 stage 1 = 2s * (4 + 8)/2 = 12
 stage 2 = 2s * (8 + 2)/2 = 10
 stage 3 = 2s * (2 + 6)/2 = 8
-total scheduled iterations = 30
+theoretical scheduled start slots = 30
 ```
 
-Đây là số slot start theo lịch từ core `cal()`. Nếu run sạch, completed iterations có thể tiến gần
-30; nếu thiếu VU hoặc bị interrupt thì summary `iterations` sẽ thấp hơn.
+Đây là số mốc start lý thuyết theo diện tích dưới đường rate mà core `cal()` dùng để xếp lịch.
+Nếu run sạch, `completed_iterations` có thể tiến gần 30. Nếu thiếu VU hoặc bị interrupt thì:
+
+```text
+completed_iterations
+  = started_iterations - dropped_iterations - interrupted_iterations
+```
+
+Ngoài ra ở biên cuối gần `t=6s`, có thể lệch khoảng 1 mốc do timing đúng mép regular duration.
 
 Peak rate:
 
@@ -105,6 +112,22 @@ Nếu run sạch:
 ```text
 iterations rate = completed_iterations / summary_runtime_base
 ```
+
+Nhưng phải tách rõ với nhịp target của timeline:
+
+```text
+average_target_start_rate = theoretical_scheduled_start_slots / total_regular_duration
+                          = 30 / 6s
+                          = 5 starts/s
+```
+
+Trong khi summary `/s` là:
+
+```text
+completed_iterations / summary_runtime_base
+```
+
+Vì vậy không dùng riêng summary `/s` để kết luận arrival schedule có được giữ hay không.
 
 Trong worked example này, vì test là 1 scenario đơn, `startTime=0`, và không có `setup()/teardown`,
 `summary_runtime_base` thường rất gần với thời gian scenario thật sự chạy.

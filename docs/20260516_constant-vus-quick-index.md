@@ -52,6 +52,12 @@ rtk k6 run .\examples\constant_vus_quickpizza_two_requests_demo.js
 constant-vus = fixed VUs over time
 ```
 
+Đọc đời thường:
+
+```text
+giữ cố định một số VU trong một khoảng thời gian
+```
+
 Legend ngắn:
 
 ```text

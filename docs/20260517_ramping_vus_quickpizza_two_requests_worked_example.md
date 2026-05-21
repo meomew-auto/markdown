@@ -172,7 +172,8 @@ nghĩa là:
 
 ```text
 toàn bộ run hoàn thành 12 iteration
-tốc độ trung bình của cả scenario là 1.771928 iteration mỗi giây
+và cột `/s` của Counter `iterations` đang cho biết trung bình khoảng 1.771928 iteration mỗi giây
+trên `summary_runtime_base`
 ```
 
 Không nên đọc nhầm thành:

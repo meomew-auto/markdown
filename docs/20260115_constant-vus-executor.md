@@ -24,13 +24,13 @@
 │  PHASE 1: INITIALIZATION                                           │
 │  • Parse options, derive scenarios                                  │
 │  • Calculate MaxPlannedVUs                                          │  
-│  • Init ALL VUs → Push to channel buffer (pool)                    │
+│  • Init planned VUs → Push to channel buffer (pool)                │
 ├─────────────────────────────────────────────────────────────────────┤
 │  PHASE 2: SETUP (optional)                                         │
 │  • Run setup() function                                            │
 ├─────────────────────────────────────────────────────────────────────┤
 │  PHASE 3: EXECUTION ← GetPlannedVU() happens here!                 │
-│  • Executor.Run() → GetPlannedVU() → Activate() → RunOnce()        │
+│  • Executor.Run() → GetPlannedVU() → Activate() → RunOnce() x N    │
 ├─────────────────────────────────────────────────────────────────────┤
 │  PHASE 4: TEARDOWN (optional)                                      │
 │  • Run teardown() function                                         │
@@ -163,7 +163,7 @@ handleVU := func(initVU lib.InitializedVU) {
         case <-regDurationDone:      // Duration hết?
             return                   // Stop
         default:                     // Chưa hết
-            runIteration(activeVU)   // Chạy JS function
+            runIteration(activeVU)   // Chạy JS function, lặp nhiều vòng tới khi hết duration
         }
     }
 }
