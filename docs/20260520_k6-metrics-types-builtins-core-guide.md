@@ -2973,17 +2973,50 @@ nên không phải cứ có metric trong core là bạn luôn thấy một dòng
 
 ### 6.2 HTTP metrics
 
-Các metric này sinh ra khi script dùng HTTP API.
+Các metric này sinh ra khi script dùng HTTP API như `http.get()`, `http.post()`.
+Đọc mục này theo một format cố định:
+
+```text
+metric này trong core được định nghĩa/tính thế nào?
+  -> khi nhìn summary thì nói bằng tiếng người như nào?
+  -> khi số xấu thì nên nghi vấn gì?
+```
 
 Core chính:
 
 ```text
 metrics/builtin.go
+  -> đăng ký tên metric, type, contains
+
 lib/netext/httpext/tracer.go
-js/modules/k6/http/response_callback_test.go
+  -> đo timing bằng httptrace
+  -> Tracer.Done() tính ra Trail
+  -> Trail.SaveSamples() sinh sample cho các http_req_* timing metric
+
+lib/netext/httpext/transport.go
+  -> sau khi có status/error, tính expected_response
+  -> nếu có responseCallback thì sinh thêm sample http_req_failed
+
+lib/netext/httpext/request.go
+  -> copy cùng Trail sang response.timings để script có thể log ra
 ```
 
-Trong `lib/netext/httpext/tracer.go`, một request HTTP kết thúc thì `Trail.SaveSamples()` append các sample:
+Trong `metrics/builtin.go`, core đăng ký type như sau:
+
+| Metric | Type | Contains |
+| --- | --- | --- |
+| `http_reqs` | `Counter` | `Default` |
+| `http_req_failed` | `Rate` | `Default` |
+| `http_req_duration` | `Trend` | `Time` |
+| `http_req_blocked` | `Trend` | `Time` |
+| `http_req_connecting` | `Trend` | `Time` |
+| `http_req_tls_handshaking` | `Trend` | `Time` |
+| `http_req_sending` | `Trend` | `Time` |
+| `http_req_waiting` | `Trend` | `Time` |
+| `http_req_receiving` | `Trend` | `Time` |
+
+Trong `lib/netext/httpext/tracer.go`, một request HTTP kết thúc thì
+`Trail.SaveSamples()` luôn append các sample timing này:
 
 ```text
 http_reqs
@@ -2996,55 +3029,91 @@ http_req_waiting
 http_req_receiving
 ```
 
-| Metric | Type trong core | Contains | Nghĩa |
-| --- | --- | --- | --- |
-| `http_reqs` | `Counter` | `Default` | tổng số HTTP request k6 tạo ra |
-| `http_req_failed` | `Rate` | `Default` | tỉ lệ request bị xem là lỗi theo `setResponseCallback` |
-| `http_req_duration` | `Trend` | `Time` | tổng thời gian request, bằng `sending + waiting + receiving`, không gồm DNS/connect/TLS |
-| `http_req_blocked` | `Trend` | `Time` | thời gian bị chặn trước khi request bắt đầu, ví dụ chờ một chỗ kết nối TCP rảnh |
-| `http_req_connecting` | `Trend` | `Time` | thời gian tạo kết nối TCP |
-| `http_req_tls_handshaking` | `Trend` | `Time` | thời gian bắt tay TLS |
-| `http_req_sending` | `Trend` | `Time` | thời gian gửi dữ liệu request |
-| `http_req_waiting` | `Trend` | `Time` | thời gian chờ byte đầu tiên từ server, thường gọi là TTFB |
-| `http_req_receiving` | `Trend` | `Time` | thời gian nhận nội dung response |
+Riêng `http_req_failed` không nằm trong block timing đó.
+Nó được append thêm trong `lib/netext/httpext/transport.go`, sau khi core chạy
+`responseCallback(statusCode)`.
 
-Một request có thể hiểu theo timeline:
+#### 6.2.1 Bảng đọc chuẩn từng HTTP metric
+
+Đây là bảng nên đọc trước.
+Các đoạn sau chỉ là giải thích và demo chi tiết cho bảng này.
+
+| Metric | Core định nghĩa/tính value như nào | Thực tế nên nói như nào | Khi số xấu thì nghĩ gì? |
+| --- | --- | --- | --- |
+| `http_reqs` | `Trail.SaveSamples()` append sample `value=1` cho mỗi HTTP request đã xử lý xong. Vì là `Counter`, summary cộng lại thành `count`. | Tổng số HTTP request k6 đã ghi metric. | So với số iteration để xem mỗi iteration tạo mấy request; không được nhầm với `iterations`. |
+| `http_req_failed` | `transport.go` gọi `responseCallback(statusCode)`. Nếu callback trả `false` thì sample `value=1`, nếu `true` thì `value=0`. Vì là `Rate`, summary in tỉ lệ fail. | Tỉ lệ request không đúng kỳ vọng status theo rule của k6/request. | Mặc định expected là `200..399`; HTTP 500 mặc định fail, nhưng có thể không fail nếu request dùng `http.expectedStatuses(500)`. |
+| `http_req_duration` | `Tracer.Done()` tính `Duration = Sending + Waiting + Receiving`. `SaveSamples()` append `Trail.Duration`. | Thời gian phần request/response chính: gửi request, chờ byte đầu, nhận response. | Nếu cao, xem tiếp `waiting` hay `receiving` cao. Không dùng nó để kết luận DNS/connect/TLS chậm. |
+| `http_req_blocked` | Nếu có `getConn` và `gotConn`, core tính `Blocked = gotConn - getConn`. | Thời gian từ lúc Go HTTP client bắt đầu lấy/tạo connection tới lúc có connection dùng được. | Có thể tăng khi chờ connection rảnh, tạo connection mới, hoặc bị giới hạn connection. Lưu ý: theo code, nó có thể bao trùm cả đoạn connect/TLS để có connection, nên không cộng máy móc `blocked + connecting + tls`. |
+| `http_req_connecting` | Nếu có `connectStart` và `connectDone`, core tính `Connecting = connectDone - connectStart`. | Thời gian tạo kết nối TCP tới remote host. | Cao thì nghi network, proxy, route, firewall, remote host nhận connection chậm. Nếu connection được reuse, giá trị thường gần `0`. |
+| `http_req_tls_handshaking` | Nếu có `tlsHandshakeStart` và `tlsHandshakeDone`, core tính `TLSHandshaking = tlsHandshakeDone - tlsHandshakeStart`. | Thời gian bắt tay TLS của HTTPS. | Cao thì nghi TLS negotiation, certificate, proxy TLS, network tới server. HTTP thường hoặc connection reuse có thể là `0`. |
+| `http_req_sending` | Khi `wroteRequest` có giá trị, core tính từ sau TLS/connect/gotConn tới lúc ghi xong request. | Thời gian k6 gửi request lên server. | Với GET/body nhỏ thường rất nhỏ. Cao khi upload body lớn, mạng upload chậm, hoặc client gửi request bị nghẽn. |
+| `http_req_waiting` | Nếu có byte đầu tiên: `Waiting = gotFirstResponseByte - wroteRequest`. Nếu server không trả byte nào: `Waiting = done - wroteRequest`. | Thời gian sau khi gửi xong request tới khi nhận byte đầu tiên. | Đây là metric hay nhìn để nghi server xử lý chậm, DB chậm, queue, downstream chậm. Nhưng nó vẫn gồm network latency tới byte đầu tiên, không phải chỉ CPU server. |
+| `http_req_receiving` | Nếu có `gotFirstResponseByte`, core tính `Receiving = done - gotFirstResponseByte`. | Thời gian tải response sau khi đã có byte đầu tiên. | Cao khi response body lớn, mạng tải xuống chậm, hoặc client đọc body mất lâu. |
+
+Ghi chú quan trọng về `http_req_duration`:
+
+```text
+http_req_duration = http_req_sending + http_req_waiting + http_req_receiving
+```
+
+Nó không gồm:
 
 ```text
 blocked
-  -> connecting
-  -> tls_handshaking
-  -> sending
-  -> waiting
-  -> receiving
+connecting
+tls_handshaking
 ```
 
-Riêng:
+Vì vậy cách đọc thực tế:
 
 ```text
-http_req_duration = sending + waiting + receiving
+duration cao
+  -> xem waiting hay receiving cao
+
+waiting cao
+  -> nghi server/DB/downstream/queue hoặc latency tới byte đầu tiên
+
+receiving cao
+  -> nghi response lớn hoặc download chậm
+
+blocked/connecting/tls cao
+  -> nghi khâu lấy/tạo connection, TCP, TLS, proxy, network
 ```
 
-Vì vậy nếu muốn đo "server xử lý và trả response mất bao lâu" thì thường nhìn:
+Ghi chú thêm về `blocked`:
 
 ```text
-http_req_duration
-http_req_waiting
+blocked không phải một phase độc lập để cộng với connecting và tls
 ```
 
-Nếu muốn xem tắc ở khâu chuẩn bị kết nối mạng thì nhìn thêm:
+Theo code hiện tại:
 
 ```text
-http_req_blocked
-http_req_connecting
-http_req_tls_handshaking
+blocked = gotConn - getConn
 ```
 
-Ghi chú từ official docs:
+`getConn` là lúc Go HTTP client bắt đầu lấy hoặc tạo connection.
+`gotConn` là lúc đã có connection dùng được.
+Với connection mới, đoạn này có thể bao gồm cả thời gian dial TCP và TLS handshake.
+Vì vậy trong demo bạn có thể thấy:
 
 ```text
-thời điểm ghi sample của http_req_* nằm ở cuối request
-tức là khi k6 nhận xong nội dung response hoặc request hết thời gian chờ
+blocked gần bằng connecting + tls_handshaking
+```
+
+Đọc đúng là:
+
+```text
+blocked = mất bao lâu để k6 có connection dùng được
+connecting = riêng phần TCP connect
+tls_handshaking = riêng phần TLS handshake
+```
+
+Ghi chú về thời điểm ghi sample:
+
+```text
+sample http_req_* được ghi khi request kết thúc
+tức là khi k6 nhận xong response body, discard xong body, hoặc request kết thúc vì lỗi/timeout
 ```
 
 #### 6.2.1 Trace từng HTTP metric theo core code
