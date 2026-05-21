@@ -567,6 +567,8 @@ Ví dụ `rate: 4, timeUnit: "1s"` không có nghĩa là chờ đủ 1 giây r�
 nghĩa là trong mỗi 1 giây, k6 cố đặt 4 mốc start, xấp xỉ cách nhau 250ms. Mỗi mốc đó là 1 `slot`.
 
 ```text
+ví dụ constant-arrival-rate local run:
+
 rate: 4, timeUnit: "1s"
 
 0.00s -> slot 1
@@ -595,7 +597,7 @@ Nói thường:
 
 ```text
 bạn bấm `k6 run` -> k6 vừa chạy vừa có thể đi tạo thêm VU
-nếu VU mới tạo xong kịp trước slot sau thì nó giúp slot sau
+nếu VU mới tạo xong kịp trước các mốc kế tiếp thì nó giúp các mốc đó
 nếu tạo xong quá trễ thì slot đã bỏ mất rồi, không quay lại được
 ```
 

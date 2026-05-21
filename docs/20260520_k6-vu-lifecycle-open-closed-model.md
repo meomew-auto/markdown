@@ -1578,7 +1578,7 @@ Riêng arrival-rate executors còn có pool nội bộ trong lúc chạy: VU đ�
 `slot` là **một mốc start đã được lên lịch** cho 1 iteration.
 Nó không phải là một ô 1 giây, cũng không phải một khoảng chờ để gom việc.
 
-Ví dụ với `rate: 4, timeUnit: "1s"`:
+Ví dụ này là case `constant-arrival-rate` local run đơn giản, với `rate: 4, timeUnit: "1s"`:
 
 ```text
 0.00s -> slot 1
@@ -1603,7 +1603,7 @@ Core làm đúng theo đường này:
 3. có VU rảnh -> chạy
 4. không có VU rảnh -> slot bị drop
 5. nếu còn quota, k6 mới khởi tạo thêm unplanned VU ở nền
-6. VU mới chỉ giúp slot sau
+6. VU mới chỉ có thể giúp các mốc tương lai sau khi init + Activate xong
 ```
 
 Điểm mấu chốt:

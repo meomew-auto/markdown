@@ -181,7 +181,7 @@ Không nên đọc nhầm thành:
 1 VU chạy 1.771928 iteration/s
 ```
 
-vì đây là rate toàn scenario.
+vì đây là cột `/s` của Counter `iterations`, tức trung bình trên cả run, không phải rate của 1 VU.
 
 ## 4. Bóc ra các đại lượng chính
 

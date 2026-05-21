@@ -225,7 +225,7 @@ Những điểm cần lưu ý thêm khi đọc core:
   Ví dụ gần cuối:
   ```text
   4 VU đã được start
-  nhưng pool chỉ còn 1 iteration cuối
+  nhưng kho iteration chung của scenario chỉ còn 1 iteration cuối
   -> chỉ 1 VU đang bận
   -> 3 VU còn lại không còn việc để lấy
   ```

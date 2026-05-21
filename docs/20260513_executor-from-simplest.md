@@ -1951,7 +1951,8 @@ scenario kết thúc khi VU chậm nhất chạy xong iterations_per_vu
 #### 7. Iteration rate trung bình toàn test
 
 ```text
-average_iteration_rate = completed_iterations / actual_scenario_runtime
+average_iteration_rate_from_runtime_view
+  = completed_iterations / actual_scenario_runtime
 ```
 
 Ở đoạn overview này, công thức trên đang nói theo cách nhìn "runtime của scenario". Nếu bạn đọc cột
@@ -2443,7 +2444,8 @@ executor này chạy được bao nhiêu work mỗi giây?
 câu trả lời tự nhiên là:
 
 ```text
-iterations/s = completed iterations / actual_scenario_runtime
+iterations_per_second_from_runtime_view
+  = completed_iterations / actual_scenario_runtime
 ```
 
 Đây là cách nhìn throughput theo runtime của scenario. Nếu suy từ summary Counter thì phải đổi mẫu

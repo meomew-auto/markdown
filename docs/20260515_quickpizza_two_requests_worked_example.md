@@ -219,7 +219,7 @@ Trong core:
 - metric `checks` là loại `Rate`
 - summary tự dựng thêm `checks_total` để dễ đọc
 - `checks_total` lấy từ số `Total` bên trong `checks`
-- rồi tính `checks_total_rate = total_checks / runtime`
+- rồi tính `checks_total_rate = total_checks / summary_runtime_base`
 
 Vì vậy:
 

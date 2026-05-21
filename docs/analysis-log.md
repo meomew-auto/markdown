@@ -215,7 +215,7 @@
 
 ### 2026-05-16 00:34
 - Context: Expand `constant-vus` notes to match the structure and depth of `per-vu-iterations` and `shared-iterations`.
-- Findings: Added a parameter/formula doc, quick index, QuickPizza worked example, and a fast/slow VU count demo. Key formulas: `executor_wall_time_after_start = duration + gracefulStop`, `scenario_end_from_test_start = startTime + duration + gracefulStop`, `per_vu_rate_i = 1 / t_i`, `peak_iteration_rate_if_all_vus_active = sum(1/t_i)`, `average_iteration_rate = completed_iterations / actual_runtime`, and `actual_runtime = counter_count / counter_rate`.
+- Findings: Added a parameter/formula doc, quick index, QuickPizza worked example, and a fast/slow VU count demo. Key formulas: `executor_wall_time_after_start = duration + gracefulStop`, `scenario_end_from_test_start = startTime + duration + gracefulStop`, `per_vu_rate_i = 1 / t_i`, `peak_iteration_rate_if_all_vus_active = sum(1/t_i)`, `average_iteration_rate = completed_iterations / summary_runtime_base`, and `summary_runtime_base = counter_count / counter_rate`.
 - Evidence: `docs/20260516_constant-vus-tham-so-cong-thuc.md`, `docs/20260516_constant-vus-quick-index.md`, `docs/20260516_constant_vus_quickpizza_two_requests_worked_example.md`, `examples/constant_vus_vu_speed_count_demo.js`, run output from `rtk k6 run .\examples\constant_vus_vu_speed_count_demo.js`.
 - Decision: Keep the older `docs/20260115_constant-vus-executor.md` as core-flow notes and point it to the newer formula/example docs.
 - Next: Use the same doc pattern for the next executor.
