@@ -2337,7 +2337,148 @@ thời điểm ghi sample của http_req_* nằm ở cuối request
 tức là khi k6 nhận xong nội dung response hoặc request hết thời gian chờ
 ```
 
-#### 6.2.1 Demo chạy được: nhìn đủ HTTP metric trong summary
+#### 6.2.1 Trace từng HTTP metric theo core code
+
+Muốn hiểu đúng các HTTP metric thì đọc theo luồng này:
+
+```text
+metrics/builtin.go
+  -> đăng ký tên metric, type, contains
+
+lib/netext/httpext/tracer.go
+  -> đo các mốc thời gian của request
+  -> Tracer.Done() tính ra Trail
+  -> Trail.SaveSamples() append sample cho các http_req_* timing metric
+
+lib/netext/httpext/transport.go
+  -> sau khi biết status/error thì quyết định expected_response
+  -> append thêm sample cho http_req_failed
+```
+
+Nói đời thường:
+
+```text
+một HTTP request kết thúc
+  -> k6 gom các mốc thời gian thành Trail
+  -> từ Trail sinh ra nhiều sample
+  -> mỗi sample đi vào đúng metric của nó
+```
+
+Một lần gọi `http.get()` trong script thường tạo một HTTP request.
+Nhưng nếu có redirect, retry ở tầng thấp, hoặc behavior đặc biệt của HTTP client,
+thì điều quan trọng khi đọc metric là: k6 emit metric theo request HTTP thực tế
+mà transport đã xử lý xong, không phải theo số dòng code `http.get()` bạn nhìn thấy.
+
+Bảng trace:
+
+| Metric | Core định nghĩa type ở đâu? | Core lấy value từ đâu? | Demo chứng minh bằng gì? |
+| --- | --- | --- | --- |
+| `http_reqs` | `metrics/builtin.go`: `Counter` | `Trail.SaveSamples()` append sample `Value: 1` cho mỗi request đã kết thúc | demo có 2 iteration, mỗi iteration 3 request, nên `http_reqs count==6` |
+| `http_req_failed` | `metrics/builtin.go`: `Rate` | `transport.measureAndEmitMetrics()` gọi `responseCallback(statusCode)`. Nếu callback trả `false` thì `failed=1`, ngược lại `failed=0` | demo có `500` mặc định fail, và `500` được khai báo expected thì không fail |
+| `http_req_duration` | `metrics/builtin.go`: `Trend`, `Time` | `Tracer.Done()` tính `Duration = Sending + Waiting + Receiving` | threshold `http_req_duration: ["avg>=0"]` ép summary in ra avg |
+| `http_req_blocked` | `metrics/builtin.go`: `Trend`, `Time` | nếu có `getConn` và `gotConn`, core tính `Blocked = gotConn - getConn` | threshold `http_req_blocked: ["avg>=0"]` |
+| `http_req_connecting` | `metrics/builtin.go`: `Trend`, `Time` | nếu có `connectStart` và `connectDone`, core tính `Connecting = connectDone - connectStart` | `noConnectionReuse: true` làm metric này dễ khác 0 hơn |
+| `http_req_tls_handshaking` | `metrics/builtin.go`: `Trend`, `Time` | nếu có `tlsHandshakeStart` và `tlsHandshakeDone`, core tính `TLSHandshaking = tlsHandshakeDone - tlsHandshakeStart` | dùng HTTPS nên có cơ hội thấy TLS handshake |
+| `http_req_sending` | `metrics/builtin.go`: `Trend`, `Time` | sau khi ghi xong request, core tính khoảng từ lúc connection/TLS sẵn sàng tới `wroteRequest` | threshold `http_req_sending: ["avg>=0"]` |
+| `http_req_waiting` | `metrics/builtin.go`: `Trend`, `Time` | nếu có byte đầu tiên, core tính `Waiting = gotFirstResponseByte - wroteRequest`; nếu server không trả byte nào, tính tới lúc request kết thúc | threshold `http_req_waiting: ["avg>=0"]` |
+| `http_req_receiving` | `metrics/builtin.go`: `Trend`, `Time` | nếu có byte đầu tiên, core tính `Receiving = done - gotFirstResponseByte` | threshold `http_req_receiving: ["avg>=0"]` |
+
+Tách riêng `http_req_failed` vì đây là chỗ dễ hiểu sai nhất.
+
+Core không viết đơn giản kiểu:
+
+```text
+status >= 400 thì failed
+```
+
+Core làm theo hướng này:
+
+```text
+statusCode = response.StatusCode
+expected = responseCallback(statusCode)
+
+nếu expected == false:
+  failed = 1
+ngược lại:
+  failed = 0
+
+append sample:
+  metric = http_req_failed
+  value  = failed
+```
+
+`responseCallback` mặc định nằm ở `js/modules/k6/http/http.go`:
+
+```text
+responseCallback: defaultExpectedStatuses.match
+```
+
+`defaultExpectedStatuses` nằm ở `js/modules/k6/http/response_callback.go`:
+
+```text
+200..399
+```
+
+Vì vậy, nếu không cấu hình gì thêm:
+
+```text
+HTTP 200 -> expected=true  -> http_req_failed value=0
+HTTP 302 -> expected=true  -> http_req_failed value=0
+HTTP 500 -> expected=false -> http_req_failed value=1
+```
+
+Nhưng nếu chính request đó khai báo:
+
+```js
+responseCallback: http.expectedStatuses(500)
+```
+
+thì status `500` lại được xem là expected:
+
+```text
+HTTP 500 + expectedStatuses(500)
+  -> expected=true
+  -> http_req_failed value=0
+```
+
+Đó là lý do bài demo bên dưới có hai request đều trả `500`, nhưng một cái tính
+failed, một cái không.
+
+Với các metric thời gian, điểm quan trọng là chúng không được tính rời rạc từ
+summary. Chúng được tính ngay khi request kết thúc trong `Tracer.Done()`:
+
+```text
+Blocked        = gotConn - getConn
+Connecting     = connectDone - connectStart
+TLSHandshaking = tlsHandshakeDone - tlsHandshakeStart
+Sending        = wroteRequest - mốc connection/TLS đã sẵn sàng
+Waiting        = gotFirstResponseByte - wroteRequest
+Receiving      = done - gotFirstResponseByte
+
+Duration       = Sending + Waiting + Receiving
+ConnDuration   = Connecting + TLSHandshaking
+```
+
+Sau đó `Trail.SaveSamples()` append sample vào từng metric:
+
+```text
+http_req_duration       <- Trail.Duration
+http_req_blocked        <- Trail.Blocked
+http_req_connecting     <- Trail.Connecting
+http_req_tls_handshaking<- Trail.TLSHandshaking
+http_req_sending        <- Trail.Sending
+http_req_waiting        <- Trail.Waiting
+http_req_receiving      <- Trail.Receiving
+```
+
+Vì chúng là `Trend`, mỗi request đóng góp một value thời gian vào tập dữ liệu.
+Cuối test, summary mới lấy tập đó để tính:
+
+```text
+avg, min, med, max, p(90), p(95)
+```
+
+#### 6.2.2 Demo chạy được: chứng minh từng định nghĩa trên
 
 File demo:
 
@@ -2368,12 +2509,13 @@ export const options = {
     },
   },
   thresholds: {
-    http_reqs: ["count==4"],
+    http_reqs: ["count==6"],
     http_req_blocked: ["avg>=0"],
     http_req_connecting: ["avg>=0"],
     http_req_duration: ["avg>=0"],
     "http_req_failed{endpoint:status_200}": ["rate<0.01"],
-    "http_req_failed{endpoint:status_500}": ["rate>0.99"],
+    "http_req_failed{endpoint:status_500_default}": ["rate>0.99"],
+    "http_req_failed{endpoint:status_500_expected}": ["rate<0.01"],
     http_req_receiving: ["avg>=0"],
     http_req_sending: ["avg>=0"],
     http_req_tls_handshaking: ["avg>=0"],
@@ -2386,8 +2528,13 @@ export default function () {
     tags: { endpoint: "status_200" },
   });
 
-  const fail = http.get("https://httpbin.org/status/500", {
-    tags: { endpoint: "status_500" },
+  const failByDefault = http.get("https://httpbin.org/status/500", {
+    tags: { endpoint: "status_500_default" },
+  });
+
+  const expected500 = http.get("https://httpbin.org/status/500", {
+    tags: { endpoint: "status_500_expected" },
+    responseCallback: http.expectedStatuses(500),
   });
 
   check(
@@ -2399,11 +2546,19 @@ export default function () {
   );
 
   check(
-    fail,
+    failByDefault,
     {
-      "status_500 returns 500": (r) => r.status === 500,
+      "status_500_default returns 500": (r) => r.status === 500,
     },
-    { endpoint: "status_500" },
+    { endpoint: "status_500_default" },
+  );
+
+  check(
+    expected500,
+    {
+      "status_500_expected returns 500": (r) => r.status === 500,
+    },
+    { endpoint: "status_500_expected" },
   );
 }
 ```
@@ -2412,12 +2567,13 @@ Demo này cố tình làm rất nhỏ:
 
 ```text
 iterations = 2
-mỗi iteration gọi 2 HTTP request
+mỗi iteration gọi 3 HTTP request
 
 request 1 -> https://httpbin.org/status/200
-request 2 -> https://httpbin.org/status/500
+request 2 -> https://httpbin.org/status/500, dùng default expectedStatuses
+request 3 -> https://httpbin.org/status/500, nhưng khai báo expectedStatuses(500)
 
-tổng HTTP request = 2 iterations * 2 request = 4 request
+tổng HTTP request = 2 iterations * 3 request = 6 request
 ```
 
 Kết quả cần nhìn:
@@ -2443,14 +2599,15 @@ data_sent, data_received
 http_reqs
   = Counter
   = mỗi request append một sample value=1
-  = chạy demo này kỳ vọng count=4
+  = chạy demo này kỳ vọng count=6
 
 http_req_failed
   = Rate
   = mỗi request append một sample value=0 hoặc value=1
-  = status 200 -> value=0
-  = status 500 -> value=1
-  = chạy demo này kỳ vọng 2 failed / 4 request = 50%
+  = status 200 mặc định -> value=0
+  = status 500 mặc định -> value=1
+  = status 500 + expectedStatuses(500) -> value=0
+  = chạy demo này kỳ vọng 2 failed / 6 request = 33.33%
 
 http_req_duration, http_req_waiting, http_req_sending...
   = Trend
@@ -2458,38 +2615,35 @@ http_req_duration, http_req_waiting, http_req_sending...
   = summary in avg/min/med/max/p(90)/p(95)
 ```
 
-Vì sao `500` làm `http_req_failed` tăng?
-
-Trong core, `js/modules/k6/http/http.go` tạo HTTP client mặc định với:
+Đoạn demo này chứng minh đúng định nghĩa core:
 
 ```text
-responseCallback: defaultExpectedStatuses.match
+status_200
+  status trả về = 200
+  default expected = 200..399
+  expected_response=true
+  http_req_failed value=0
+
+status_500_default
+  status trả về = 500
+  default expected = 200..399
+  expected_response=false
+  http_req_failed value=1
+
+status_500_expected
+  status trả về = 500
+  request tự khai báo responseCallback: http.expectedStatuses(500)
+  expected_response=true
+  http_req_failed value=0
 ```
 
-Trong `js/modules/k6/http/response_callback.go`, default là:
+Vậy người học sẽ thấy rõ:
 
 ```text
-expected status = 200..399
+cùng là HTTP 500
+nhưng một request fail, một request không fail
+vì core dựa vào responseCallback để quyết định expected hay không
 ```
-
-Nên đọc đời thường là:
-
-```text
-status 200 -> nằm trong 200..399 -> expected -> http_req_failed value=0
-status 500 -> không nằm trong 200..399 -> failed   -> http_req_failed value=1
-```
-
-Trong `lib/netext/httpext/transport.go`, sau khi biết status code, core làm ý tương đương:
-
-```text
-expected = responseCallback(statusCode)
-nếu expected == false thì failed = 1
-append sample cho http_req_failed với value = failed
-```
-
-Còn các metric thời gian như `http_req_duration`, `http_req_waiting`,
-`http_req_connecting` được append trong `lib/netext/httpext/tracer.go`
-qua `Trail.SaveSamples()`.
 
 Khi chạy thành công, summary sẽ có dạng gần như sau. Số thời gian và số byte
 của máy bạn có thể khác, nhưng cách đọc giống nhau.
@@ -2524,11 +2678,14 @@ THRESHOLDS
   http_req_failed{endpoint:status_200}
     'rate<0.01' rate=0.00%
 
-  http_req_failed{endpoint:status_500}
+  http_req_failed{endpoint:status_500_default}
     'rate>0.99' rate=100.00%
 
+  http_req_failed{endpoint:status_500_expected}
+    'rate<0.01' rate=0.00%
+
   http_reqs
-    'count==4' count=4
+    'count==6' count=6
 ```
 
 Sau đó nhìn phần `TOTAL RESULTS`. Với k6 bản hiện tại, nhóm `HTTP` thường chỉ
@@ -2537,37 +2694,51 @@ in các dòng HTTP chính:
 ```text
 HTTP
   http_req_duration..........: avg=... min=... med=... max=... p(90)=... p(95)=...
-  http_req_failed............: 50.00% 2 out of 4
-    { endpoint:status_200 }..: 0.00%  0 out of 2
-    { endpoint:status_500 }..: 100.00% 2 out of 2
-  http_reqs..................: 4
+  http_req_failed............: 33.33% 2 out of 6
+    { endpoint:status_200 }..........: 0.00%   0 out of 2
+    { endpoint:status_500_default }..: 100.00% 2 out of 2
+    { endpoint:status_500_expected }.: 0.00%   0 out of 2
+  http_reqs..................: 6
 
 NETWORK
   data_received..............: ...
   data_sent..................: ...
 ```
 
+Bạn cũng có thể thấy dòng con theo system tag `expected_response`, ví dụ:
+
+```text
+http_req_duration
+  { expected_response:true }...: avg=...
+```
+
+Tag này do `transport.measureAndEmitMetrics()` set sau khi chạy
+`responseCallback(statusCode)`.
+Nó cho biết request đó được k6 xem là response đúng kỳ vọng hay không.
+
 Lưu ý quan trọng: trong demo này `checks` có thể vẫn là `100%`, dù
-`http_req_failed` là `50%`.
+`http_req_failed` là `33.33%`.
 
 Vì hai dòng đó trả lời hai câu hỏi khác nhau:
 
 ```text
 http_req_failed
   = k6 hỏi: response này có thuộc nhóm status code expected không?
-  = mặc định expected là 200..399
-  = status 500 bị tính là failed
+  = mặc định expected là 200..399, nhưng từng request có thể override bằng responseCallback
+  = status 500 mặc định bị tính là failed
+  = status 500 với expectedStatuses(500) không bị tính failed
 
 checks
   = script của bạn hỏi: điều kiện mình tự viết có đúng không?
-  = demo viết check cho request 500 là r.status === 500
-  = server trả đúng 500 nên check đó pass
+  = demo viết check cho cả hai request 500 là r.status === 500
+  = server trả đúng 500 nên các check đó pass
 ```
 
 Nói ngắn:
 
 ```text
-HTTP 500 có thể làm http_req_failed tăng
+HTTP 500 có thể làm http_req_failed tăng hoặc không tăng
+tuỳ responseCallback của request đó
 nhưng check vẫn pass nếu chính bạn đang kiểm tra "có đúng là 500 không"
 ```
 
@@ -2575,7 +2746,8 @@ Trong demo có thêm tag `endpoint`:
 
 ```js
 tags: { endpoint: "status_200" }
-tags: { endpoint: "status_500" }
+tags: { endpoint: "status_500_default" }
+tags: { endpoint: "status_500_expected" }
 ```
 
 Tag này giúp tách metric theo endpoint:
@@ -2585,21 +2757,26 @@ http_req_failed{endpoint:status_200}
   = chỉ nhìn request gọi /status/200
   = kỳ vọng rate gần 0
 
-http_req_failed{endpoint:status_500}
-  = chỉ nhìn request gọi /status/500
+http_req_failed{endpoint:status_500_default}
+  = chỉ nhìn request gọi /status/500 theo default callback
   = kỳ vọng rate gần 1
+
+http_req_failed{endpoint:status_500_expected}
+  = chỉ nhìn request gọi /status/500 nhưng tự khai báo expectedStatuses(500)
+  = kỳ vọng rate gần 0
 ```
 
 Đây là lý do demo đặt thresholds:
 
 ```js
 thresholds: {
-  http_reqs: ["count==4"],
+  http_reqs: ["count==6"],
   http_req_blocked: ["avg>=0"],
   http_req_connecting: ["avg>=0"],
   http_req_duration: ["avg>=0"],
   "http_req_failed{endpoint:status_200}": ["rate<0.01"],
-  "http_req_failed{endpoint:status_500}": ["rate>0.99"],
+  "http_req_failed{endpoint:status_500_default}": ["rate>0.99"],
+  "http_req_failed{endpoint:status_500_expected}": ["rate<0.01"],
   http_req_receiving: ["avg>=0"],
   http_req_sending: ["avg>=0"],
   http_req_tls_handshaking: ["avg>=0"],
@@ -2611,14 +2788,17 @@ Các thresholds này không phải để test hệ thống thật.
 Chúng chỉ làm demo dễ đọc hơn:
 
 ```text
-http_reqs count==4
-  = xác nhận demo có đúng 4 request
+http_reqs count==6
+  = xác nhận demo có đúng 6 request
 
 http_req_failed{endpoint:status_200} rate<0.01
   = endpoint 200 không bị tính failed
 
-http_req_failed{endpoint:status_500} rate>0.99
-  = endpoint 500 bị tính failed
+http_req_failed{endpoint:status_500_default} rate>0.99
+  = endpoint 500 mặc định bị tính failed
+
+http_req_failed{endpoint:status_500_expected} rate<0.01
+  = endpoint 500 có expectedStatuses(500) không bị tính failed
 
 http_req_duration / waiting / sending / receiving / blocked / connecting / tls_handshaking avg>=0
   = các metric này là Trend nên có avg

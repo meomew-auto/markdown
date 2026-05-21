@@ -12,12 +12,13 @@ export const options = {
     },
   },
   thresholds: {
-    http_reqs: ["count==4"],
+    http_reqs: ["count==6"],
     http_req_blocked: ["avg>=0"],
     http_req_connecting: ["avg>=0"],
     http_req_duration: ["avg>=0"],
     "http_req_failed{endpoint:status_200}": ["rate<0.01"],
-    "http_req_failed{endpoint:status_500}": ["rate>0.99"],
+    "http_req_failed{endpoint:status_500_default}": ["rate>0.99"],
+    "http_req_failed{endpoint:status_500_expected}": ["rate<0.01"],
     http_req_receiving: ["avg>=0"],
     http_req_sending: ["avg>=0"],
     http_req_tls_handshaking: ["avg>=0"],
@@ -30,8 +31,13 @@ export default function () {
     tags: { endpoint: "status_200" },
   });
 
-  const fail = http.get("https://httpbin.org/status/500", {
-    tags: { endpoint: "status_500" },
+  const failByDefault = http.get("https://httpbin.org/status/500", {
+    tags: { endpoint: "status_500_default" },
+  });
+
+  const expected500 = http.get("https://httpbin.org/status/500", {
+    tags: { endpoint: "status_500_expected" },
+    responseCallback: http.expectedStatuses(500),
   });
 
   check(
@@ -43,10 +49,18 @@ export default function () {
   );
 
   check(
-    fail,
+    failByDefault,
     {
-      "status_500 returns 500": (r) => r.status === 500,
+      "status_500_default returns 500": (r) => r.status === 500,
     },
-    { endpoint: "status_500" },
+    { endpoint: "status_500_default" },
+  );
+
+  check(
+    expected500,
+    {
+      "status_500_expected returns 500": (r) => r.status === 500,
+    },
+    { endpoint: "status_500_expected" },
   );
 }
