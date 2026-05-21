@@ -250,7 +250,7 @@ runtime có một giá trị cần ghi
 | Metric type | Sink làm gì với mỗi sample? | Ví dụ |
 | --- | --- | --- |
 | `Counter` | cộng `sample.Value` vào tổng | `http_reqs value=1`, `data_sent value=500` |
-| `Gauge` | lấy `sample.Value` làm giá trị mới nhất, đồng thời nhớ min/max | `vus value=4`, `queue_depth value=9` |
+| `Gauge` | lấy `sample.Value` mới nhất làm value hiện tại, đồng thời nhớ min/max | `vus value=4`, `queue_depth value=9` |
 | `Rate` | tăng `Total`, nếu `sample.Value != 0` thì tăng `Trues` | `checks value=1`, `http_req_failed value=0` |
 | `Trend` | đưa `sample.Value` vào tập values để tính avg/min/max/p95 | `http_req_duration value=117.55` |
 
@@ -552,6 +552,19 @@ Summary sẽ có dạng:
 
 ```text
 queue_depth..........: 3    min=3 max=9
+```
+
+Note rõ về `Gauge`:
+
+```text
+value = 3
+  = sample cuối cùng mà summary nhận được cho metric queue_depth
+  = không phải tổng qua tất cả iteration
+  = không phải mỗi iteration lấy một value rồi cộng lại
+
+nếu test chạy nhiều iteration
+  thì Gauge value là sample cuối cùng theo thời gian gom metric,
+  thường là sample cuối cùng được add() trong run/submetric đó
 ```
 
 Với `checkout_ok`:
