@@ -308,26 +308,34 @@ Với custom metric, mỗi lần gọi `.add()` là một lần k6 tạo sample 
 Ví dụ:
 
 ```js
-import { Counter, Trend, Rate } from "k6/metrics";
+import { Counter, Gauge, Trend, Rate } from "k6/metrics";
 
 const orders = new Counter("orders");
+const queueDepth = new Gauge("queue_depth");
 const checkoutDuration = new Trend("checkout_duration", true);
 const checkoutOk = new Rate("checkout_ok");
 
 export default function () {
   orders.add(1, { flow: "checkout" });
+  queueDepth.add(5, { flow: "checkout" });
   checkoutDuration.add(250, { flow: "checkout" });
   checkoutOk.add(true, { flow: "checkout" });
 }
 ```
 
-Ba dòng `.add()` ở trên tạo ba sample khác nhau:
+Bốn dòng `.add()` ở trên tạo bốn sample khác nhau:
 
 ```text
 orders
   Metric = orders
   Type   = Counter
   Value  = 1
+  Tags   = flow=checkout
+
+queue_depth
+  Metric = queue_depth
+  Type   = Gauge
+  Value  = 5
   Tags   = flow=checkout
 
 checkout_duration
@@ -353,6 +361,14 @@ Value = value đã convert sang float
 Metadata = metadata hiện tại nếu có
 ```
 
+Nói ngắn hơn:
+
+```text
+gọi .add() 1 lần
+  -> tạo 1 sample
+  -> sample đó sẽ được sink của metric type đó gom theo kiểu riêng của nó
+```
+
 Với `Rate`, nếu bạn truyền boolean:
 
 ```text
@@ -374,6 +390,38 @@ tạo logic:
 Total = 3
 Trues = 2
 rate = 2 / 3 = 66.67%
+```
+
+`Gauge` cũng cùng một model sample đó, nhưng sink của nó không cộng dồn:
+
+```js
+queueDepth.add(5);
+queueDepth.add(9);
+queueDepth.add(3);
+```
+
+Tạo các sample:
+
+```text
+queue_depth sample 1: value = 5
+queue_depth sample 2: value = 9
+queue_depth sample 3: value = 3
+```
+
+Rồi summary đọc ra:
+
+```text
+value = 3
+min = 3
+max = 9
+```
+
+Lưu ý thêm:
+
+```text
+custom metric dùng .add()
+built-in metric như http_reqs, http_req_duration, iterations... cũng dùng cùng model Sample
+chỉ khác là built-in sample do core tự sinh ra thay vì do script gọi .add()
 ```
 
 #### 2.1.4 Tags làm sample bị tách thành nhiều chuỗi dữ liệu
