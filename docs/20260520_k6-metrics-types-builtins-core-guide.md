@@ -1730,6 +1730,8 @@ grpc_req_duration
 5% sample còn lại có thể lớn hơn p(95)
 ```
 
+Nhưng câu trên là cách đọc ý nghĩa thống kê, không phải lúc nào cũng có đúng 100 request.
+
 Ví dụ có 100 request:
 
 ```text
@@ -1750,6 +1752,274 @@ Không đọc thành:
 ```
 
 `p(95)` không phải tỉ lệ pass/fail. Nó là vị trí trong phân phối thời gian.
+
+##### Nếu không phải 100 request thì đọc thế nào?
+
+Nếu có 100 request thì nói "khoảng 95 request" rất dễ hiểu.
+Nhưng nếu chỉ có 10, 20, 37, hoặc 1000 request thì không nên dịch máy móc thành "request thứ 95".
+
+Đọc đúng hơn là:
+
+```text
+p(95)
+  = mốc latency mà khoảng 95% sample nằm bên trái hoặc bằng mốc đó
+  = phần đuôi chậm nhất khoảng 5% nằm bên phải mốc đó
+```
+
+Ví dụ có 20 request:
+
+```text
+http_req_duration p(95)=860ms
+```
+
+Đọc là:
+
+```text
+khoảng 95% trong 20 request có duration <= 860ms
+tức là phần lớn request không chậm hơn 860ms
+khoảng 5% request chậm nhất có thể lớn hơn 860ms
+```
+
+Không đọc thành:
+
+```text
+request số 95 mất 860ms
+```
+
+vì test chỉ có 20 request.
+
+##### k6 tính `p(95)` với 20 sample ra sao?
+
+Core `TrendSink.P()` làm theo ý sau:
+
+```text
+1. sort toàn bộ values tăng dần
+2. tính vị trí:
+   i = percentile * (count - 1)
+3. nếu i rơi đúng vào một sample thì lấy sample đó
+4. nếu i nằm giữa 2 sample thì nội suy tuyến tính
+```
+
+Ví dụ có 20 sample đã sort:
+
+```text
+sample #1  -> 100ms
+sample #2  -> 110ms
+...
+sample #18 -> 200ms
+sample #19 -> 800ms
+sample #20 -> 2000ms
+```
+
+Với `p(95)`:
+
+```text
+count = 20
+pct = 0.95
+
+i = 0.95 * (20 - 1)
+  = 0.95 * 19
+  = 18.05
+```
+
+Vì k6 dùng index bắt đầu từ 0, `i=18.05` nằm giữa:
+
+```text
+index 18 = sample #19 = 800ms
+index 19 = sample #20 = 2000ms
+```
+
+Nó chỉ đi 5% đoạn đường từ `800ms` tới `2000ms`:
+
+```text
+p(95) = 800 + (2000 - 800) * 0.05
+      = 800 + 60
+      = 860ms
+```
+
+Nên `p(95)` không nhất thiết đúng bằng một request thật.
+Nó có thể là giá trị nội suy giữa 2 sample.
+
+##### Ví dụ ít request: 10 sample
+
+Giả sử có 10 request:
+
+```text
+9 request nhanh: 100ms
+1 request rất chậm: 5000ms
+```
+
+Sorted values:
+
+```text
+[100, 100, 100, 100, 100, 100, 100, 100, 100, 5000]
+```
+
+`avg`:
+
+```text
+avg = (9 * 100 + 5000) / 10
+    = 590ms
+```
+
+`p(90)`:
+
+```text
+i = 0.90 * (10 - 1)
+  = 8.1
+
+p(90) = 100 + (5000 - 100) * 0.1
+      = 590ms
+```
+
+`p(95)`:
+
+```text
+i = 0.95 * (10 - 1)
+  = 8.55
+
+p(95) = 100 + (5000 - 100) * 0.55
+      = 2795ms
+```
+
+Nhìn ví dụ này sẽ thấy:
+
+```text
+p(90) đã bắt đầu bị kéo bởi request rất chậm
+p(95) bị kéo mạnh hơn
+max vẫn là 5000ms
+```
+
+Với số sample ít, p90/p95 rất dễ dao động mạnh.
+Vì vậy nếu demo chỉ có vài chục request thì dùng p95 để học cách đọc được, nhưng đừng vội kết luận
+SLA của hệ thống từ một con số p95 rất ít sample.
+
+##### Ví dụ rất ít request: 7 sample
+
+Giả sử:
+
+```text
+values = [100, 120, 130, 150, 180, 220, 1000]
+```
+
+Với `p(95)`:
+
+```text
+count = 7
+i = 0.95 * (7 - 1)
+  = 5.7
+```
+
+`i=5.7` nằm giữa:
+
+```text
+index 5 = 220ms
+index 6 = 1000ms
+```
+
+Nên:
+
+```text
+p(95) = 220 + (1000 - 220) * 0.7
+      = 766ms
+```
+
+Đọc là:
+
+```text
+p95 khoảng 766ms trên tập 7 sample này
+```
+
+Không nên đọc thành:
+
+```text
+95% request chắc chắn dưới 766ms trong production
+```
+
+Vì 7 sample quá ít để đại diện cho production.
+
+##### Nên dùng `p90` hay `p95`?
+
+Không có một số luôn đúng cho mọi bài test.
+Chọn `p90` hay `p95` phụ thuộc câu hỏi bạn muốn trả lời.
+
+`p90` phù hợp khi:
+
+```text
+bạn muốn nhìn trải nghiệm của đa số user
+bạn muốn số ổn định hơn p95 khi sample chưa quá nhiều
+bạn đang so sánh nhanh giữa các lần chạy demo hoặc môi trường dev/staging
+bạn chưa muốn bị vài outlier rất hiếm kéo kết luận quá mạnh
+```
+
+Đọc đời thường:
+
+```text
+p90 = 90% request không chậm hơn mốc này
+```
+
+`p95` phù hợp khi:
+
+```text
+bạn quan tâm phần đuôi chậm hơn
+bạn muốn bắt 5% request chậm nhất trước khi user phàn nàn
+bạn viết threshold/SLO nghiêm túc hơn p90
+bạn có đủ sample để percentile đáng tin hơn
+```
+
+Đọc đời thường:
+
+```text
+p95 = 95% request không chậm hơn mốc này
+```
+
+Nếu hỏi "nên dùng cái nào khi performance test thật?", cách thực dụng là:
+
+```text
+báo cáo cơ bản:
+  avg + med + p90 + p95 + max
+
+threshold phổ biến:
+  http_req_duration p(95) < mục tiêu latency
+
+debug khi có đuôi rất chậm:
+  xem thêm p99, max, và logs/traces
+```
+
+Không nên chỉ chọn một số duy nhất.
+Ví dụ:
+
+```text
+avg = 120ms
+p90 = 180ms
+p95 = 900ms
+max = 5000ms
+```
+
+Đọc là:
+
+```text
+đa số request khá nhanh
+nhưng 5% request chậm hơn đang có vấn đề
+max cho thấy có outlier rất chậm
+```
+
+Ngược lại:
+
+```text
+avg = 120ms
+p90 = 180ms
+p95 = 220ms
+max = 5000ms
+```
+
+Đọc là:
+
+```text
+đa số và cả 95% request vẫn ổn
+có một vài outlier rất hiếm
+cần điều tra max nếu outlier đó ảnh hưởng nghiệp vụ, nhưng không nên kết luận toàn hệ thống chậm
+```
 
 #### `avg` có đủ không?
 
