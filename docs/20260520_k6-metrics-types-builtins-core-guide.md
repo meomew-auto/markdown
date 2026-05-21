@@ -499,8 +499,23 @@ sample là dữ liệu thô lúc runtime ghi nhận
 summary là dữ liệu đã được sink gom lại
 ```
 
+Note nhanh:
+
+```text
+1 dòng summary = 1 metric hoặc 1 submetric của metric đó
+1 dòng summary không phải 1 sample
+1 metric name có thể sinh nhiều dòng summary nếu có tags khác nhau
+```
+
+Ví dụ:
+
+```text
+http_req_duration{status:200}  -> 1 dòng summary
+http_req_duration{status:500}  -> 1 dòng summary khác
+```
+
 Vì vậy khi đọc summary, đừng tưởng dòng summary là một sample.
-Nó thường là kết quả của rất nhiều sample.
+Nó thường là kết quả của rất nhiều sample đã được sink gom lại.
 
 #### 2.1.6 Checklist đọc sample cho đúng
 
