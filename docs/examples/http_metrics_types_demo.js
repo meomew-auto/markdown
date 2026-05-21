@@ -26,6 +26,31 @@ export const options = {
   },
 };
 
+function ms(value) {
+  return Number(value).toFixed(2);
+}
+
+function traceResponse(label, response) {
+  const timings = response.timings;
+  const recomputedDuration =
+    timings.sending + timings.waiting + timings.receiving;
+
+  console.log(
+    [
+      `[metric-trace] endpoint=${label}`,
+      `status=${response.status}`,
+      `blocked=${ms(timings.blocked)}ms`,
+      `connecting=${ms(timings.connecting)}ms`,
+      `tls_handshaking=${ms(timings.tls_handshaking)}ms`,
+      `sending=${ms(timings.sending)}ms`,
+      `waiting=${ms(timings.waiting)}ms`,
+      `receiving=${ms(timings.receiving)}ms`,
+      `duration=${ms(timings.duration)}ms`,
+      `sending+waiting+receiving=${ms(recomputedDuration)}ms`,
+    ].join(" "),
+  );
+}
+
 export default function () {
   const ok = http.get("https://httpbin.org/status/200", {
     tags: { endpoint: "status_200" },
@@ -39,6 +64,10 @@ export default function () {
     tags: { endpoint: "status_500_expected" },
     responseCallback: http.expectedStatuses(500),
   });
+
+  traceResponse("status_200", ok);
+  traceResponse("status_500_default", failByDefault);
+  traceResponse("status_500_expected", expected500);
 
   check(
     ok,
