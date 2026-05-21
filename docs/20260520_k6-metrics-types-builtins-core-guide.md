@@ -3116,7 +3116,7 @@ sample http_req_* được ghi khi request kết thúc
 tức là khi k6 nhận xong response body, discard xong body, hoặc request kết thúc vì lỗi/timeout
 ```
 
-#### 6.2.1 Trace từng HTTP metric theo core code
+#### 6.2.2 Bằng chứng từ core cho bảng trên
 
 Muốn hiểu đúng các HTTP metric thì đọc theo luồng này:
 
@@ -3648,7 +3648,7 @@ response.timings.receiving       <- Trail.Receiving
 Vì vậy dòng log trong demo không phải tự bịa công thức.
 Nó đang in lại chính những giá trị cùng nguồn với HTTP metrics.
 
-#### 6.2.2 Demo chạy được: chứng minh từng định nghĩa trên
+#### 6.2.3 Demo chạy được: chứng minh từng định nghĩa trên
 
 File demo:
 
