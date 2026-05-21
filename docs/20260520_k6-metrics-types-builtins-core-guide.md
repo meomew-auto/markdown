@@ -2369,69 +2369,122 @@ Nhưng nếu có redirect, retry ở tầng thấp, hoặc behavior đặc biệ
 thì điều quan trọng khi đọc metric là: k6 emit metric theo request HTTP thực tế
 mà transport đã xử lý xong, không phải theo số dòng code `http.get()` bạn nhìn thấy.
 
-Bảng trace:
+Dưới đây là review từng metric theo đúng format:
 
-| Metric | Core định nghĩa type ở đâu? | Core lấy value từ đâu? | Demo chứng minh bằng gì? |
-| --- | --- | --- | --- |
-| `http_reqs` | `metrics/builtin.go`: `Counter` | `Trail.SaveSamples()` append sample `Value: 1` cho mỗi request đã kết thúc | demo có 2 iteration, mỗi iteration 3 request, nên `http_reqs count==6` |
-| `http_req_failed` | `metrics/builtin.go`: `Rate` | `transport.measureAndEmitMetrics()` gọi `responseCallback(statusCode)`. Nếu callback trả `false` thì `failed=1`, ngược lại `failed=0` | demo có `500` mặc định fail, và `500` được khai báo expected thì không fail |
-| `http_req_duration` | `metrics/builtin.go`: `Trend`, `Time` | `Tracer.Done()` tính `Duration = Sending + Waiting + Receiving` | threshold `http_req_duration: ["avg>=0"]` ép summary in ra avg |
-| `http_req_blocked` | `metrics/builtin.go`: `Trend`, `Time` | nếu có `getConn` và `gotConn`, core tính `Blocked = gotConn - getConn` | threshold `http_req_blocked: ["avg>=0"]` |
-| `http_req_connecting` | `metrics/builtin.go`: `Trend`, `Time` | nếu có `connectStart` và `connectDone`, core tính `Connecting = connectDone - connectStart` | `noConnectionReuse: true` làm metric này dễ khác 0 hơn |
-| `http_req_tls_handshaking` | `metrics/builtin.go`: `Trend`, `Time` | nếu có `tlsHandshakeStart` và `tlsHandshakeDone`, core tính `TLSHandshaking = tlsHandshakeDone - tlsHandshakeStart` | dùng HTTPS nên có cơ hội thấy TLS handshake |
-| `http_req_sending` | `metrics/builtin.go`: `Trend`, `Time` | sau khi ghi xong request, core tính khoảng từ lúc connection/TLS sẵn sàng tới `wroteRequest` | threshold `http_req_sending: ["avg>=0"]` |
-| `http_req_waiting` | `metrics/builtin.go`: `Trend`, `Time` | nếu có byte đầu tiên, core tính `Waiting = gotFirstResponseByte - wroteRequest`; nếu server không trả byte nào, tính tới lúc request kết thúc | threshold `http_req_waiting: ["avg>=0"]` |
-| `http_req_receiving` | `metrics/builtin.go`: `Trend`, `Time` | nếu có byte đầu tiên, core tính `Receiving = done - gotFirstResponseByte` | threshold `http_req_receiving: ["avg>=0"]` |
+```text
+metric là gì
+  -> core định nghĩa ở đâu
+  -> core tính value như nào
+  -> demo làm gì để thấy nó
+```
 
-Tách riêng `http_req_failed` vì đây là chỗ dễ hiểu sai nhất.
+##### `http_reqs`
 
-Core không viết đơn giản kiểu:
+`http_reqs` trả lời câu hỏi:
+
+```text
+k6 đã đo được bao nhiêu HTTP request?
+```
+
+Trong core:
+
+```text
+metrics/builtin.go
+  HTTPReqs: registry.MustNewMetric(http_reqs, Counter)
+
+lib/netext/httpext/tracer.go
+  Trail.SaveSamples()
+  append sample:
+    metric = HTTPReqs
+    value  = 1
+```
+
+Nghĩa là mỗi request HTTP khi kết thúc sẽ đóng góp một sample `value=1`.
+Vì metric này là `Counter`, summary cộng các sample lại.
+
+Demo chứng minh:
+
+```text
+iterations = 2
+mỗi iteration gọi 3 request
+
+=> http_reqs count = 2 * 3 = 6
+```
+
+Trong demo có threshold:
+
+```js
+http_reqs: ["count==6"]
+```
+
+Khi chạy đúng sẽ thấy:
+
+```text
+http_reqs
+  'count==6' count=6
+```
+
+Điểm dễ nhầm:
+
+```text
+http_reqs không phải số iteration
+1 iteration có thể gọi nhiều HTTP request
+```
+
+##### `http_req_failed`
+
+`http_req_failed` trả lời câu hỏi:
+
+```text
+trong các request đã đo, bao nhiêu request bị k6 xem là không đúng kỳ vọng?
+```
+
+Trong core:
+
+```text
+metrics/builtin.go
+  HTTPReqFailed: registry.MustNewMetric(http_req_failed, Rate)
+
+lib/netext/httpext/transport.go
+  expected = responseCallback(statusCode)
+
+  nếu expected == false:
+    failed = 1
+  ngược lại:
+    failed = 0
+
+  append sample:
+    metric = HTTPReqFailed
+    value  = failed
+```
+
+Vì metric này là `Rate`, value `1` được tính là fail, value `0` được tính là
+không fail.
+
+Core không định nghĩa đơn giản là:
 
 ```text
 status >= 400 thì failed
 ```
 
-Core làm theo hướng này:
-
-```text
-statusCode = response.StatusCode
-expected = responseCallback(statusCode)
-
-nếu expected == false:
-  failed = 1
-ngược lại:
-  failed = 0
-
-append sample:
-  metric = http_req_failed
-  value  = failed
-```
-
-Một chi tiết trong core: `transport.go` chỉ append `http_req_failed` khi
-`responseCallback != nil`.
-Nếu bạn tắt callback bằng `http.setResponseCallback(null)`, request có thể
-không sinh sample `http_req_failed`.
-Demo này không dùng `null` vì mục tiêu là làm metric `http_req_failed` hiện rõ
-để học cách đọc.
-
-`responseCallback` mặc định nằm ở `js/modules/k6/http/http.go`:
+Core dựa vào `responseCallback`.
+Mặc định `responseCallback` được set ở `js/modules/k6/http/http.go`:
 
 ```text
 responseCallback: defaultExpectedStatuses.match
 ```
 
-`defaultExpectedStatuses` nằm ở `js/modules/k6/http/response_callback.go`:
+`defaultExpectedStatuses` nằm trong `js/modules/k6/http/response_callback.go`:
 
 ```text
 200..399
 ```
 
-Vì vậy, nếu không cấu hình gì thêm:
+Nên mặc định:
 
 ```text
-HTTP 200 -> expected=true  -> http_req_failed value=0
-HTTP 302 -> expected=true  -> http_req_failed value=0
-HTTP 500 -> expected=false -> http_req_failed value=1
+status 200 -> expected=true  -> http_req_failed value=0
+status 500 -> expected=false -> http_req_failed value=1
 ```
 
 Nhưng nếu chính request đó khai báo:
@@ -2443,47 +2496,378 @@ responseCallback: http.expectedStatuses(500)
 thì status `500` lại được xem là expected:
 
 ```text
-HTTP 500 + expectedStatuses(500)
+status 500 + expectedStatuses(500)
   -> expected=true
   -> http_req_failed value=0
 ```
 
-Đó là lý do bài demo bên dưới có hai request đều trả `500`, nhưng một cái tính
-failed, một cái không.
+Một chi tiết trong core: `transport.go` chỉ append `http_req_failed` khi
+`responseCallback != nil`.
+Nếu bạn tắt callback bằng `http.setResponseCallback(null)`, request có thể
+không sinh sample `http_req_failed`.
+Demo này không dùng `null` vì mục tiêu là làm metric `http_req_failed` hiện rõ.
 
-Với các metric thời gian, điểm quan trọng là chúng không được tính rời rạc từ
-summary. Chúng được tính ngay khi request kết thúc trong `Tracer.Done()`:
-
-```text
-Blocked        = gotConn - getConn
-Connecting     = connectDone - connectStart
-TLSHandshaking = tlsHandshakeDone - tlsHandshakeStart
-Sending        = wroteRequest - mốc connection/TLS đã sẵn sàng
-Waiting        = gotFirstResponseByte - wroteRequest
-Receiving      = done - gotFirstResponseByte
-
-Duration       = Sending + Waiting + Receiving
-ConnDuration   = Connecting + TLSHandshaking
-```
-
-Sau đó `Trail.SaveSamples()` append sample vào từng metric:
+Demo chứng minh bằng 3 endpoint tag:
 
 ```text
-http_req_duration       <- Trail.Duration
-http_req_blocked        <- Trail.Blocked
-http_req_connecting     <- Trail.Connecting
-http_req_tls_handshaking<- Trail.TLSHandshaking
-http_req_sending        <- Trail.Sending
-http_req_waiting        <- Trail.Waiting
-http_req_receiving      <- Trail.Receiving
+status_200
+  status trả về = 200
+  default expected = 200..399
+  expected_response=true
+  http_req_failed value=0
+
+status_500_default
+  status trả về = 500
+  default expected = 200..399
+  expected_response=false
+  http_req_failed value=1
+
+status_500_expected
+  status trả về = 500
+  request tự khai báo responseCallback: http.expectedStatuses(500)
+  expected_response=true
+  http_req_failed value=0
 ```
 
-Vì chúng là `Trend`, mỗi request đóng góp một value thời gian vào tập dữ liệu.
-Cuối test, summary mới lấy tập đó để tính:
+Vì có 2 iteration, mỗi endpoint trên chạy 2 lần:
 
 ```text
-avg, min, med, max, p(90), p(95)
+failed samples = 2 request status_500_default
+total samples  = 6 request
+
+http_req_failed = 2 / 6 = 33.33%
 ```
+
+Khi chạy đúng sẽ thấy:
+
+```text
+http_req_failed......................: 33.33%  2 out of 6
+  { endpoint:status_200 }............: 0.00%   0 out of 2
+  { endpoint:status_500_default }....: 100.00% 2 out of 2
+  { endpoint:status_500_expected }...: 0.00%   0 out of 2
+```
+
+##### `http_req_duration`
+
+`http_req_duration` trả lời câu hỏi:
+
+```text
+phần request/response chính mất bao lâu?
+```
+
+Trong core:
+
+```text
+metrics/builtin.go
+  HTTPReqDuration: registry.MustNewMetric(http_req_duration, Trend, Time)
+
+lib/netext/httpext/tracer.go
+  Tracer.Done()
+  Duration = Sending + Waiting + Receiving
+
+lib/netext/httpext/tracer.go
+  Trail.SaveSamples()
+  append sample:
+    metric = HTTPReqDuration
+    value  = Trail.Duration
+```
+
+Điểm quan trọng:
+
+```text
+http_req_duration không gồm blocked / connecting / tls_handshaking
+nó chỉ gồm sending + waiting + receiving
+```
+
+Demo chứng minh bằng console log:
+
+```text
+[metric-trace] endpoint=...
+  sending=...
+  waiting=...
+  receiving=...
+  duration=...
+  sending+waiting+receiving=...
+```
+
+Nếu đọc một dòng log, bạn sẽ thấy `duration` gần bằng tổng:
+
+```text
+sending + waiting + receiving
+```
+
+Chênh lệch nhỏ nếu có thường do làm tròn số khi in ra.
+
+Vì metric này là `Trend`, summary sẽ in các thống kê như:
+
+```text
+http_req_duration: avg=... min=... med=... max=... p(90)=... p(95)=...
+```
+
+##### `http_req_blocked`
+
+`http_req_blocked` trả lời câu hỏi:
+
+```text
+trước khi request thật sự dùng được connection, k6 bị kẹt bao lâu?
+```
+
+Trong core:
+
+```text
+metrics/builtin.go
+  HTTPReqBlocked: registry.MustNewMetric(http_req_blocked, Trend, Time)
+
+lib/netext/httpext/tracer.go
+  nếu có getConn và gotConn:
+    Blocked = gotConn - getConn
+
+Trail.SaveSamples()
+  value = Trail.Blocked
+```
+
+`getConn` là mốc Go HTTP client bắt đầu lấy hoặc tạo connection.
+`gotConn` là mốc đã có connection để dùng.
+Vì vậy cách đọc an toàn là:
+
+```text
+http_req_blocked = thời gian từ lúc bắt đầu lấy/tạo connection
+                   tới lúc có connection dùng được
+```
+
+Nó không phải thời gian server xử lý.
+Nếu connection được reuse rất nhanh, giá trị này có thể rất nhỏ.
+
+Demo chứng minh:
+
+```js
+noConnectionReuse: true
+http_req_blocked: ["avg>=0"]
+```
+
+`noConnectionReuse: true` làm demo dễ thấy quá trình lấy/tạo connection hơn.
+Threshold `avg>=0` chỉ để ép summary in ra metric:
+
+```text
+http_req_blocked
+  'avg>=0' avg=...
+```
+
+##### `http_req_connecting`
+
+`http_req_connecting` trả lời câu hỏi:
+
+```text
+tạo kết nối TCP mất bao lâu?
+```
+
+Trong core:
+
+```text
+metrics/builtin.go
+  HTTPReqConnecting: registry.MustNewMetric(http_req_connecting, Trend, Time)
+
+lib/netext/httpext/tracer.go
+  nếu có connectStart và connectDone:
+    Connecting = connectDone - connectStart
+
+Trail.SaveSamples()
+  value = Trail.Connecting
+```
+
+Nếu request dùng lại connection cũ, có thể không có mốc connect mới.
+Khi đó `http_req_connecting` có thể bằng `0`.
+
+Demo chứng minh:
+
+```js
+noConnectionReuse: true
+http_req_connecting: ["avg>=0"]
+```
+
+Khi chạy sẽ thấy:
+
+```text
+http_req_connecting
+  'avg>=0' avg=...
+```
+
+Và trong log từng request:
+
+```text
+connecting=...ms
+```
+
+##### `http_req_tls_handshaking`
+
+`http_req_tls_handshaking` trả lời câu hỏi:
+
+```text
+bắt tay TLS của HTTPS mất bao lâu?
+```
+
+Trong core:
+
+```text
+metrics/builtin.go
+  HTTPReqTLSHandshaking: registry.MustNewMetric(http_req_tls_handshaking, Trend, Time)
+
+lib/netext/httpext/tracer.go
+  nếu có tlsHandshakeStart và tlsHandshakeDone:
+    TLSHandshaking = tlsHandshakeDone - tlsHandshakeStart
+
+Trail.SaveSamples()
+  value = Trail.TLSHandshaking
+```
+
+Metric này thường chỉ có ý nghĩa rõ với HTTPS.
+Nếu là HTTP thường, hoặc connection HTTPS đã được reuse, giá trị có thể bằng `0`.
+
+Demo dùng URL `https://httpbin.org/...` và `noConnectionReuse: true`, nên dễ thấy:
+
+```text
+http_req_tls_handshaking
+  'avg>=0' avg=...
+
+[metric-trace] ... tls_handshaking=...ms
+```
+
+##### `http_req_sending`
+
+`http_req_sending` trả lời câu hỏi:
+
+```text
+gửi request từ máy k6 lên server mất bao lâu?
+```
+
+Trong core:
+
+```text
+metrics/builtin.go
+  HTTPReqSending: registry.MustNewMetric(http_req_sending, Trend, Time)
+
+lib/netext/httpext/tracer.go
+  khi wroteRequest != 0:
+    nếu có tlsHandshakeDone:
+      Sending = wroteRequest - tlsHandshakeDone
+    nếu không có TLS nhưng có connectDone:
+      Sending = wroteRequest - connectDone
+    nếu không thì:
+      Sending = wroteRequest - gotConn
+
+Trail.SaveSamples()
+  value = Trail.Sending
+```
+
+Với request `GET` body nhỏ, `http_req_sending` thường rất nhỏ.
+Với upload body lớn, metric này mới dễ tăng rõ.
+
+Demo chứng minh bằng:
+
+```text
+http_req_sending
+  'avg>=0' avg=...
+
+[metric-trace] ... sending=...ms
+```
+
+##### `http_req_waiting`
+
+`http_req_waiting` trả lời câu hỏi:
+
+```text
+sau khi gửi request xong, chờ byte đầu tiên từ server mất bao lâu?
+```
+
+Trong core:
+
+```text
+metrics/builtin.go
+  HTTPReqWaiting: registry.MustNewMetric(http_req_waiting, Trend, Time)
+
+lib/netext/httpext/tracer.go
+  nếu gotFirstResponseByte > wroteRequest:
+    Waiting = gotFirstResponseByte - wroteRequest
+  nếu server không trả byte nào:
+    Waiting = done - wroteRequest
+
+Trail.SaveSamples()
+  value = Trail.Waiting
+```
+
+Đây là phần nhiều người hay nhìn khi muốn biết:
+
+```text
+server bắt đầu phản hồi chậm hay nhanh?
+```
+
+Nhưng phải nói cẩn thận:
+
+```text
+http_req_waiting không chỉ là CPU xử lý của server
+nó còn có network latency và thời gian server chuẩn bị byte đầu tiên
+```
+
+Demo chứng minh bằng:
+
+```text
+http_req_waiting
+  'avg>=0' avg=...
+
+[metric-trace] ... waiting=...ms
+```
+
+##### `http_req_receiving`
+
+`http_req_receiving` trả lời câu hỏi:
+
+```text
+sau khi nhận byte đầu tiên, tải phần response còn lại mất bao lâu?
+```
+
+Trong core:
+
+```text
+metrics/builtin.go
+  HTTPReqReceiving: registry.MustNewMetric(http_req_receiving, Trend, Time)
+
+lib/netext/httpext/tracer.go
+  nếu có gotFirstResponseByte:
+    Receiving = done - gotFirstResponseByte
+
+Trail.SaveSamples()
+  value = Trail.Receiving
+```
+
+Nếu response rất nhỏ, giá trị này thường rất nhỏ.
+Nếu response lớn hoặc mạng chậm, `http_req_receiving` có thể tăng.
+
+Demo chứng minh bằng:
+
+```text
+http_req_receiving
+  'avg>=0' avg=...
+
+[metric-trace] ... receiving=...ms
+```
+
+##### Vì sao demo log được các timing này?
+
+Trong `lib/netext/httpext/request.go`, core copy chính các giá trị từ `Trail`
+sang `response.timings`:
+
+```text
+response.timings.duration        <- Trail.Duration
+response.timings.blocked         <- Trail.Blocked
+response.timings.connecting      <- Trail.Connecting
+response.timings.tls_handshaking <- Trail.TLSHandshaking
+response.timings.sending         <- Trail.Sending
+response.timings.waiting         <- Trail.Waiting
+response.timings.receiving       <- Trail.Receiving
+```
+
+Vì vậy dòng log trong demo không phải tự bịa công thức.
+Nó đang in lại chính những giá trị cùng nguồn với HTTP metrics.
 
 #### 6.2.2 Demo chạy được: chứng minh từng định nghĩa trên
 
@@ -2530,6 +2914,31 @@ export const options = {
   },
 };
 
+function ms(value) {
+  return Number(value).toFixed(2);
+}
+
+function traceResponse(label, response) {
+  const timings = response.timings;
+  const recomputedDuration =
+    timings.sending + timings.waiting + timings.receiving;
+
+  console.log(
+    [
+      `[metric-trace] endpoint=${label}`,
+      `status=${response.status}`,
+      `blocked=${ms(timings.blocked)}ms`,
+      `connecting=${ms(timings.connecting)}ms`,
+      `tls_handshaking=${ms(timings.tls_handshaking)}ms`,
+      `sending=${ms(timings.sending)}ms`,
+      `waiting=${ms(timings.waiting)}ms`,
+      `receiving=${ms(timings.receiving)}ms`,
+      `duration=${ms(timings.duration)}ms`,
+      `sending+waiting+receiving=${ms(recomputedDuration)}ms`,
+    ].join(" "),
+  );
+}
+
 export default function () {
   const ok = http.get("https://httpbin.org/status/200", {
     tags: { endpoint: "status_200" },
@@ -2543,6 +2952,10 @@ export default function () {
     tags: { endpoint: "status_500_expected" },
     responseCallback: http.expectedStatuses(500),
   });
+
+  traceResponse("status_200", ok);
+  traceResponse("status_500_default", failByDefault);
+  traceResponse("status_500_expected", expected500);
 
   check(
     ok,
@@ -2582,6 +2995,41 @@ request 3 -> https://httpbin.org/status/500, nhưng khai báo expectedStatuses(5
 
 tổng HTTP request = 2 iterations * 3 request = 6 request
 ```
+
+Khi chạy, demo còn in log theo từng response.
+Mỗi dòng log là một request, và nó show trực tiếp các timing lấy từ
+`response.timings`:
+
+```text
+[metric-trace] endpoint=status_200 status=200 blocked=822.88ms connecting=264.07ms tls_handshaking=543.36ms sending=0.50ms waiting=262.88ms receiving=0.51ms duration=263.89ms sending+waiting+receiving=263.89ms
+
+[metric-trace] endpoint=status_500_default status=500 blocked=781.04ms connecting=258.45ms tls_handshaking=521.55ms sending=1.06ms waiting=1185.22ms receiving=0.00ms duration=1186.27ms sending+waiting+receiving=1186.27ms
+
+[metric-trace] endpoint=status_500_expected status=500 blocked=786.12ms connecting=261.90ms tls_handshaking=524.22ms sending=0.00ms waiting=260.91ms receiving=0.00ms duration=260.91ms sending+waiting+receiving=260.91ms
+```
+
+Số trên máy bạn sẽ khác.
+Điều cần nhìn là cấu trúc:
+
+```text
+blocked
+connecting
+tls_handshaking
+sending
+waiting
+receiving
+duration
+sending+waiting+receiving
+```
+
+Với mỗi dòng, `duration` phải gần bằng:
+
+```text
+sending + waiting + receiving
+```
+
+Đây chính là công thức core dùng cho `http_req_duration`.
+Các metric timing còn lại cũng lấy từ cùng `response.timings`.
 
 Kết quả cần nhìn:
 
