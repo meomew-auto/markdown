@@ -3187,6 +3187,73 @@ Với demo `per-vu-iterations` của ta:
 
 nên `vus_max` thường sẽ giữ ở 10 suốt test.
 
+#### Với `per-vu-iterations`, sample được collect như nào?
+
+Điểm dễ nhầm: `vus` và `vus_max` không được ghi sau mỗi iteration.
+
+Với 2 metric này, scheduler cứ khoảng 1 giây chụp lại trạng thái hiện tại:
+
+- `vus`: hiện có bao nhiêu VU đang active
+- `vus_max`: hiện đã initialize bao nhiêu VU
+
+Core path:
+
+- `Scheduler.emitVUsAndVUsMax()` chạy ticker 1 giây
+- `vus = GetCurrentlyActiveVUsCount()`
+- `vus_max = GetInitializedVUsCount()`
+
+Còn riêng executor `per-vu-iterations` làm active VU thay đổi như sau:
+
+- lúc `Run()` bắt đầu, executor gọi `GetPlannedVU(..., true)` đúng `numVUs` lần
+- mỗi lần lấy VU với `true`, core tăng active VU count lên 1
+- mỗi VU chạy quota riêng: `iterations` vòng
+- VU nào chạy xong quota thì gọi `ReturnVU(..., true)`
+- `ReturnVU(..., true)` trả VU về pool và giảm active VU count xuống 1
+
+Vì vậy trong demo `10 VUs`, nếu 8 VU nhanh xong trước còn 2 VU chậm đang chạy, sample sau đó có thể là:
+
+```text
+vus = 2
+vus_max = 10
+```
+
+Dịch nghĩa:
+
+- `vus = 2`: tại thời điểm sample, còn 2 VU đang bận chạy script
+- `vus_max = 10`: tổng số VU đã init vẫn là 10
+
+Các metric khác lại được collect theo kiểu khác:
+
+| Metric | Với `per-vu-iterations`, sample sinh khi nào? |
+| --- | --- |
+| `vus` | scheduler chụp active VU count mỗi 1 giây |
+| `vus_max` | scheduler chụp initialized VU count mỗi 1 giây |
+| `iterations` | mỗi completed iteration tạo 1 sample Counter |
+| `iteration_duration` | mỗi completed iteration tạo 1 sample Trend thời gian chạy iteration |
+| `dropped_iterations` | khi hết `maxDuration` trước lúc VU start đủ quota còn lại |
+
+#### Executor khác nhau thì `vus` sample có khác không?
+
+Cách collect `vus`/`vus_max` giống nhau: scheduler vẫn chụp counter mỗi 1 giây.
+
+Nhưng mỗi executor mượn/trả VU khác nhau, nên giá trị được chụp có thể rất khác.
+
+| Executor | `vus` thường phản ánh gì? | `vus_max` thường phản ánh gì? |
+| --- | --- | --- |
+| `per-vu-iterations` | số VU còn đang chạy quota riêng; VU nhanh xong thì giảm | planned VUs đã init; thường bằng `vus` config đã scale |
+| `shared-iterations` | số VU còn đang bốc work từ tổng iterations chung | planned VUs đã init |
+| `constant-vus` | số VU đang loop trong `duration`; thường giữ gần config `vus` tới cuối duration | planned VUs đã init |
+| `ramping-vus` | số VU active đi lên/xuống theo ramp target | số VU đã init theo plan ramp |
+| `constant-arrival-rate` | số VU đang được dùng để kịp lịch start iteration | planned VUs, và có thể tăng nếu tạo unplanned VUs |
+| `ramping-arrival-rate` | số VU đang được dùng để kịp lịch start iteration thay đổi theo stage | planned VUs, và có thể tăng nếu tạo unplanned VUs |
+
+Tóm lại:
+
+- cơ chế ghi sample `vus`/`vus_max` là chung ở scheduler
+- hành vi active/initialized VUs là do executor quyết định
+- vì vậy đọc `vus` phải đặt trong executor đang chạy
+- riêng `per-vu-iterations`: `vus` giảm khi VU nhanh chạy xong quota và trả về pool
+
 ### 7.9. Đọc summary này như thế nào?
 
 Từ 2 dòng:
