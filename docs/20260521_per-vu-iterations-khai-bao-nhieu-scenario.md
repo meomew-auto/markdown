@@ -294,18 +294,35 @@ Default `gracefulStop` là `30s`.
 Nghĩa là nếu không khai báo `gracefulStop`, một scenario có thể vẫn được tính là còn giữ VU thêm 30s
 sau `maxDuration`, để iteration đang chạy có thời gian kết thúc.
 
+Đây là case **overlap do `gracefulStop`**, không phải overlap do phần chạy chính.
+
 Ví dụ:
 
 - scenario A: `vus = 3`, `maxDuration = 10s`, `gracefulStop = 30s`
 - scenario B: `vus = 2`, `startTime = 15s`
 
-Theo mắt người mới, A chạy 0s đến 10s, B chạy từ 15s, tưởng là không overlap.
+Nếu chỉ nhìn phần chạy chính:
+
+- A chạy chính từ `0s` đến `10s`
+- B bắt đầu ở `15s`
+- nhìn qua tưởng là không overlap
 
 Nhưng theo plan của core:
 
-- A reserve VUs đến `10s + 30s = 40s`
-- B bắt đầu ở 15s
-- khoảng 15s đến 40s có overlap trong execution plan
+- A vẫn reserve VUs đến `10s + 30s = 40s`
+- B bắt đầu ở `15s`
+- khoảng `15s` đến `40s` có overlap trong execution plan
+
+Nghĩa là trong đoạn `15s -> 40s`, scheduler vẫn phải tính:
+
+`A cần 3 VUs + B cần 2 VUs = 5 planned VUs`
+
+Nếu muốn case này thật sự không overlap:
+
+- đặt `gracefulStop: "0s"` cho A
+- khi đó A reserve VUs đến `10s`
+- B bắt đầu `15s`
+- không còn đoạn thời gian nào chồng lên nhau
 
 Vì vậy khi dạy học, nếu muốn ví dụ không overlap cho dễ tính, nên đặt `gracefulStop: "0s"`.
 
