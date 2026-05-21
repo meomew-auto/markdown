@@ -861,7 +861,8 @@ rate = 4
 timeUnit = 1s
 ```
 
-thì trong 1 giây, executor muốn có khoảng 4 lần bắt đầu iteration:
+Đây là ví dụ kiểu `constant-arrival-rate` local run đơn giản. Khi đó trong 1 giây, executor muốn
+có khoảng 4 lần bắt đầu iteration:
 
 ```text
 0.00s -> mốc 1
@@ -1175,18 +1176,19 @@ Với các executor kiểu đơn giản như `constant-vus`, `per-vu-iterations`
 ```text
 GetPlannedVU()
   -> Activate()
-  -> RunOnce()
+  -> RunOnce() x N tùy executor
   -> ReturnVU()
 ```
 
-Nghĩa là VU được mượn ra, chạy iteration, rồi khi executor xong việc với VU đó thì trả lại.
+Nghĩa là VU được mượn ra, có thể chạy một hay nhiều lần `RunOnce()` tùy executor, rồi khi
+executor xong việc với VU đó thì mới trả lại.
 
 Với arrival-rate executor thì khác một chút:
 
 ```text
 GetPlannedVU()
   -> Activate()
-  -> đưa VU vào pool nội bộ của arrival-rate executor
+  -> đưa VU vào pool nội bộ `activeVUPool` của arrival-rate executor
   -> tới từng mốc thời gian thì TryRunIteration()
   -> nếu VU đó nhận việc thì mới chạy RunOnce()
 ```
@@ -1566,7 +1568,7 @@ Riêng arrival-rate executors còn có pool nội bộ trong lúc chạy: VU đ�
 | Loại | Nghĩa | Khi nào có |
 |------|------|------------|
 | planned VUs | VU đã init sẵn | Scheduler Init phase |
-| active VUs | VU đang chạy thật | Execution phase |
+| active VUs | VU đang bận theo cách đếm active của executor; không phải lúc nào cũng chỉ gói gọn trong câu "VU đang chạy thật" | Execution phase |
 | unplanned VUs | VU tạo thêm khi thiếu | Giữa test run |
 
 ## 5. Slot và drop
@@ -1616,7 +1618,7 @@ Ví dụ:
 t = 20.0s: slot đến hạn, không có VU rảnh -> drop
 t = 20.0s: k6 bắt đầu tạo thêm 1 VU ở nền
 t = 22.0s: VU mới xong
-=> từ đây nó mới giúp được các slot sau
+=> từ đây nó mới có thể giúp các mốc tương lai sau khi init + Activate xong
 ```
 
 ### 5.3 Ramping arrival-rate khác gì?

@@ -45,7 +45,9 @@ vòng đời sẽ khác nhau:
         chạy tiếp                       -> slot đó bị drop
       - load phụ thuộc vào            - nếu còn quota, k6 có thể
         thời gian chạy iteration        init thêm unplanned VU ở nền
-                                      - VU tạo thêm chỉ giúp slot sau
+                                      - VU tạo thêm chỉ có thể giúp
+                                        các mốc tương lai sau khi
+                                        init + Activate xong
 ```
 
 Nói ngắn:
@@ -73,6 +75,7 @@ closed model:
   1 VU chạy xong request trước rồi mới chạy request sau
 
 open model:
+  ví dụ constant-arrival-rate local run:
   k6 hẹn sẵn slot 0.00s, 0.25s, 0.50s...
   nếu lúc đến slot không có VU rảnh -> slot đó bị drop
 ```
@@ -214,7 +217,7 @@ Phân biệt nhanh:
 | Loại | Nghĩa | Tạo khi nào? |
 |------|------|--------------|
 | `planned VUs` | VUs đã được chuẩn bị sẵn và nằm trong pool chờ dùng | Scheduler Init phase |
-| `active VUs` | VUs đang thật sự chạy iteration, hoặc đang kết thúc nốt job cũ | Execution phase |
+| `active VUs` | VUs đang bận theo logic đếm active của executor; closed model thường là VU đã mượn ra và chưa trả, arrival-rate thường là VU đang bận chạy một lần `RunOnce()` | Execution phase |
 | `unplanned VUs` | VUs có thể tạo thêm nếu lúc chạy bị thiếu VU | Giữa test run |
 
 Hiểu ngắn:
@@ -306,7 +309,7 @@ ta có 3 VU đã chuẩn bị sẵn
 
 ```text
 es.vus = pool VU đã init xong, đang chờ được executor lấy ra
-activeVUs = số VU đang chạy thật ở thời điểm đó
+activeVUs = số VU đang bận theo cách executor/core đang đếm active ở thời điểm đó
 ```
 
 ### Planned VU init time có tính vào `maxDuration` không?
@@ -532,15 +535,15 @@ iterations = 10
 Đầu test:
 
 ```text
-4 VU cùng lấy việc từ pool
+4 VU cùng lấy việc từ kho iteration chung của scenario
 ```
 
 Gần cuối:
 
 ```text
-pool chỉ còn 1 iteration cuối
+kho iteration chung chỉ còn 1 iteration cuối
 -> chỉ 1 VU đang chạy iteration cuối
--> 3 VU còn lại không còn việc để claim
+-> 3 VU còn lại không còn việc để lấy
 ```
 
 Về cuối test:
@@ -585,7 +588,7 @@ Theo core, nó chạy theo thứ tự này:
 3. nếu có VU rảnh -> slot đó chạy
 4. nếu không có VU rảnh -> slot đó bị bỏ, core ghi `dropped_iterations`
 5. sau khi bỏ slot đó, k6 mới xin tạo thêm unplanned VU ở nền
-6. VU mới xong sau đó chỉ giúp các slot tiếp theo, không cứu slot vừa bỏ
+6. VU mới chỉ có thể giúp các mốc tương lai sau khi init + Activate xong, không cứu slot vừa bỏ
 ```
 
 Nói thường:
@@ -612,7 +615,7 @@ và vẫn chưa có VU rảnh
 => các slot mới đó cũng có thể bị drop
 
 đến 22s VU mới xong
-=> từ lúc đó trở đi, nó mới có thể giúp các slot sau
+=> từ lúc đó trở đi, nó mới có thể giúp các mốc tương lai
 ```
 
 `drop` ở đây không phải là VU rớt. Nó là slot start bị bỏ vì tới đúng giờ mà chưa có VU rảnh.
@@ -645,14 +648,16 @@ arrival-rate đến giờ start iteration
   -> thử lấy VU rảnh từ pool local
   -> nếu có VU rảnh: chạy iteration
   -> nếu không có VU rảnh:
-       drop iteration hiện tại
+       bỏ mốc start hiện tại
+       chưa có JS iteration nào start ở mốc này
        nếu còn quota unplanned:
          signal tạo thêm VU
-         GetUnplannedVU()
-         InitializeNewVU()
-         scheduler.initVU()
-         Runner.NewVU()
-         activate VU mới
+         goroutine nền sau đó mới chạy:
+           GetUnplannedVU()
+           InitializeNewVU()
+           scheduler.initVU()
+           Runner.NewVU()
+           Activate() VU mới
 ```
 
 Code chính:
@@ -840,8 +845,8 @@ Flow cơ bản:
 ```text
 GetPlannedVU()  -> lấy VU khỏi es.vus pool
 Activate()      -> gắn RunContext/scenario/exec/env/tags, tạo ActiveVU wrapper
-RunOnce()       -> chạy default() hoặc function được config
-ReturnVU()      -> trả InitializedVU gốc về es.vus pool
+RunOnce() x N   -> chạy default() hoặc function được config, số lần tùy executor
+ReturnVU()      -> trả InitializedVU gốc về es.vus pool khi executor không cần VU đó nữa
 ```
 
 Với `per-vu-iterations`:

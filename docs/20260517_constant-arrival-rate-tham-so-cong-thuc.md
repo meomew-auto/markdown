@@ -179,10 +179,10 @@ Khi chạy, header k6 cũng hiện target này, ví dụ:
 iterations...........: N  X/s
 ```
 
-Dòng summary `X/s` là tốc độ **completed iterations trung bình trên runtime thực tế**.
+Dòng summary `X/s` là tốc độ **completed iterations trung bình trên `summary_runtime_base`**.
 
 `rate: 4` không có nghĩa là ở pha init core tự tính đủ tài nguyên để chắc chắn chạy được 4 iteration/s.
-Nó chỉ là target để scheduler tạo lịch start:
+Nó chỉ là target để arrival-rate executor tạo lịch start:
 
 ```text
 rate = 4, timeUnit = 1s
@@ -595,7 +595,8 @@ Không nên viết cứng công thức này như tuyệt đối cho mọi run ng
 scheduled_slots = rate * duration_seconds / timeUnit_seconds
 ```
 
-Lý do: mốc đầu thường start gần `t=0`, mốc sát boundary cuối phụ thuộc timing, và summary rate tính trên runtime thực tế. Khi phân tích output, ưu tiên đọc từ metric.
+Lý do: mốc đầu thường start gần `t=0`, mốc sát boundary cuối phụ thuộc timing, và summary rate tính
+trên `summary_runtime_base`. Khi phân tích output, ưu tiên đọc từ metric.
 
 Ví dụ 1, đủ VU:
 
@@ -1005,7 +1006,7 @@ Các case có thể xảy ra:
 | 2 | Không có VU rảnh, còn room `maxVUs` | drop mốc hiện tại, gửi tín hiệu tạo unplanned VU | mốc hiện tại mất, VU mới có thể giúp mốc sau |
 | 3 | Không có VU rảnh, đang tạo unplanned VU rồi | drop mốc hiện tại, không gửi thêm tín hiệu | chờ VU đang init xong, mốc hiện tại vẫn mất |
 | 4 | Không có VU rảnh, đã đạt `maxVUs` | drop mốc hiện tại, warning `Insufficient VUs` | các mốc sau cũng dễ drop nếu VU vẫn bận |
-| 5 | Unplanned VU tạo xong | activate VU và đưa vào pool | VU mới nhận được mốc start tương lai |
+| 5 | Unplanned VU tạo xong | activate VU và đưa vào pool nội bộ `activeVUPool` | VU mới nhận được mốc start tương lai |
 
 Ví dụ timeline với `preAllocatedVUs: 1`, `maxVUs: 4`:
 
@@ -1099,7 +1100,7 @@ Trước khi dùng công thức, phải tách rõ 3 đại lượng khác nhau:
 | Đại lượng | Ví dụ | Đơn vị | Nghĩa |
 | --- | --- | --- | --- |
 | `target_start_rate` / `lambda` | `2 iterations/s` | iterations/s | k6 muốn start bao nhiêu iteration mỗi giây theo lịch |
-| `iterations` rate trong summary | `13  1.729617/s` | completed iterations/s | trung bình mỗi giây có bao nhiêu iteration hoàn thành trên runtime thực tế |
+| `iterations` rate trong summary | `13  1.729617/s` | completed iterations/s | trung bình mỗi giây có bao nhiêu iteration hoàn thành trên `summary_runtime_base` |
 | `iteration_duration` | `avg=1.76s` | seconds/iteration | thời gian function chạy xong; thường là thời gian VU bận nếu không có `minIterationDuration` |
 
 `iteration_duration avg=1.76s` **không phải** là `1.76 iterations/s`. Nó là:
@@ -1872,7 +1873,8 @@ Không nên so sánh trực tiếp để kết luận đạt/không đạt targe
 
 ```text
 target 2.00 iterations/s là start rate trong regular duration 6s
-summary iterations/s là average completed iterations trên runtime thực tế tới lúc các iteration cuối finish
+summary iterations/s là average completed iterations trên `summary_runtime_base`, tức kéo tới lúc
+các iteration cuối finish
 ```
 
 Muốn kiểm tra arrival-rate có giữ được lịch start không, ưu tiên nhìn:
@@ -1896,7 +1898,7 @@ nên không kết luận “k6 hụt target start rate chỉ vì summary complet
 
 ```text
 k6 start được các mốc theo lịch, không drop
-summary completed rate thấp hơn vì runtime thực tế kéo dài tới lúc iteration cuối finish
+summary completed rate thấp hơn vì `summary_runtime_base` kéo dài tới lúc iteration cuối finish
 ```
 
 Runtime suy ra từ summary:

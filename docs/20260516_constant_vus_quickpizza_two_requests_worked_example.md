@@ -357,7 +357,8 @@ Không lấy:
 iterations_rate * vus
 ```
 
-vì `iterations_rate` đã là rate toàn scenario, không phải rate của 1 VU.
+vì `iterations_rate` đã là cột `/s` của Counter `iterations`, tức trung bình trên cả run, không
+phải rate của 1 VU.
 
 Với HTTP:
 

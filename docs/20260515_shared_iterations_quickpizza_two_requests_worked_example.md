@@ -717,6 +717,7 @@ QuickPizza này:
 
 ```text
 1 iteration ≈ 515ms = 0.515s
+đây là ví dụ giả định riêng để hiểu peak, không phải iteration của chính demo QuickPizza này
 
 per_vu_rate
   ≈ 1 / 0.515

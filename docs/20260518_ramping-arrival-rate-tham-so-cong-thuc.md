@@ -149,7 +149,7 @@ latency/error
 Phần này là để đối chiếu code thật. Nếu mới học, chỉ cần nhớ 4 ý:
 
 ```text
-scheduler chuẩn bị trước VU
+scheduler chuẩn bị trước VU và đợi `startTime`
 cal() sinh lịch start
 đến giờ thì TryRunIteration()
 thiếu VU => slot đó mất

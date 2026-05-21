@@ -1954,6 +1954,10 @@ scenario kết thúc khi VU chậm nhất chạy xong iterations_per_vu
 average_iteration_rate = completed_iterations / actual_scenario_runtime
 ```
 
+Ở đoạn overview này, công thức trên đang nói theo cách nhìn "runtime của scenario". Nếu bạn đọc cột
+`/s` trong summary Counter của k6 thì mẫu số phải hiểu là `summary_runtime_base`, không mặc định là
+`actual_scenario_runtime`.
+
 Các đại lượng trong công thức:
 
 ```text
@@ -2441,6 +2445,9 @@ câu trả lời tự nhiên là:
 ```text
 iterations/s = completed iterations / actual_scenario_runtime
 ```
+
+Đây là cách nhìn throughput theo runtime của scenario. Nếu suy từ summary Counter thì phải đổi mẫu
+số thành `summary_runtime_base`.
 
 Nếu mỗi iteration đại diện cho 1 business transaction:
 
