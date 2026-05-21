@@ -349,15 +349,143 @@ Nếu có scenario khác chạy sau:
 
 - scenario sau có thể mượn lại chính các VU đã được trả về
 
-## 11. Cheat sheet dạy học
+## 11. Nguyên tắc chồng lấn có áp dụng cho executor khác không?
 
-Nhớ theo 5 câu:
+Có, ở tầng scheduler thì nguyên tắc là chung cho tất cả scenario.
+
+Scheduler không chỉ xử lý riêng `per-vu-iterations`. Nó làm chung như sau:
+
+- đọc tất cả scenario
+- mỗi scenario tự báo nhu cầu VU của nó qua `GetExecutionRequirements()`
+- scheduler cộng nhu cầu của các scenario đang chồng lên nhau theo thời gian
+- scheduler tạo execution plan chung
+- planned VUs init trước = số `PlannedVUs` lớn nhất tại một thời điểm
+- max possible VUs = số `PlannedVUs + MaxUnplannedVUs` lớn nhất tại một thời điểm
+
+Core path:
+
+- `ScenarioConfigs.GetFullExecutionRequirements()`
+- cộng `PlannedVUs`
+- cộng `MaxUnplannedVUs`
+- `GetMaxPlannedVUs(executionPlan)`
+- `GetMaxPossibleVUs(executionPlan)`
+
+Khác nhau nằm ở chỗ mỗi executor báo nhu cầu khác nhau:
+
+| Executor | Planned VUs | Max unplanned VUs |
+| --- | ---: | ---: |
+| `per-vu-iterations` | `vus` | `0` |
+| `shared-iterations` | `vus` | `0` |
+| `constant-vus` | `vus` | `0` |
+| `ramping-vus` | thay đổi theo stages | `0` |
+| `constant-arrival-rate` | `preAllocatedVUs` | `maxVUs - preAllocatedVUs` |
+| `ramping-arrival-rate` | `preAllocatedVUs` | `maxVUs - preAllocatedVUs` |
+
+Vậy câu ngắn là:
+
+- tất cả executor đều đi qua nguyên tắc chồng lấn của scheduler
+- nhưng chỉ arrival-rate executors mới có phần `MaxUnplannedVUs` rõ trong execution plan
+
+### Nếu có unplanned VUs thì tính sao?
+
+Unplanned VUs không được init trước ở scheduler init phase.
+
+Chúng là phần "có thể tạo thêm khi đang chạy", thường gặp ở:
+
+- `constant-arrival-rate`
+- `ramping-arrival-rate`
+
+Ví dụ:
+
+```js
+export const options = {
+  scenarios: {
+    arrival_case: {
+      executor: "constant-arrival-rate",
+      rate: 100,
+      timeUnit: "1s",
+      duration: "30s",
+      preAllocatedVUs: 3,
+      maxVUs: 10,
+    },
+  },
+};
+```
+
+Core hiểu:
+
+- planned VUs = `preAllocatedVUs = 3`
+- max unplanned VUs = `maxVUs - preAllocatedVUs = 10 - 3 = 7`
+- max possible VUs = `3 + 7 = 10`
+
+Dịch đời thường:
+
+- scheduler init trước 3 VUs
+- trong lúc chạy, nếu 3 VUs không đủ để nhận các mốc start iteration, executor có thể xin thêm VU
+- tổng VUs của scenario này không được vượt `maxVUs = 10`
+
+Core path khi đang chạy:
+
+- arrival-rate executor gọi `GetUnplannedVU()`
+- nếu còn quota unplanned, core initialize VU mới ngay lúc đó
+- nếu hết quota unplanned, core thử lấy lại VU đã có trong pool
+
+### Ví dụ overlap có unplanned VUs
+
+Scenario A:
+
+- `constant-arrival-rate`
+- `preAllocatedVUs = 3`
+- `maxVUs = 10`
+- planned = 3
+- max unplanned = 7
+
+Scenario B:
+
+- `per-vu-iterations`
+- `vus = 5`
+- planned = 5
+- max unplanned = 0
+
+Nếu A và B chạy chồng lên nhau:
+
+- planned VUs cần init trước = `3 + 5 = 8`
+- max unplanned có thể tạo thêm = `7 + 0 = 7`
+- max possible VUs tại đoạn overlap = `8 + 7 = 15`
+
+Nếu A và B không chồng lên nhau:
+
+- lúc A chạy: max possible = `3 + 7 = 10`
+- lúc B chạy: max possible = `5 + 0 = 5`
+- max possible toàn test = `max(10, 5) = 10`
+
+Không được cộng bừa thành `10 + 5 = 15`, vì chúng không chạy cùng lúc.
+
+### Unplanned VUs có làm tăng `vus_max` không?
+
+Có thể có.
+
+`vus_max` là số VU đã initialize tại thời điểm sample. Nếu arrival-rate executor tạo thêm unplanned VUs
+giữa lúc chạy, `vus_max` có thể tăng trong summary/timeline.
+
+Nhưng cần nhớ:
+
+- planned VUs được init trước khi execution bắt đầu
+- unplanned VUs được init trong execution phase
+- init unplanned VU có thể tốn thời gian
+- unplanned VU chỉ giúp các mốc start sau khi nó init xong
+- mốc start đã tới hạn mà không có VU rảnh vẫn có thể bị `dropped_iterations`
+
+## 12. Cheat sheet dạy học
+
+Nhớ theo 6 câu:
 
 1. `per-vu-iterations` = mỗi VU chạy đúng N vòng.
 2. Một scenario có tổng planned iterations = `vus x iterations`.
 3. Nhiều scenario cùng lúc thì planned VUs được cộng theo thời điểm.
 4. Nhiều scenario lệch thời gian thì scheduler lấy số VUs lớn nhất tại một thời điểm.
-5. VUs nằm trong pool chung, executor mượn lúc chạy và trả về khi xong.
+5. Arrival-rate có thể có unplanned VUs: không init trước, chỉ có thể tạo thêm khi đang chạy.
+6. VUs nằm trong pool chung, executor mượn lúc chạy và trả về khi xong.
 
 Core map ngắn:
 
@@ -366,6 +494,8 @@ Core map ngắn:
 | Scenario cần bao nhiêu VU? | `PerVUIterationsConfig.GetExecutionRequirements()` |
 | Gộp nhiều scenario ở đâu? | `ScenarioConfigs.GetFullExecutionRequirements()` |
 | Init bao nhiêu planned VUs? | `GetMaxPlannedVUs(executionPlan)` |
+| Tối đa có thể lên bao nhiêu VUs nếu tính cả unplanned? | `GetMaxPossibleVUs(executionPlan)` |
 | Init planned VUs ở đâu? | `Scheduler.initVUsAndExecutors()` |
 | Executor lấy VU ở đâu? | `ExecutionState.GetPlannedVU()` |
+| Arrival-rate xin thêm unplanned VU ở đâu? | `ExecutionState.GetUnplannedVU()` |
 | Executor trả VU ở đâu? | `ExecutionState.ReturnVU()` |
