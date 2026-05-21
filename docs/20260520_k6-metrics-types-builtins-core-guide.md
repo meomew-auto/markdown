@@ -3365,11 +3365,42 @@ responseCallback: defaultExpectedStatuses.match
 200..399
 ```
 
+Nói ngắn:
+
+```text
+k6 không bắt server "phải trả đúng code"
+k6 chỉ hỏi: code này có nằm trong nhóm expected không?
+```
+
+Nếu request không ghi `responseCallback`, core dùng mặc định:
+
+```text
+200..399
+```
+
+Tức là:
+
+```text
+không khai báo expected
+  -> dùng default expected của k6
+```
+
 Nên mặc định:
 
 ```text
 status 200 -> expected=true  -> http_req_failed value=0
 status 500 -> expected=false -> http_req_failed value=1
+```
+
+Theo core, cách tạo sample của `http_req_failed` là:
+
+```text
+1. request kết thúc
+2. transport lấy statusCode thật của response
+3. gọi responseCallback(statusCode)
+4. nếu callback trả false -> failed=1
+5. nếu callback trả true  -> failed=0
+6. append sample http_req_failed với value đó
 ```
 
 Nhưng nếu chính request đó khai báo:
@@ -3385,6 +3416,18 @@ status 500 + expectedStatuses(500)
   -> expected=true
   -> http_req_failed value=0
 ```
+
+Nếu request bị timeout / lỗi mạng, core thường xem đó là không expected:
+
+```text
+statusCode = 0
+default callback = 200..399
+-> expected=false
+-> http_req_failed value=1
+```
+
+Vì vậy `http_req_failed` không có nghĩa là "server trả sai theo core".
+Nó có nghĩa là "response này không khớp expectation mà request/script đã đặt".
 
 Một chi tiết trong core: `transport.go` chỉ append `http_req_failed` khi
 `responseCallback != nil`.
