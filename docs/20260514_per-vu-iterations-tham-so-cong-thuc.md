@@ -866,6 +866,43 @@ Khi dùng để capacity planning hoặc trả lời câu hỏi kiểu "liệu t
 Nhưng nếu muốn tính throughput trung bình đã xảy ra trong một lần chạy, summary `iterations/s` và
 `avg` lại hữu ích hơn.
 
+Nói rõ hơn: đây không phải một "luật cố định" áp dụng y hệt cho mọi executor.
+Nó là cách chọn số đo theo câu hỏi đang hỏi.
+
+Nếu câu hỏi là:
+
+`lần chạy vừa rồi trung bình đạt bao nhiêu?`
+
+thì dùng số đã xảy ra:
+
+- `iterations/s` trong summary
+- `http_reqs/s` nếu đang hỏi RPS HTTP
+- `iteration_duration.avg` nếu muốn biết trung bình một iteration mất bao lâu
+
+Nếu câu hỏi là:
+
+`lần chạy sau nên chuẩn bị bao nhiêu VU?`
+
+hoặc:
+
+`liệu có kịp xong trước maxDuration không?`
+
+thì dùng `p90`/`p95` thường hợp hơn, vì nó không giả định mọi iteration đều chạy đẹp như trung bình.
+
+Áp dụng theo nhóm executor:
+
+| Nhóm executor | Dùng `p90`/`p95` để làm gì? | Không nên hiểu nhầm |
+| --- | --- | --- |
+| `per-vu-iterations` | Ước lượng VU chậm có kịp chạy đủ `iterations` trước `maxDuration` không. | `p95` không phải throughput đã xảy ra. |
+| `shared-iterations` | Ước lượng tổng work có nguy cơ kéo dài quá `maxDuration` không. | Work được chia động, không phải mỗi VU có quota bằng nhau. |
+| `constant-vus`, `ramping-vus` | Ước lượng capacity theo kiểu `iterations/s ≈ active_vus / W`. Với dự báo an toàn, lấy `W = p90/p95`. | Summary `iterations/s` vẫn là số thực tế đã chạy, không cần tự tính lại nếu chỉ đọc kết quả. |
+| `constant-arrival-rate`, `ramping-arrival-rate` | Ước lượng cần bao nhiêu VU để kịp rate: `required_vus ≈ rate * W`. Với dự báo an toàn, lấy `W = p90/p95`. | Rate start iteration do lịch arrival-rate điều khiển, không phải do VU tự loop. |
+
+Tóm lại:
+
+- đọc kết quả đã xảy ra: ưu tiên summary rate/count/avg
+- dự báo hoặc sizing: ưu tiên p90/p95 + hệ số an toàn nếu workload dao động
+
 ### Core tính `min`, `max`, `med`, `p(90)`, `p(95)` như nào?
 
 Với `iteration_duration`, core dùng `TrendSink`.
