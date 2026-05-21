@@ -2422,6 +2422,23 @@ tổng HTTP request = 2 iterations * 2 request = 4 request
 
 Kết quả cần nhìn:
 
+Trong riêng nhóm HTTP, demo này thể hiện đủ các type thật sự có trong HTTP metrics:
+
+```text
+Counter -> http_reqs
+Rate    -> http_req_failed
+Trend   -> http_req_duration, http_req_waiting, http_req_sending...
+Gauge   -> không có trong nhóm HTTP; Gauge thường thấy ở execution metrics như vus, vus_max
+```
+
+Ngoài ra, vì demo có gửi HTTP request nên phần `NETWORK` cũng có:
+
+```text
+data_sent, data_received
+  = Counter có Contains là Data
+  = cộng số byte, không phải cộng số request
+```
+
 ```text
 http_reqs
   = Counter
