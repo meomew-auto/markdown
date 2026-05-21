@@ -234,7 +234,56 @@ Scheduler chỉ cần init số lớn nhất tại một thời điểm:
 
 Lúc `first_case` xong, VUs được trả về pool. Sau đó `second_case` có thể mượn lại VUs từ pool đó.
 
-## 8. Vì sao `gracefulStop` ảnh hưởng đến init VUs?
+## 8. Case 3: hai scenario chồng lấn một phần
+
+Đây là case dễ nhầm nhất khi tính planned VUs.
+
+Ví dụ:
+
+```js
+export const options = {
+  scenarios: {
+    first_case: {
+      executor: "per-vu-iterations",
+      exec: "firstFlow",
+      vus: 3,
+      iterations: 2,
+      maxDuration: "20s",
+      gracefulStop: "0s",
+    },
+    second_case: {
+      executor: "per-vu-iterations",
+      exec: "secondFlow",
+      vus: 2,
+      iterations: 2,
+      startTime: "10s",
+      maxDuration: "20s",
+      gracefulStop: "0s",
+    },
+  },
+};
+```
+
+Cách đọc theo timeline:
+
+- từ `0s` đến `10s`: chỉ `first_case` chạy, cần 3 VUs
+- từ `10s` đến `20s`: `first_case` và `second_case` cùng chạy, cần `3 + 2 = 5 VUs`
+- từ `20s` đến `30s`: chỉ `second_case` còn chạy, cần 2 VUs
+
+Vậy scheduler init trước:
+
+`5 planned VUs`
+
+Không phải vì cả test có tổng `3 + 2` scenario VUs, mà vì có một đoạn thời gian hai scenario
+chồng lên nhau và cùng cần VU.
+
+Đọc nhanh:
+
+- không overlap: lấy max theo từng đoạn thời gian
+- overlap một phần: đoạn overlap phải cộng VUs
+- overlap hoàn toàn: cũng cộng VUs
+
+## 9. Vì sao `gracefulStop` ảnh hưởng đến init VUs?
 
 Trong `per-vu-iterations`, core báo nhu cầu VU kéo dài tới:
 
@@ -260,7 +309,7 @@ Nhưng theo plan của core:
 
 Vì vậy khi dạy học, nếu muốn ví dụ không overlap cho dễ tính, nên đặt `gracefulStop: "0s"`.
 
-## 9. VU có thuộc cố định về scenario không?
+## 10. VU có thuộc cố định về scenario không?
 
 Không.
 
@@ -283,7 +332,7 @@ Nếu có scenario khác chạy sau:
 
 - scenario sau có thể mượn lại chính các VU đã được trả về
 
-## 10. Cheat sheet dạy học
+## 11. Cheat sheet dạy học
 
 Nhớ theo 5 câu:
 
