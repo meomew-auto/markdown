@@ -263,19 +263,40 @@ Những điểm cần lưu ý thêm khi đọc core:
   - `vus`: số người làm việc
   - `iterations`: số vòng mỗi người phải làm
 
-  Khi `execution tuple` chia test ra nhiều phần, mỗi phần chỉ nhận một lát của cùng một test gốc.
-  `A` và `B` dưới đây không phải 2 test riêng. Chúng là 2 lát của cùng một test, nên phải cộng lại
-  để xem tổng work của cả test có còn đúng không.
+  Bình thường chạy local bằng `k6 run script.js` thì không cần nghĩ đến phần này. Khi đó k6 chạy
+  toàn bộ test trên một process, hiểu nôm na là nhận đủ `0 -> 1` của bài test.
 
-  - test gốc: `10 VUs × 20 iterations/VU = 200 iterations`
-  - chia làm 2 phần bằng nhau:
-    - phần A: `5 VUs × 20 iterations/VU = 100 iterations`
-    - phần B: `5 VUs × 20 iterations/VU = 100 iterations`
-  - cộng A và B lại: `200 iterations`
-  - nếu scale cả `vus` lẫn `iterations`:
-    - phần A: `5 VUs × 10 iterations/VU = 50 iterations`
-    - phần B: `5 VUs × 10 iterations/VU = 50 iterations`
-  - cộng A và B lại: `100 iterations`
+  Việc "chia test" xảy ra khi chạy cloud/distributed, hoặc khi tự truyền option kiểu:
+
+  `k6 run --execution-segment 0:1/2 --execution-segment-sequence 0,1/2,1 script.js`
+
+  Lệnh trên nghĩa là process này chỉ chạy nửa đầu của test. Nếu có process thứ hai chạy:
+
+  `k6 run --execution-segment 1/2:1 --execution-segment-sequence 0,1/2,1 script.js`
+
+  thì process thứ hai chạy nửa sau. Hai process này ghép lại mới thành 100% test gốc.
+
+  Trong core, scheduler đọc `options.ExecutionSegment` và `options.ExecutionSegmentSequence`, rồi tạo
+  `ExecutionTuple`. Sau đó executor gọi `GetVUs(et)`. Với `per-vu-iterations`, `GetVUs(et)` scale
+  `vus`, còn `GetIterations()` trả nguyên `iterations`.
+
+  Ví dụ test gốc: `10 VUs x 20 iterations/VU = 200 iterations`.
+
+  Nếu chia làm 2 phần bằng nhau:
+
+  Phần A nhận nửa đầu: `5 VUs x 20 iterations/VU = 100 iterations`.
+
+  Phần B nhận nửa sau: `5 VUs x 20 iterations/VU = 100 iterations`.
+
+  Cộng A và B lại: `100 + 100 = 200 iterations`. Tổng vẫn đúng bằng test gốc.
+
+  Nếu scale cả `vus` lẫn `iterations`, mỗi phần sẽ thành:
+
+  Phần A: `5 VUs x 10 iterations/VU = 50 iterations`.
+
+  Phần B: `5 VUs x 10 iterations/VU = 50 iterations`.
+
+  Cộng A và B lại chỉ còn: `50 + 50 = 100 iterations`. Tổng bị thiếu một nửa.
 
   Đó là lý do core chỉ scale `vus`, không scale `iterations`.
 
