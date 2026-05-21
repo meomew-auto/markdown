@@ -2159,6 +2159,44 @@ chính xác 95% request thật nhanh hơn 2.79s
 Vùng gần cuối của phân phối đã bị request `5000ms` kéo lên.
 Với chỉ 10 sample, số `p(95)` này là số nội suy theo cách k6 tính trong core, không phải duration thật của một request cụ thể.
 
+Vì vậy nếu dùng demo này để đánh giá hệ thống thật thì chưa chuẩn.
+Lý do không phải k6 tính sai, mà là bộ sample quá ít và có một request quá lâu.
+Một request `5000ms` trong chỉ 10 request sẽ làm các số vùng đuôi dao động rất mạnh.
+
+Demo này chỉ nên dùng để học cách đọc metric:
+
+```text
+avg bị kéo lên
+med vẫn cho thấy đa số request nhanh
+p90/p95 bắt đầu bị ảnh hưởng bởi đuôi chậm
+max chỉ thẳng ra request chậm nhất
+```
+
+Muốn kết luận performance thật, cần chạy đủ lâu hơn để có nhiều sample hơn.
+Ví dụ thay vì 10 request, có thể cần vài trăm, vài nghìn, hoặc nhiều hơn tùy hệ thống.
+Khi đó `p(95)` ổn định hơn và câu "khoảng 95% request nằm dưới ngưỡng này" mới có ý nghĩa thực tế hơn.
+
+Ngoài ra không nên lấy mỗi `p(95)` để kết luận.
+Nếu nghiệp vụ không chấp nhận bất kỳ request nào quá chậm, phải nhìn thêm:
+
+```text
+max
+p(99)
+http_req_failed
+count/http_reqs
+```
+
+Ví dụ:
+
+```text
+p(95)=300ms
+max=10s
+```
+
+Không thể kết luận hệ thống ổn chỉ vì `p(95)` đẹp.
+Dòng này nói rằng phần lớn request có thể ổn, nhưng vẫn có request bị treo tới `10s`.
+Nếu request treo đó là checkout, payment, login, hoặc API quan trọng, nó vẫn là vấn đề cần điều tra.
+
 Nói đời thường:
 
 ```text
