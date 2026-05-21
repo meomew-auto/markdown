@@ -3502,7 +3502,7 @@ Trail.SaveSamples()
 Metric này thường chỉ có ý nghĩa rõ với HTTPS.
 Nếu là HTTP thường, hoặc connection HTTPS đã được reuse, giá trị có thể bằng `0`.
 
-Demo dùng URL `https://httpbin.org/...` và `noConnectionReuse: true`, nên dễ thấy:
+Demo dùng URL `https://quickpizza.grafana.com/api/status/...` và `noConnectionReuse: true`, nên dễ thấy:
 
 ```text
 http_req_tls_handshaking
@@ -3719,15 +3719,15 @@ function traceResponse(label, response) {
 }
 
 export default function () {
-  const ok = http.get("https://httpbin.org/status/200", {
+  const ok = http.get("https://quickpizza.grafana.com/api/status/200", {
     tags: { endpoint: "status_200" },
   });
 
-  const failByDefault = http.get("https://httpbin.org/status/500", {
+  const failByDefault = http.get("https://quickpizza.grafana.com/api/status/500", {
     tags: { endpoint: "status_500_default" },
   });
 
-  const expected500 = http.get("https://httpbin.org/status/500", {
+  const expected500 = http.get("https://quickpizza.grafana.com/api/status/500", {
     tags: { endpoint: "status_500_expected" },
     responseCallback: http.expectedStatuses(500),
   });
@@ -3768,9 +3768,9 @@ Demo này cố tình làm rất nhỏ:
 iterations = 2
 mỗi iteration gọi 3 HTTP request
 
-request 1 -> https://httpbin.org/status/200
-request 2 -> https://httpbin.org/status/500, dùng default expectedStatuses
-request 3 -> https://httpbin.org/status/500, nhưng khai báo expectedStatuses(500)
+request 1 -> https://quickpizza.grafana.com/api/status/200
+request 2 -> https://quickpizza.grafana.com/api/status/500, dùng default expectedStatuses
+request 3 -> https://quickpizza.grafana.com/api/status/500, nhưng khai báo expectedStatuses(500)
 
 tổng HTTP request = 2 iterations * 3 request = 6 request
 ```
@@ -3780,11 +3780,11 @@ Mỗi dòng log là một request, và nó show trực tiếp các timing lấy 
 `response.timings`:
 
 ```text
-[metric-trace] endpoint=status_200 status=200 blocked=822.88ms connecting=264.07ms tls_handshaking=543.36ms sending=0.50ms waiting=262.88ms receiving=0.51ms duration=263.89ms sending+waiting+receiving=263.89ms
+[metric-trace] endpoint=status_200 status=200 blocked=560.50ms connecting=243.42ms tls_handshaking=259.86ms sending=0.00ms waiting=247.30ms receiving=0.00ms duration=247.30ms sending+waiting+receiving=247.30ms
 
-[metric-trace] endpoint=status_500_default status=500 blocked=781.04ms connecting=258.45ms tls_handshaking=521.55ms sending=1.06ms waiting=1185.22ms receiving=0.00ms duration=1186.27ms sending+waiting+receiving=1186.27ms
+[metric-trace] endpoint=status_500_default status=500 blocked=508.17ms connecting=250.92ms tls_handshaking=257.25ms sending=0.58ms waiting=251.40ms receiving=0.51ms duration=252.49ms sending+waiting+receiving=252.49ms
 
-[metric-trace] endpoint=status_500_expected status=500 blocked=786.12ms connecting=261.90ms tls_handshaking=524.22ms sending=0.00ms waiting=260.91ms receiving=0.00ms duration=260.91ms sending+waiting+receiving=260.91ms
+[metric-trace] endpoint=status_500_expected status=500 blocked=494.85ms connecting=247.03ms tls_handshaking=247.82ms sending=0.00ms waiting=246.34ms receiving=0.00ms duration=246.34ms sending+waiting+receiving=246.34ms
 ```
 
 Số trên máy bạn sẽ khác.

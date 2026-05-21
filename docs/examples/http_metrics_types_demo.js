@@ -52,15 +52,15 @@ function traceResponse(label, response) {
 }
 
 export default function () {
-  const ok = http.get("https://httpbin.org/status/200", {
+  const ok = http.get("https://quickpizza.grafana.com/api/status/200", {
     tags: { endpoint: "status_200" },
   });
 
-  const failByDefault = http.get("https://httpbin.org/status/500", {
+  const failByDefault = http.get("https://quickpizza.grafana.com/api/status/500", {
     tags: { endpoint: "status_500_default" },
   });
 
-  const expected500 = http.get("https://httpbin.org/status/500", {
+  const expected500 = http.get("https://quickpizza.grafana.com/api/status/500", {
     tags: { endpoint: "status_500_expected" },
     responseCallback: http.expectedStatuses(500),
   });
