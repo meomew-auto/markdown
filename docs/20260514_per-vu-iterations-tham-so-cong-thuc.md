@@ -251,45 +251,37 @@ không sang lấy bài của VU chậm
 
 Những điểm cần lưu ý thêm khi đọc core:
 
-- **default config**:
-  ```text
-  vus = 1
-  iterations = 1
-  maxDuration = 10m
-  ```
+- **default config**: `vus = 1`, `iterations = 1`, `maxDuration = 10m`
 
-- **validate**:
-  ```text
-  vus > 0
-  iterations > 0
-  maxDuration >= minDuration
-  ```
+- **validate**: `vus > 0`, `iterations > 0`, `maxDuration >= minDuration`
 
 - **iterations của executor này là UNSCALED theo VU**:
   comment trong core nói rất rõ: chỉ scale số VU, không scale `iterations` theo cùng cách, để tránh hiệu ứng
   nhân đôi kiểu quadratic.
 
-  Nghĩa là:
+  Nghĩa đơn giản:
+  - `vus` = số người làm việc
+  - `iterations` = số vòng mỗi người phải làm
 
-  | Khái niệm | Nghĩa |
-  | --- | --- |
-  | `vus` | số người |
-  | `iterations` | số vòng mỗi người phải làm |
+  Khi `execution tuple` chia test ra nhiều phần, mỗi phần chỉ nhận một lát của cùng một test gốc.
+  `A` và `B` trong ví dụ dưới không phải 2 test riêng. Chúng là 2 phần của cùng một test, nên phải
+  cộng lại để xem tổng work của cả test có còn đúng không.
 
-  Khi execution tuple chia test ra nhiều phần, k6 chỉ chia `vus`.
-  `iterations` giữ nguyên.
+  Ví dụ:
+  ```text
+  test gốc: 10 VUs × 20 iterations/VU = 200 iterations
 
-  Ví dụ đọc nhanh:
+  chia làm 2 phần bằng nhau:
+    phần A: 5 VUs × 20 iterations/VU = 100 iterations
+    phần B: 5 VUs × 20 iterations/VU = 100 iterations
+    A + B = 200 iterations
 
-  | Case | vus | iterations | total work |
-  | --- | ---: | ---: | ---: |
-  | gốc | 10 | 20 | 200 |
-  | phần A | 5 | 20 | 100 |
-  | phần B | 5 | 20 | 100 |
-  | nếu scale cả 2 | 5 | 10 | 50 |
+  nếu scale cả vus lẫn iterations:
+    phần A: 5 VUs × 10 iterations/VU = 50 iterations
+    phần B: 5 VUs × 10 iterations/VU = 50 iterations
+    A + B = 100 iterations
+  ```
 
-  Hai phần A + B vẫn ra `200`.
-  Nếu scale cả `vus` lẫn `iterations`, tổng chỉ còn `100`.
   Đó là lý do core chỉ scale `vus`, không scale `iterations`.
 
 - **planned VUs được reserve sẵn**:
