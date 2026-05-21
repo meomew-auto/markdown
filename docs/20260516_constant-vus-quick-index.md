@@ -105,7 +105,7 @@ completed_iterations = summary iterations count
 | `t_i` | thời gian một iteration của VU i giữ VU bận | ước lượng từ `iteration_duration`, cộng caveat `minIterationDuration` |
 | `per_vu_rate_i` | 1 VU đó trung bình chạy được bao nhiêu iteration/s | `1 / t_i` |
 | `peak_iteration_rate_if_all_vus_active` | nếu mọi VU đều đang bận chạy thì cả nhóm đẩy được bao nhiêu iteration/s | cộng các `1 / t_i` |
-| `average_iteration_rate` | tốc độ iteration trung bình thật của run | summary `iterations...: count rate/s` hoặc `count / summary_runtime_base` |
+| `average_iteration_rate` | tốc độ iteration trung bình nhìn từ Counter summary của run | summary `iterations...: count rate/s` hoặc `count / summary_runtime_base` |
 | `summary_runtime_base` | thời gian mà Counter summary dùng làm mẫu số cho cột `/s` | `Counter count / Counter rate` |
 
 Điểm dễ nhầm nhất:

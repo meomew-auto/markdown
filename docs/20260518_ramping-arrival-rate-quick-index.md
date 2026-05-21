@@ -64,6 +64,42 @@ average_target_rate = nhịp target trung bình của cả timeline
 `target_http_reqs_rate_if_no_drop` là cách ước lượng theo lịch target nếu không rơi slot và mỗi
 iteration luôn đi cùng một code path.
 
+Mini-example ngay tại đây:
+
+```text
+startRate = 4/s
+stages:
+  2s ramp 4 -> 8
+  2s ramp 8 -> 2
+  2s ramp 2 -> 6
+
+scheduled_iterations_total
+  = 2*(4+8)/2 + 2*(8+2)/2 + 2*(2+6)/2
+  = 12 + 10 + 8
+  = 30 slot start lý thuyết
+
+average_target_rate
+  = 30 / 6s
+  = 5 starts/s
+```
+
+Nếu summary cuối in:
+
+```text
+iterations........: 28   4.62/s
+```
+
+thì đọc là:
+
+```text
+5 starts/s
+  = nhịp target trung bình của lịch open model
+
+4.62/s
+  = completed iteration rate trung bình mà Counter summary in ra
+  = có thể thấp hơn target vì drop slot, interrupt, hoặc đuôi finish của iteration
+```
+
 Đọc từng biến:
 
 | Biến / biểu thức | Nghĩa đời thường | Lấy ở đâu |

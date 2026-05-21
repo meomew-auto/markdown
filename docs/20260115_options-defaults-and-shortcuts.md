@@ -23,6 +23,9 @@ stages
 vus-only
 ```
 
+Nhưng khi đọc code, đừng hiểu đây là 4 nhánh chạy "song song". `DeriveScenariosFromShortcuts()`
+đi theo **thứ tự switch** rất cụ thể. Nhánh nào match trước thì dừng ở đó.
+
 ---
 
 ## 2. Code Flow
@@ -30,7 +33,7 @@ vus-only
 ```
 Script Load → Parse Options → DeriveScenariosFromShortcuts()
                                         ↓
-                              Check which shortcut is used
+                              Check shortcut theo thứ tự switch
                                         ↓
                     ┌──────────────────────────────────────────┐
                     │                                          │
@@ -48,6 +51,29 @@ Script Load → Parse Options → DeriveScenariosFromShortcuts()
                                         ▼
                               per-vu-iterations
                               (1 VU, 1 iteration)
+```
+
+Đọc đời thường theo đúng thứ tự:
+
+```text
+1. có iterations?
+   -> shared-iterations
+
+2. nếu không, có duration?
+   -> constant-vus
+
+3. nếu không, có stages?
+   -> ramping-vus
+
+4. nếu không, có mỗi vus?
+   -> shared-iterations với vus = N, iterations = N
+   -> nếu đồng thời có scenarios thì root vus sẽ override scenarios và k6 log warning
+
+5. nếu không, có scenarios không rỗng?
+   -> dùng đúng scenarios user khai báo
+
+6. còn lại:
+   -> fallback về per-vu-iterations mặc định 1 VU, 1 iteration
 ```
 
 ---
@@ -134,7 +160,7 @@ const DefaultScenarioName = "default"
 | `duration` | `constant-vus` | `{ duration: '30s' }` |
 | `stages` | `ramping-vus` | `{ stages: [...] }` |
 | `vus` only | `shared-iterations` với `vus = N`, `iterations = N` | `{ vus: 10 }` |
-| `scenarios` | As defined | `{ scenarios: {...} }` |
+| `scenarios` không rỗng | dùng đúng scenarios user khai báo | `{ scenarios: {...} }` |
 | **None** | `per-vu-iterations` (1 VU, 1 iter) | No options |
 
 ---
@@ -220,6 +246,28 @@ options = { vus: 10 }
 => iterations = 10
 ```
 
+Nhưng có một case dễ nhầm:
+
+```js
+export const options = {
+  vus: 10,
+  scenarios: {
+    a: { executor: "constant-vus", vus: 1, duration: "10s" },
+  },
+};
+```
+
+Theo code hiện tại:
+
+```text
+nhánh vus-only vẫn match
+=> root vus override scenarios
+=> k6 log warning: `vus=10` overrides scenarios configuration
+```
+
+Nói cách khác: có root `vus` không có nghĩa là `scenarios` chắc chắn được ưu tiên. Trong switch hiện
+tại, nhánh `vus` đứng trước nhánh `len(opts.Scenarios) > 0`.
+
 ---
 
 ## 8. Conflict Errors
@@ -242,7 +290,17 @@ if len(opts.Stages) > 0 {
 
 ---
 
-## 9. Ví Dụ Tương Đương
+## 9. Ví Dụ Quy Đổi
+
+Ở phần này mình không dùng chữ "tương đương" theo nghĩa tuyệt đối nữa, vì shortcut thường chỉ set
+một phần field; ngoài ra core còn áp dụng thêm các default ngầm từ `BaseConfig` và config executor.
+
+Hiểu đúng hơn:
+
+```text
+block dưới đây là dạng dài tối thiểu mà shortcut suy ra
+các default ngầm như gracefulStop, exec, maxDuration vẫn tiếp tục được áp dụng từ core
+```
 
 ### Script không có options
 ```javascript
@@ -251,7 +309,7 @@ export default function() {
 }
 ```
 
-Tương đương với:
+Dạng đầy đủ dễ nhìn:
 ```javascript
 export const options = {
     scenarios: {
@@ -265,6 +323,17 @@ export const options = {
 };
 ```
 
+Đây là case ít gây nhầm nhất vì block default đã gần như đầy đủ:
+
+```text
+executor = per-vu-iterations
+vus = 1
+iterations = 1
+maxDuration = 10m
+gracefulStop = 30s
+exec mặc định = default
+```
+
 ### Script với shortcuts
 ```javascript
 export const options = {
@@ -273,7 +342,7 @@ export const options = {
 };
 ```
 
-Tương đương với:
+Dạng dài tối thiểu k6 suy ra:
 ```javascript
 export const options = {
     scenarios: {
@@ -286,6 +355,13 @@ export const options = {
 };
 ```
 
+Và khi chạy, core còn áp dụng thêm default ngầm:
+
+```text
+gracefulStop = 30s từ BaseConfig
+exec mặc định = default
+```
+
 ### Script chỉ có `vus`
 ```javascript
 export const options = {
@@ -293,7 +369,7 @@ export const options = {
 };
 ```
 
-Tương đương với:
+Dạng dài tối thiểu k6 suy ra:
 ```javascript
 export const options = {
     scenarios: {
@@ -304,6 +380,14 @@ export const options = {
         },
     },
 };
+```
+
+Và khi chạy, core còn áp dụng thêm default ngầm:
+
+```text
+maxDuration = 10m từ shared-iterations config
+gracefulStop = 30s từ BaseConfig
+exec mặc định = default
 ```
 
 ---

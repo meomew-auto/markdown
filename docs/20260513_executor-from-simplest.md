@@ -121,7 +121,7 @@ Default quan trọng:
 
 ---
 
-## 4. Vì sao đây là executor đơn giản nhất?
+## 4. Vì sao đây là case mở đầu dễ đọc nhất?
 
 `per-vu-iterations` là closed model rất dễ đọc:
 
@@ -1854,13 +1854,18 @@ k6 core có metric `iterations`, nhưng summary mặc định chỉ in rate trun
 iterations...........: 200 19.98/s
 ```
 
-Dòng `19.98/s` là:
+Dòng `19.98/s` nên đọc chính xác là:
 
 ```text
-completed iterations / total test duration
+completed_iterations / summary_runtime_base
 ```
 
-Nó là **average iteration rate**, không phải peak.
+`summary_runtime_base` là mẫu số mà Counter summary dùng cho cột `/s`.
+Trong demo 1 scenario sạch, nó thường gần với thời gian run bạn đang nhìn thấy, nên người mới rất
+dễ lỡ miệng gọi là "total test duration". Nhưng khi cắt nghĩa công thức thì nên giữ tên đúng là
+`summary_runtime_base`.
+
+Nó là **average iteration rate** của Counter summary, không phải peak.
 
 Muốn nhìn peak gần đúng bằng output mặc định, có thể lấy delta từ progress log từng giây:
 
@@ -1885,7 +1890,7 @@ in sẵn một metric tên peak.
 Tóm lại:
 
 ```text
-iterations/s trong summary = k6 core tính trung bình toàn test
+iterations/s trong summary = k6 core tính completed_iterations / summary_runtime_base
 peak_iteration_rate_if_all_vus_active = công thức mình tự tính để dự đoán peak
 ```
 
@@ -2520,11 +2525,18 @@ for (let vu = 1; vu <= vus; vu++) {
 }
 ```
 
-Với `constant-vus`, có thể hình dung:
+Với `constant-vus`, nên hình dung là nhiều VU song song, mỗi VU tự lặp tới khi hết `duration`:
 
 ```js
-while (chưa hết duration) {
-  default(); // 1 iteration
+for (let vu = 1; vu <= vus; vu++) {
+  go(function virtualUser() {
+    while (chưa hết regular duration) {
+      default(); // 1 iteration
+    }
+
+    // nếu iteration cuối đã start trước khi hết duration
+    // nó có thể được chạy nốt trong gracefulStop
+  });
 }
 ```
 

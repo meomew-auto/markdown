@@ -556,9 +556,6 @@ iteration_duration
 http_req_duration avg=260.76ms
   trung bình một HTTP request mất 260.76ms
 
-http_req_duration p(95)=262.07ms
-  khoảng 95% HTTP request mất <= 262.07ms
-
 iteration_duration avg=1.77s
   trung bình một iteration mất 1.77s
 
@@ -798,7 +795,8 @@ Không lấy:
 
 iterations_rate * vus
 
-vì iterations_rate đã là tốc độ trung bình của toàn scenario.
+vì `iterations_rate` ở đây đã là completed-iteration rate trung bình của Counter summary trên
+`summary_runtime_base`.
 
 http_reqs_rate
   = 24 / 5.3208

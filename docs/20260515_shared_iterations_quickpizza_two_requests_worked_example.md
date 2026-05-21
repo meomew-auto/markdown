@@ -336,7 +336,8 @@ Không lấy:
 
 iterations_rate * vus
 
-vì iterations_rate đã là tốc độ trung bình của toàn scenario.
+vì `iterations_rate` ở đây đã là completed-iteration rate trung bình của Counter summary trên
+`summary_runtime_base`.
 
 http_reqs_rate
   = 24 / 5.1785

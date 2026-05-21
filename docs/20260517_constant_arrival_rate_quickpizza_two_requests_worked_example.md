@@ -264,7 +264,7 @@ checks_total.......: 26      3.459233/s
 
 Khớp.
 
-### 5.4. Runtime thật của scenario
+### 5.4. Mẫu số `summary_runtime_base` của Counter summary
 
 Từ summary:
 
@@ -273,7 +273,7 @@ iterations = 13
 iterations_rate = 1.729617/s
 ```
 
-Suy ra runtime mà k6 dùng để tính rate:
+Suy ra mẫu số mà k6 dùng để tính cột `/s` của Counter summary:
 
 ```text
 summary_runtime_base ~= completed_iterations / iterations_rate
@@ -478,9 +478,9 @@ nhỏ hơn target `2 iterations/s`, rất dễ có `dropped_iterations`.
 Vì 1 iteration có 2 HTTP requests:
 
 ```text
-estimated_http_req_rate_if_no_drop ~= lambda * http_requests_per_iteration
-                                   ~= 2 * 2
-                                   ~= 4 HTTP requests/s trong regular duration
+target_http_req_rate_if_no_drop ~= lambda * http_requests_per_iteration
+                                ~= 2 * 2
+                                ~= 4 HTTP requests/s trong regular duration
 ```
 
 Đây là ước lượng từ lịch start iteration, không phải một scheduler riêng cho từng HTTP request. Nó

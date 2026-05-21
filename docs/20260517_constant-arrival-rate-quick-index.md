@@ -107,7 +107,9 @@ drop_rate ~= max(0, lambda - capacity_with_M_vus)
 
 observed_scheduled_slots ~= completed_iterations + interrupted_iterations + dropped_iterations
 
-estimated_http_req_rate_if_no_drop ~= lambda * http_requests_per_iteration
+target_http_req_rate_if_no_drop ~= lambda * http_requests_per_iteration
+
+observed_http_req_rate_from_summary ~= http_reqs / summary_runtime_base
 ```
 
 Trong đó:
@@ -119,6 +121,16 @@ có minIterationDuration thì dùng max(iteration_duration, minIterationDuration
 M = số VU đang giả sử có để nhận việc trong công thức capacity
 http_requests_per_iteration = số request mỗi iteration của đúng demo/script đang nói tới
 completed_iterations = số iteration chạy xong thật trong summary
+```
+
+Phân biệt nhanh 2 dòng cuối:
+
+```text
+target_http_req_rate_if_no_drop
+  = rate request kỳ vọng theo lịch start target, nếu không bị drop slot
+
+observed_http_req_rate_from_summary
+  = rate request completed thật sự mà Counter summary đang in ra
 ```
 
 Không đọc nhầm:

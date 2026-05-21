@@ -294,7 +294,7 @@ Khớp:
 checks_total.......: 24
 ```
 
-### 5.4. Runtime thật của scenario
+### 5.4. Mẫu số `summary_runtime_base` của Counter summary
 
 Với các metric Counter:
 
@@ -302,6 +302,10 @@ Với các metric Counter:
 rate = count / summary_runtime_base
 => summary_runtime_base = count / rate
 ```
+
+Trong demo 1 scenario sạch này, `summary_runtime_base` khá gần thời gian scenario bạn đang nhìn
+thấy. Nhưng phần công thức nên gọi đúng tên như vậy, không nên gọi chung là "runtime thật của
+scenario".
 
 Từ `iterations`:
 

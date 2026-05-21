@@ -61,8 +61,11 @@ theoretical scheduled start slots = 30
 Nếu run sạch, `completed_iterations` có thể tiến gần 30. Nếu thiếu VU hoặc bị interrupt thì:
 
 ```text
+theoretical_scheduled_start_slots
+  ~= completed_iterations + interrupted_iterations + dropped_iterations
+
 completed_iterations
-  = started_iterations - dropped_iterations - interrupted_iterations
+  ~= theoretical_scheduled_start_slots - interrupted_iterations - dropped_iterations
 ```
 
 Ngoài ra ở biên cuối gần `t=6s`, có thể lệch khoảng 1 mốc do timing đúng mép regular duration.

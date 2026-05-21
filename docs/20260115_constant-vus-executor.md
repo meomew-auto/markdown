@@ -1,7 +1,7 @@
 # constant-vus Executor và k6 Execution Phases
 
 **Ngày phân tích**: 2026-01-15
-**Mục đích**: Phân tích chi tiết executor đơn giản nhất - constant-vus, và các giai đoạn thực thi của k6
+**Mục đích**: Phân tích chi tiết executor time-based đơn giản nhất - `constant-vus`, và các giai đoạn thực thi của k6
 **Liên quan**: 
 - [constant_vus.go](file:///e:/Projects/k6/lib/executor/constant_vus.go)
 - [execution.go](file:///e:/Projects/k6/lib/execution.go)
@@ -233,8 +233,8 @@ t=0s                                t=10s              t=15s
 |--------|-------------|-------------------|
 | **Loop condition** | Time-based | Iteration-based |
 | **Config** | `duration` | `iterations` |
-| **Số iterations** | Phụ thuộc response time | Chính xác N |
-| **Khi nào stop** | Khi hết duration | Khi xong N iterations |
+| **Số iterations** | Phụ thuộc thời gian chạy thực tế của iteration | Mỗi VU có quota `iterations`; tổng planned là `vus * iterations`, nhưng `maxDuration`/`gracefulStop` có thể làm xuất hiện dropped hoặc interrupted iterations |
+| **Khi nào stop** | Khi hết `duration`; iteration đã start có thể hoàn tất trong `gracefulStop` | Khi hoàn thành đủ quota, hoặc chạm `maxDuration`/`gracefulStop` |
 
 ---
 
@@ -381,7 +381,7 @@ lib/executor/execution_config_shortcuts.go
   DeriveScenariosFromShortcuts
 ```
 
-Lưu ý: nếu **không khai báo gì cả**, k6 không dùng `constant-vus`; default đơn giản nhất vẫn là `per-vu-iterations` với 1 VU, 1 iteration.
+Lưu ý: nếu **không khai báo gì cả**, k6 không dùng `constant-vus`; case mặc định của bài mở đầu vẫn là `per-vu-iterations` với 1 VU, 1 iteration.
 
 ### 9.2. Planned VUs và vòng chạy trong core
 
@@ -437,7 +437,7 @@ Ký hiệu:
 | `D` | regular duration, lấy từ `duration` |
 | `G` | graceful stop, lấy từ `gracefulStop` |
 | `W_effective` | thời gian trung bình một iteration chiếm VU; không min thì gần bằng `iteration_duration.avg`, có `minIterationDuration` thì dùng `max(iteration_duration.avg, minIterationDuration)` |
-| `T_actual` | runtime thật trong summary, có thể suy ra từ counter rate |
+| `summary_runtime_base` | mẫu số mà Counter summary dùng cho cột `/s`; có thể suy ra từ `count / rate` |
 | `completed_iterations` | số iteration hoàn tất |
 
 Công thức khung:
@@ -450,7 +450,7 @@ per_vu_rate ~= 1 / W_effective
 peak_iteration_rate ~= V * per_vu_rate
                     ~= V / W_effective
 
-average_iteration_rate = completed_iterations / T_actual
+average_iteration_rate = completed_iterations / summary_runtime_base
 ```
 
 Với `constant-vus`, **không nên hiểu**:
@@ -747,21 +747,26 @@ total_http_requests = 12 * 2 = 24
 total_checks = 12 * 2 = 24
 ```
 
-Runtime thật từ counter:
+Suy ngược `summary_runtime_base` từ Counter summary:
 
 ```text
-T_actual ~= iterations / iterations_rate
-         ~= 12 / 2.333723
-         ~= 5.14s
+summary_runtime_base ~= iterations / iterations_rate
+                     ~= 12 / 2.333723
+                     ~= 5.14s
 
-T_actual ~= http_reqs / http_reqs_rate
-         ~= 24 / 4.667445
-         ~= 5.14s
+summary_runtime_base ~= http_reqs / http_reqs_rate
+                     ~= 24 / 4.667445
+                     ~= 5.14s
 
-T_actual ~= checks_total / checks_rate
-         ~= 24 / 4.667445
-         ~= 5.14s
+summary_runtime_base ~= checks_total / checks_rate
+                     ~= 24 / 4.667445
+                     ~= 5.14s
 ```
+
+Trong demo sạch 1 scenario này, `summary_runtime_base` khá gần thời gian run bạn đang nhìn thấy.
+Nhưng khi giải thích công thức thì nên giữ đúng tên đó, đừng gọi chung là "runtime thật của
+scenario", vì khi có nhiều scenario, có `startTime`, hoặc có `setup()`/`teardown()`, hai cách nhìn
+có thể lệch nhau.
 
 Vì 1 iteration có 2 HTTP requests:
 
