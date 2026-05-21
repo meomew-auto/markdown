@@ -2337,6 +2337,284 @@ thời điểm ghi sample của http_req_* nằm ở cuối request
 tức là khi k6 nhận xong nội dung response hoặc request hết thời gian chờ
 ```
 
+#### 6.2.1 Demo chạy được: nhìn đủ HTTP metric trong summary
+
+File demo:
+
+```text
+examples/http_metrics_types_demo.js
+```
+
+Chạy:
+
+```bash
+k6 run examples/http_metrics_types_demo.js
+```
+
+Nội dung chính của demo:
+
+```js
+import http from "k6/http";
+import { check } from "k6";
+
+export const options = {
+  noConnectionReuse: true,
+  scenarios: {
+    http_metrics_types_demo: {
+      executor: "shared-iterations",
+      vus: 1,
+      iterations: 2,
+      maxDuration: "30s",
+    },
+  },
+  thresholds: {
+    http_reqs: ["count==4"],
+    http_req_blocked: ["avg>=0"],
+    http_req_connecting: ["avg>=0"],
+    http_req_duration: ["avg>=0"],
+    "http_req_failed{endpoint:status_200}": ["rate<0.01"],
+    "http_req_failed{endpoint:status_500}": ["rate>0.99"],
+    http_req_receiving: ["avg>=0"],
+    http_req_sending: ["avg>=0"],
+    http_req_tls_handshaking: ["avg>=0"],
+    http_req_waiting: ["avg>=0"],
+  },
+};
+
+export default function () {
+  const ok = http.get("https://httpbin.org/status/200", {
+    tags: { endpoint: "status_200" },
+  });
+
+  const fail = http.get("https://httpbin.org/status/500", {
+    tags: { endpoint: "status_500" },
+  });
+
+  check(
+    ok,
+    {
+      "status_200 returns 200": (r) => r.status === 200,
+    },
+    { endpoint: "status_200" },
+  );
+
+  check(
+    fail,
+    {
+      "status_500 returns 500": (r) => r.status === 500,
+    },
+    { endpoint: "status_500" },
+  );
+}
+```
+
+Demo này cố tình làm rất nhỏ:
+
+```text
+iterations = 2
+mỗi iteration gọi 2 HTTP request
+
+request 1 -> https://httpbin.org/status/200
+request 2 -> https://httpbin.org/status/500
+
+tổng HTTP request = 2 iterations * 2 request = 4 request
+```
+
+Kết quả cần nhìn:
+
+```text
+http_reqs
+  = Counter
+  = mỗi request append một sample value=1
+  = chạy demo này kỳ vọng count=4
+
+http_req_failed
+  = Rate
+  = mỗi request append một sample value=0 hoặc value=1
+  = status 200 -> value=0
+  = status 500 -> value=1
+  = chạy demo này kỳ vọng 2 failed / 4 request = 50%
+
+http_req_duration, http_req_waiting, http_req_sending...
+  = Trend
+  = mỗi request append một value thời gian
+  = summary in avg/min/med/max/p(90)/p(95)
+```
+
+Vì sao `500` làm `http_req_failed` tăng?
+
+Trong core, `js/modules/k6/http/http.go` tạo HTTP client mặc định với:
+
+```text
+responseCallback: defaultExpectedStatuses.match
+```
+
+Trong `js/modules/k6/http/response_callback.go`, default là:
+
+```text
+expected status = 200..399
+```
+
+Nên đọc đời thường là:
+
+```text
+status 200 -> nằm trong 200..399 -> expected -> http_req_failed value=0
+status 500 -> không nằm trong 200..399 -> failed   -> http_req_failed value=1
+```
+
+Trong `lib/netext/httpext/transport.go`, sau khi biết status code, core làm ý tương đương:
+
+```text
+expected = responseCallback(statusCode)
+nếu expected == false thì failed = 1
+append sample cho http_req_failed với value = failed
+```
+
+Còn các metric thời gian như `http_req_duration`, `http_req_waiting`,
+`http_req_connecting` được append trong `lib/netext/httpext/tracer.go`
+qua `Trail.SaveSamples()`.
+
+Khi chạy thành công, summary sẽ có dạng gần như sau. Số thời gian và số byte
+của máy bạn có thể khác, nhưng cách đọc giống nhau.
+
+Trước hết nhìn phần `THRESHOLDS`. Demo cố tình đặt threshold `avg>=0` cho các
+metric thời gian để ép phần tổng kết in ra tên từng metric con. Đây không phải
+quy tắc đánh giá hiệu năng thật, chỉ là mẹo để bài học dễ quan sát:
+
+```text
+THRESHOLDS
+  http_req_blocked
+    'avg>=0' avg=...
+
+  http_req_connecting
+    'avg>=0' avg=...
+
+  http_req_duration
+    'avg>=0' avg=...
+
+  http_req_receiving
+    'avg>=0' avg=...
+
+  http_req_sending
+    'avg>=0' avg=...
+
+  http_req_tls_handshaking
+    'avg>=0' avg=...
+
+  http_req_waiting
+    'avg>=0' avg=...
+
+  http_req_failed{endpoint:status_200}
+    'rate<0.01' rate=0.00%
+
+  http_req_failed{endpoint:status_500}
+    'rate>0.99' rate=100.00%
+
+  http_reqs
+    'count==4' count=4
+```
+
+Sau đó nhìn phần `TOTAL RESULTS`. Với k6 bản hiện tại, nhóm `HTTP` thường chỉ
+in các dòng HTTP chính:
+
+```text
+HTTP
+  http_req_duration..........: avg=... min=... med=... max=... p(90)=... p(95)=...
+  http_req_failed............: 50.00% 2 out of 4
+    { endpoint:status_200 }..: 0.00%  0 out of 2
+    { endpoint:status_500 }..: 100.00% 2 out of 2
+  http_reqs..................: 4
+
+NETWORK
+  data_received..............: ...
+  data_sent..................: ...
+```
+
+Lưu ý quan trọng: trong demo này `checks` có thể vẫn là `100%`, dù
+`http_req_failed` là `50%`.
+
+Vì hai dòng đó trả lời hai câu hỏi khác nhau:
+
+```text
+http_req_failed
+  = k6 hỏi: response này có thuộc nhóm status code expected không?
+  = mặc định expected là 200..399
+  = status 500 bị tính là failed
+
+checks
+  = script của bạn hỏi: điều kiện mình tự viết có đúng không?
+  = demo viết check cho request 500 là r.status === 500
+  = server trả đúng 500 nên check đó pass
+```
+
+Nói ngắn:
+
+```text
+HTTP 500 có thể làm http_req_failed tăng
+nhưng check vẫn pass nếu chính bạn đang kiểm tra "có đúng là 500 không"
+```
+
+Trong demo có thêm tag `endpoint`:
+
+```js
+tags: { endpoint: "status_200" }
+tags: { endpoint: "status_500" }
+```
+
+Tag này giúp tách metric theo endpoint:
+
+```text
+http_req_failed{endpoint:status_200}
+  = chỉ nhìn request gọi /status/200
+  = kỳ vọng rate gần 0
+
+http_req_failed{endpoint:status_500}
+  = chỉ nhìn request gọi /status/500
+  = kỳ vọng rate gần 1
+```
+
+Đây là lý do demo đặt thresholds:
+
+```js
+thresholds: {
+  http_reqs: ["count==4"],
+  http_req_blocked: ["avg>=0"],
+  http_req_connecting: ["avg>=0"],
+  http_req_duration: ["avg>=0"],
+  "http_req_failed{endpoint:status_200}": ["rate<0.01"],
+  "http_req_failed{endpoint:status_500}": ["rate>0.99"],
+  http_req_receiving: ["avg>=0"],
+  http_req_sending: ["avg>=0"],
+  http_req_tls_handshaking: ["avg>=0"],
+  http_req_waiting: ["avg>=0"],
+}
+```
+
+Các thresholds này không phải để test hệ thống thật.
+Chúng chỉ làm demo dễ đọc hơn:
+
+```text
+http_reqs count==4
+  = xác nhận demo có đúng 4 request
+
+http_req_failed{endpoint:status_200} rate<0.01
+  = endpoint 200 không bị tính failed
+
+http_req_failed{endpoint:status_500} rate>0.99
+  = endpoint 500 bị tính failed
+
+http_req_duration / waiting / sending / receiving / blocked / connecting / tls_handshaking avg>=0
+  = các metric này là Trend nên có avg
+  = avg thời gian không thể âm, nên threshold luôn pass
+  = mục đích là bắt summary in ra tên metric và giá trị avg để người học nhìn thấy
+```
+
+`noConnectionReuse: true` cũng chỉ phục vụ bài học.
+Nó yêu cầu k6 không tái sử dụng kết nối cũ, nên các metric như
+`http_req_connecting` và `http_req_tls_handshaking` dễ có số khác 0 hơn.
+Khi test thật, không nên bật/tắt option này tùy tiện nếu nó không phản ánh
+cách client thật sử dụng kết nối.
+
 ### 6.3 Network metrics
 
 Trong official docs, `data_sent` và `data_received` nằm trong standard built-in metrics.
