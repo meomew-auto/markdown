@@ -20,6 +20,7 @@ Các link hay dùng trong file này:
 - [Khi nào dùng thực tế](#11-khi-nào-dùng-thực-tế)
 - [Core chạy như nào](#12-core-chạy-như-nào)
 - [Checklist core đã lọc](#13-checklist-core-đã-lọc-cho-per-vu-iterations)
+- [Gom nhanh metric theo executor](#14-gom-nhanh-metric-theo-executor)
 - [Bảng tham số tiếng Việt](#2-bảng-tham-số-tiếng-việt)
 - [Công thức nền](#3-công-thức-nền)
 - [Dùng `avg`, `med`, `p90`, `p95` của `iteration_duration`](#dùng-avg-med-p90-p95-của-iteration_duration-như-nào)
@@ -338,6 +339,41 @@ Những điểm cần lưu ý thêm khi đọc core:
 | `internal/js/runner.go:RunOnce()` + `iterationSamples()` | `iterations`/`iteration_duration` chỉ emit khi full iteration hoàn tất | `completed_iterations` đọc từ metric, không lấy từ planned quota nếu có drop/interrupt. |
 | `internal/js/runner.go` min duration path | `iteration_duration` emit trước sleep bù `minIterationDuration` | Capacity phải dùng `effective_iteration_time`, không dùng riêng `iteration_duration` khi có min. |
 | `scheduler.go:emitVUsAndVUsMax()` | `vus`/`vus_max` sample từ active/initialized VUs | Gauge sample theo thời điểm, không phải Counter. |
+
+### 1.4. Gom nhanh metric theo executor
+
+Nếu muốn đọc `per-vu-iterations` thật nhanh, chỉ cần nhớ:
+
+| Metric | Type | Sample đếm như nào | Khi nào emit | Đọc nhanh |
+| --- | --- | --- | --- | --- |
+| `iterations` | `Counter` | 1 sample cho mỗi iteration hoàn chỉnh, `value = 1` | `internal/js/runner.go:RunOnce()` khi iteration xong | tổng số iteration hoàn thành |
+| `iteration_duration` | `Trend` | 1 sample cho mỗi iteration hoàn chỉnh, `value = endTime - startTime` | cùng path với `iterations` | thời gian của 1 iteration hoàn chỉnh |
+| `dropped_iterations` | `Counter` | khi hết `maxDuration`, mỗi VU emit 1 sample với `value = iterations - i` | `lib/executor/per_vu_iterations.go` trước khi start iteration tiếp theo | số iteration còn lại bị cắt |
+| `vus` | `Gauge` | sample theo nhịp 1 giây, `value = active VUs` | `scheduler.go:emitVUsAndVUsMax()` | VU đang active tại thời điểm sample |
+| `vus_max` | `Gauge` | sample theo nhịp 1 giây, `value = initialized VUs` | `scheduler.go:emitVUsAndVUsMax()` | VU đã init / reserve |
+
+Hai metric chung của script vẫn áp dụng như bình thường:
+
+```text
+http_reqs, checks, data_sent, data_received
+```
+
+Nhưng trong `per-vu-iterations`, ba thứ dễ bị đọc nhầm nhất là:
+
+```text
+iterations
+iteration_duration
+dropped_iterations
+```
+
+Vì vậy khi xem summary của executor này, đọc theo thứ tự:
+
+```text
+1. vus / vus_max
+2. iterations / iteration_duration
+3. dropped_iterations nếu có
+4. rồi mới soi http_reqs, checks, data_sent, data_received
+```
 
 ### Demo dropped iterations do `maxDuration`
 
