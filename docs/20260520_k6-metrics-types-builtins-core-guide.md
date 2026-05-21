@@ -2035,7 +2035,113 @@ Ví dụ 10 request:
 `avg` có thể bị kéo lên bởi request rất chậm.
 `p(95)` hoặc `max` giúp thấy đuôi chậm.
 
-##### Demo chạy được: 9 request nhanh, 1 request rất chậm
+##### Demo bằng chữ: 10 người bấm checkout
+
+Tưởng tượng bạn đang test API checkout.
+Trong 1 đoạn test ngắn, có 10 request checkout hoàn thành như sau:
+
+| Request | Thời gian trả lời | Đọc như người test |
+| --- | ---: | --- |
+| 1 | 100ms | nhanh |
+| 2 | 100ms | nhanh |
+| 3 | 100ms | nhanh |
+| 4 | 100ms | nhanh |
+| 5 | 100ms | nhanh |
+| 6 | 100ms | nhanh |
+| 7 | 100ms | nhanh |
+| 8 | 100ms | nhanh |
+| 9 | 100ms | nhanh |
+| 10 | 5000ms | rất chậm |
+
+Nhìn bằng mắt thường, ta thấy câu chuyện thật là:
+
+```text
+9 người checkout rất nhanh
+1 người bị kẹt rất lâu
+```
+
+Nếu báo cáo chỉ đưa một dòng:
+
+```text
+avg=590ms
+```
+
+người mới rất dễ đọc nhầm thành:
+
+```text
+hệ thống thường trả lời khoảng 590ms
+```
+
+Nhưng câu đó không đúng với demo này.
+Trong 10 request không có request nào mất `590ms`.
+Chỉ có hai nhóm:
+
+```text
+nhóm bình thường: 100ms
+nhóm bị kẹt: 5000ms
+```
+
+Vì vậy `avg` trả lời câu hỏi:
+
+```text
+nếu lấy tổng thời gian chia đều cho mọi request thì trung bình là bao nhiêu?
+```
+
+Nó không trả lời rõ câu hỏi:
+
+```text
+đa số request có nhanh không?
+có request nào bị chậm bất thường không?
+phần đuôi chậm nặng tới mức nào?
+```
+
+Với cùng bộ số này, đọc đầy đủ hơn sẽ là:
+
+```text
+med=100ms
+```
+
+Đa số request vẫn nằm ở vùng nhanh.
+
+```text
+max=5s
+```
+
+Có ít nhất một request rất chậm.
+Đây là dấu hiệu đuôi chậm.
+
+```text
+p(95)=2.79s
+```
+
+Vùng gần cuối của phân phối đã bị request `5000ms` kéo lên.
+Với chỉ 10 sample, số `p(95)` này là số nội suy theo cách k6 tính trong core, không phải duration thật của một request cụ thể.
+
+Nói đời thường:
+
+```text
+avg cho biết mặt bằng trung bình
+med cho biết request điển hình
+max cho biết ca chậm nhất
+p(90), p(95) cho biết vùng gần cuối có xấu không
+```
+
+Vì vậy khi điều tra performance, đừng chỉ hỏi:
+
+```text
+avg bao nhiêu?
+```
+
+Mà nên hỏi:
+
+```text
+đa số request nhanh không?
+có bao nhiêu request lỗi?
+có request nào chậm bất thường không?
+p90/p95 có vượt mục tiêu không?
+```
+
+##### Demo chạy được bằng code: 9 request nhanh, 1 request rất chậm
 
 File demo:
 
