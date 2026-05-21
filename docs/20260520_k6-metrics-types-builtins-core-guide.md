@@ -2266,6 +2266,114 @@ Nó vẫn có thể kéo `p(90)`, `p(95)`, hoặc `max` lên, dù nó xảy ra g
 không phải = đoạn cuối thời gian chạy test
 ```
 
+##### Vì sao phải quan tâm phần đuôi?
+
+Vì người dùng thật không chỉ cảm nhận `avg`.
+Mỗi request là một lần người dùng chờ hệ thống trả lời.
+Nếu 95% request nhanh nhưng 5% request rất chậm, thì vẫn có một nhóm người dùng thật bị ảnh hưởng.
+
+Ví dụ có 1000 request login:
+
+```text
+950 request = 200ms
+50 request = 5000ms
+```
+
+Nếu chỉ nhìn chung chung, bạn có thể nói:
+
+```text
+phần lớn request vẫn nhanh
+```
+
+Câu đó đúng, nhưng chưa đủ.
+Vì còn 50 request mất `5s`.
+Nếu mỗi request là một người dùng, nghĩa là có 50 người phải chờ rất lâu ở màn hình login.
+
+Với nghiệp vụ quan trọng, nhóm nhỏ này vẫn đáng quan tâm:
+
+```text
+login chậm 5s
+  -> người dùng tưởng app lỗi
+
+checkout chậm 5s
+  -> người dùng có thể bấm lại, tạo duplicate request
+
+payment chậm 5s
+  -> người dùng lo giao dịch bị treo
+
+search chậm 5s
+  -> người dùng thấy hệ thống thiếu ổn định
+```
+
+Đây là lý do performance không chỉ hỏi:
+
+```text
+trung bình có nhanh không?
+```
+
+Mà còn hỏi:
+
+```text
+nhóm người dùng chậm nhất đang chậm tới mức nào?
+```
+
+Phần đuôi còn giúp phát hiện vấn đề mà `avg` che mất.
+Một hệ thống có thể có nhiều request nhanh nhờ cache, nhưng một số request rơi vào case xấu:
+
+```text
+cache miss
+query DB chậm
+DB bị lock
+queue chờ worker
+connection pool hết chỗ
+GC pause
+service downstream chậm
+```
+
+Các vấn đề này thường không làm mọi request chậm cùng lúc.
+Chúng chỉ làm một nhóm request chậm bất thường.
+Nhóm đó chính là phần đuôi.
+
+Ví dụ:
+
+```text
+990 request = 100ms
+10 request = 3000ms
+```
+
+`avg` có thể nhìn vẫn không quá xấu:
+
+```text
+avg = (990 * 100 + 10 * 3000) / 1000
+    = (99000 + 30000) / 1000
+    = 129ms
+```
+
+Nếu chỉ nhìn `avg=129ms`, bạn dễ kết luận:
+
+```text
+hệ thống nhanh
+```
+
+Nhưng thực tế vẫn có 10 request mất `3s`.
+Nếu 10 request đó đều là request checkout hoặc payment, đây không còn là chuyện nhỏ.
+
+Vì vậy cần nhìn phần đuôi để trả lời:
+
+```text
+người dùng chậm nhất đang phải chờ bao lâu?
+nhóm 5% chậm nhất có vượt mục tiêu cam kết không?
+có request nào chậm bất thường tới mức nguy hiểm không?
+```
+
+Nói ngắn:
+
+```text
+avg cho biết bức tranh trung bình
+percentile cho biết trải nghiệm của nhóm chậm
+max cho biết ca chậm nhất
+```
+
 Nhưng percentile cũng có giới hạn.
 Nếu request rất chậm quá ít, `p(95)` có thể vẫn đẹp.
 Ví dụ có 1000 request:
