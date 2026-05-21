@@ -269,6 +269,29 @@ Những điểm cần lưu ý thêm khi đọc core:
   comment trong core nói rất rõ: chỉ scale số VU, không scale `iterations` theo cùng cách, để tránh hiệu ứng
   nhân đôi kiểu quadratic.
 
+  Nghĩa là:
+
+  | Khái niệm | Nghĩa |
+  | --- | --- |
+  | `vus` | số người |
+  | `iterations` | số vòng mỗi người phải làm |
+
+  Khi execution tuple chia test ra nhiều phần, k6 chỉ chia `vus`.
+  `iterations` giữ nguyên.
+
+  Ví dụ đọc nhanh:
+
+  | Case | vus | iterations | total work |
+  | --- | ---: | ---: | ---: |
+  | gốc | 10 | 20 | 200 |
+  | phần A | 5 | 20 | 100 |
+  | phần B | 5 | 20 | 100 |
+  | nếu scale cả 2 | 5 | 10 | 50 |
+
+  Hai phần A + B vẫn ra `200`.
+  Nếu scale cả `vus` lẫn `iterations`, tổng chỉ còn `100`.
+  Đó là lý do core chỉ scale `vus`, không scale `iterations`.
+
 - **planned VUs được reserve sẵn**:
   `GetExecutionRequirements()` reserve đúng `vus` từ đầu đến
   `maxDuration + gracefulStop`.
