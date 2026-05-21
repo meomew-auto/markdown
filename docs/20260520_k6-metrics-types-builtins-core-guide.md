@@ -2114,6 +2114,48 @@ Có ít nhất một request rất chậm.
 p(95)=2.79s
 ```
 
+Đọc nhanh thường là:
+
+```text
+khoảng 95% sample nằm ở dưới hoặc bằng ngưỡng này
+```
+
+Nhưng với demo chỉ có 10 sample, phải nói kỹ hơn:
+
+```text
+p(95)=2.79s không có nghĩa là có đúng 9.5 request <= 2.79s
+```
+
+Vì request là số nguyên, không thể có `9.5 request`.
+Trong bộ số này, request thật chỉ là:
+
+```text
+9 request = 100ms
+1 request = 5000ms
+```
+
+Vậy nếu đếm trực tiếp:
+
+```text
+9/10 request <= 2.79s
+1/10 request > 2.79s
+```
+
+Tức là đếm thô thì có `90%` request thật nằm dưới `2.79s`.
+Còn `p(95)=2.79s` là ngưỡng do k6 nội suy giữa `100ms` và `5000ms`.
+
+Vì vậy câu đúng hơn trong demo này là:
+
+```text
+theo cách k6 tính percentile, ngưỡng p95 của bộ sample này nằm khoảng 2.79s
+```
+
+Không nên nói máy móc:
+
+```text
+chính xác 95% request thật nhanh hơn 2.79s
+```
+
 Vùng gần cuối của phân phối đã bị request `5000ms` kéo lên.
 Với chỉ 10 sample, số `p(95)` này là số nội suy theo cách k6 tính trong core, không phải duration thật của một request cụ thể.
 
@@ -2397,6 +2439,35 @@ Vì vậy summary in:
 ```text
 p(95)=2.79s
 ```
+
+Đọc câu này thế nào?
+
+Với dữ liệu lớn, cách đọc thực tế thường là:
+
+```text
+khoảng 95% sample có duration <= p(95)
+khoảng 5% sample còn lại nằm phía trên p(95)
+```
+
+Nhưng với đúng demo 10 sample này, đọc như vậy dễ gây hiểu nhầm.
+Vì core dùng nội suy nên `p(95)=2795ms` không cần trùng với một request thật.
+Nếu đếm request thật trong demo:
+
+```text
+9 request = 100ms <= 2795ms
+1 request = 5000ms > 2795ms
+```
+
+Tức là:
+
+```text
+90% request thật <= 2.79s
+10% request thật > 2.79s
+```
+
+Vậy tại sao vẫn gọi là `p(95)`?
+Vì k6 đang tính vị trí 95% trên đường nối giữa sample ở index `8` và sample ở index `9`.
+Nó không chọn một request thật làm mốc, mà nội suy ra một giá trị nằm giữa hai request đó.
 
 Lưu ý quan trọng:
 
