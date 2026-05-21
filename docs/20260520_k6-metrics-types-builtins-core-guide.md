@@ -2203,8 +2203,99 @@ Nói đời thường:
 avg cho biết mặt bằng trung bình
 med cho biết request điển hình
 max cho biết ca chậm nhất
-p(90), p(95) cho biết vùng gần cuối có xấu không
+p(90), p(95) cho biết nhóm request chậm phía trên có xấu không
 ```
+
+Ở đây không nên dùng chữ "gần cuối" theo nghĩa thời gian.
+`p(90)` và `p(95)` không hỏi:
+
+```text
+cuối bài test có chậm không?
+```
+
+Nó hỏi câu khác:
+
+```text
+nếu gom tất cả request lại rồi sắp xếp từ nhanh tới chậm,
+thì vùng request chậm phía trên đang nằm ở mức nào?
+```
+
+Nói cách khác, k6 không lấy 90% hoặc 95% theo timeline chạy test.
+Nó lấy theo danh sách duration đã được sắp xếp.
+
+Ví dụ bài test có 10 request chạy theo thời gian như sau:
+
+```text
+request theo thời gian:
+1: 100ms
+2: 100ms
+3: 5000ms  <- chậm giữa bài test
+4: 100ms
+5: 100ms
+6: 100ms
+7: 100ms
+8: 100ms
+9: 100ms
+10: 100ms
+```
+
+Request chậm nằm ở giữa bài test, không nằm ở cuối.
+Nhưng khi tính percentile, core sort lại theo giá trị:
+
+```text
+request sau khi sort theo duration:
+100ms
+100ms
+100ms
+100ms
+100ms
+100ms
+100ms
+100ms
+100ms
+5000ms
+```
+
+Vì vậy request `5000ms` vẫn nằm ở phía cuối của danh sách đã sort.
+Nó vẫn có thể kéo `p(90)`, `p(95)`, hoặc `max` lên, dù nó xảy ra giữa bài test.
+
+Đây là lý do percentile giúp phát hiện "đuôi chậm":
+
+```text
+đuôi chậm = nhóm request chậm nhất sau khi sort duration
+không phải = đoạn cuối thời gian chạy test
+```
+
+Nhưng percentile cũng có giới hạn.
+Nếu request rất chậm quá ít, `p(95)` có thể vẫn đẹp.
+Ví dụ có 1000 request:
+
+```text
+990 request = 100ms
+10 request = 5000ms
+```
+
+10 request chậm chỉ chiếm `1%`.
+Lúc này `p(95)` vẫn có thể gần `100ms`, vì 95% request đầu tiên vẫn nằm trong nhóm nhanh.
+Muốn thấy nhóm chậm rất hiếm này, cần nhìn thêm:
+
+```text
+p(99)
+p(99.9)
+max
+log/trace của request chậm
+```
+
+Ngược lại, nếu request chậm đủ nhiều, `p(95)` sẽ bắt đầu xấu.
+Ví dụ:
+
+```text
+940 request = 100ms
+60 request = 5000ms
+```
+
+60 request chậm chiếm `6%`.
+Khi đó mốc 95% đã rơi vào vùng chậm hơn, nên `p(95)` sẽ tăng mạnh.
 
 Vì vậy khi điều tra performance, đừng chỉ hỏi:
 
