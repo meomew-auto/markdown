@@ -7,17 +7,18 @@ metric trong k6 có những loại nào
 và mỗi loại đọc / tính theo công thức nào
 ```
 
-Nếu đang học từ đầu hoặc muốn xem demo nằm ngay trong từng loại metric, đọc bài đầy đủ hơn:
+Nếu đang học từ đầu hoặc muốn xem phần giải thích rất chi tiết theo core, đọc thêm:
 
 ```text
 docs/20260520_k6-metrics-types-builtins-core-guide.md
 ```
 
-File này giữ vai trò bản tra nhanh:
+File này giữ vai trò bản tra nhanh, nhưng vẫn có ví dụ cực ngắn ngay trong từng loại:
 
 ```text
 nhìn công thức nhanh
 đối chiếu nhanh khi đang đọc các bài executor
+đọc tới type nào là thấy ví dụ ngắn của type đó ngay
 ```
 
 Phạm vi của file:
@@ -78,6 +79,33 @@ demo_orders.add(1)
 demo_orders.add(2)
 
 => Counter cuối cùng = 3
+```
+
+Demo cực ngắn trong script:
+
+```js
+import { Counter } from "k6/metrics";
+
+const demoOrders = new Counter("demo_orders");
+
+export default function () {
+  demoOrders.add(1);
+  demoOrders.add(2);
+}
+```
+
+Nếu script chỉ chạy đúng 1 iteration thì cuối test, metric custom này sẽ có hình dạng như:
+
+```text
+demo_orders........: 3    ...
+```
+
+Đọc rất thẳng:
+
+```text
+ta add 2 sample có value 1 và 2
+Counter cộng dồn 1 + 2
+nên tổng cuối cùng là 3
 ```
 
 ### 2.2. Summary thường in gì?
@@ -247,6 +275,34 @@ queue_depth lần lượt nhận các sample: 5, 9, 3
 => max = 9
 ```
 
+Demo cực ngắn trong script:
+
+```js
+import { Gauge } from "k6/metrics";
+
+const queueDepth = new Gauge("queue_depth");
+
+export default function () {
+  queueDepth.add(5);
+  queueDepth.add(9);
+  queueDepth.add(3);
+}
+```
+
+Nếu script chỉ chạy đúng 1 iteration thì metric custom này sẽ có hình dạng như:
+
+```text
+queue_depth........: 3    min=3 max=9
+```
+
+Đọc rất thẳng:
+
+```text
+Gauge không cộng 5 + 9 + 3
+nó giữ giá trị cuối là 3
+đồng thời nhớ min là 3 và max là 9
+```
+
 ### 3.2. Summary thường in gì?
 
 Ví dụ:
@@ -323,6 +379,35 @@ demo_latency có 4 sample: 100, 200, 300, 400
 => min = 100
 => max = 400
 => med = p50 = 250
+```
+
+Demo cực ngắn trong script:
+
+```js
+import { Trend } from "k6/metrics";
+
+const demoLatency = new Trend("demo_latency", true);
+
+export default function () {
+  demoLatency.add(100);
+  demoLatency.add(200);
+  demoLatency.add(300);
+  demoLatency.add(400);
+}
+```
+
+Nếu script chỉ chạy đúng 1 iteration thì metric custom này sẽ có hình dạng như:
+
+```text
+demo_latency.......: avg=250ms min=100ms med=250ms max=400ms ...
+```
+
+Đọc rất thẳng:
+
+```text
+Trend không cộng dồn thành một số duy nhất như Counter
+nó giữ cả tập [100, 200, 300, 400]
+rồi từ tập đó mới tính avg, med, p95...
 ```
 
 ### 4.2. Summary thường in gì?
@@ -534,6 +619,34 @@ checkout_ok lần lượt add: true, false, true
 => total = 3
 => trues = 2
 => rate = 2 / 3 = 66.67%
+```
+
+Demo cực ngắn trong script:
+
+```js
+import { Rate } from "k6/metrics";
+
+const checkoutOk = new Rate("checkout_ok");
+
+export default function () {
+  checkoutOk.add(true);
+  checkoutOk.add(false);
+  checkoutOk.add(true);
+}
+```
+
+Nếu script chỉ chạy đúng 1 iteration thì metric custom này sẽ có hình dạng như:
+
+```text
+checkout_ok........: 66.67% 2 out of 3
+```
+
+Đọc rất thẳng:
+
+```text
+Rate không hỏi mỗi giây có bao nhiêu event
+nó hỏi trong 3 lần ghi nhận thì có 2 lần là true
+nên rate = 2 / 3 = 66.67%
 ```
 
 ### 5.2. Công thức từ core
