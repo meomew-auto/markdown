@@ -1549,6 +1549,65 @@ p(90) = mốc mà khoảng 90% giá trị nằm bên trái hoặc bằng mốc �
 p(95) = mốc mà khoảng 95% giá trị nằm bên trái hoặc bằng mốc đó
 ```
 
+#### Cách tính p90 / p95
+
+Core làm theo 4 bước:
+
+```text
+1. sort values tăng dần
+2. tính vị trí: pos = p * (n - 1)
+3. nếu pos rơi đúng vào 1 sample -> lấy sample đó
+4. nếu pos nằm giữa 2 sample -> nội suy giữa 2 sample đó
+```
+
+Trong đó:
+
+```text
+n = số sample
+p = 0.90 cho p90, 0.95 cho p95
+```
+
+Ví dụ rất nhỏ:
+
+```text
+values = [100, 200, 300, 400]
+```
+
+Tính `p90`:
+
+```text
+n = 4
+p = 0.90
+pos = 0.90 * (4 - 1) = 2.7
+
+left  = values[2] = 300
+right = values[3] = 400
+
+p90 = 300 + (400 - 300) * 0.7
+    = 370
+```
+
+Tính `p95`:
+
+```text
+n = 4
+p = 0.95
+pos = 0.95 * (4 - 1) = 2.85
+
+left  = values[2] = 300
+right = values[3] = 400
+
+p95 = 300 + (400 - 300) * 0.85
+    = 385
+```
+
+Nên:
+
+```text
+p90 và p95 không nhất thiết là 1 sample thật trong tập
+chúng có thể là số nội suy nằm giữa 2 sample
+```
+
 #### Demo `Trend` ngay tại đây
 
 Script nhỏ:
