@@ -11,6 +11,7 @@ docs/20260514_per-vu-iterations-tham-so-cong-thuc.md
 | Tôi muốn xem | Link |
 | --- | --- |
 | Ý tưởng chính của `per-vu-iterations` | [Ý tưởng chính](./20260514_per-vu-iterations-tham-so-cong-thuc.md#1-ý-tưởng-chính) |
+| Bài dạy học ngắn: khai báo và nhiều scenario | [Khai báo nhiều scenario](./20260521_per-vu-iterations-khai-bao-nhieu-scenario.md) |
 | Khi nào dùng `per-vu-iterations` ngoài thực tế | [Khi nào dùng thực tế](./20260514_per-vu-iterations-tham-so-cong-thuc.md#11-khi-nào-dùng-thực-tế) |
 | Core chạy như nào | [Core chạy như nào](./20260514_per-vu-iterations-tham-so-cong-thuc.md#12-core-chạy-như-nào) |
 | Tên tham số tiếng Việt | [Bảng tham số](./20260514_per-vu-iterations-tham-so-cong-thuc.md#2-bảng-tham-số-tiếng-việt) |
