@@ -260,27 +260,22 @@ Những điểm cần lưu ý thêm khi đọc core:
   nhân đôi kiểu quadratic.
 
   Nghĩa đơn giản:
-  - `vus` = số người làm việc
-  - `iterations` = số vòng mỗi người phải làm
+  - `vus`: số người làm việc
+  - `iterations`: số vòng mỗi người phải làm
 
   Khi `execution tuple` chia test ra nhiều phần, mỗi phần chỉ nhận một lát của cùng một test gốc.
-  `A` và `B` trong ví dụ dưới không phải 2 test riêng. Chúng là 2 phần của cùng một test, nên phải
-  cộng lại để xem tổng work của cả test có còn đúng không.
+  `A` và `B` dưới đây không phải 2 test riêng. Chúng là 2 lát của cùng một test, nên phải cộng lại
+  để xem tổng work của cả test có còn đúng không.
 
-  Ví dụ:
-  ```text
-  test gốc: 10 VUs × 20 iterations/VU = 200 iterations
-
-  chia làm 2 phần bằng nhau:
-    phần A: 5 VUs × 20 iterations/VU = 100 iterations
-    phần B: 5 VUs × 20 iterations/VU = 100 iterations
-    A + B = 200 iterations
-
-  nếu scale cả vus lẫn iterations:
-    phần A: 5 VUs × 10 iterations/VU = 50 iterations
-    phần B: 5 VUs × 10 iterations/VU = 50 iterations
-    A + B = 100 iterations
-  ```
+  - test gốc: `10 VUs × 20 iterations/VU = 200 iterations`
+  - chia làm 2 phần bằng nhau:
+    - phần A: `5 VUs × 20 iterations/VU = 100 iterations`
+    - phần B: `5 VUs × 20 iterations/VU = 100 iterations`
+  - cộng A và B lại: `200 iterations`
+  - nếu scale cả `vus` lẫn `iterations`:
+    - phần A: `5 VUs × 10 iterations/VU = 50 iterations`
+    - phần B: `5 VUs × 10 iterations/VU = 50 iterations`
+  - cộng A và B lại: `100 iterations`
 
   Đó là lý do core chỉ scale `vus`, không scale `iterations`.
 
