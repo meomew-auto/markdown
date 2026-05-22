@@ -539,12 +539,39 @@ Phân biệt rõ 2 đại lượng:
 
 ```text
 iterations/s
-  = completed_iterations / summary_runtime_base
-  (đơn vị: iteration mỗi giây của toàn run)
+  đọc là: "mỗi 1 giây, cả bài test hoàn tất trung bình bao nhiêu iteration"
+  đơn vị: iter/s
 
 iteration_duration avg
-  = tổng duration của các iteration hoàn tất / số iteration hoàn tất
-  (đơn vị: giây mỗi iteration)
+  đọc là: "mỗi 1 iteration hoàn tất, trung bình mất bao nhiêu giây"
+  đơn vị: s/iter
+```
+
+Ví dụ ngay trong run này:
+
+```text
+completed_iterations = 12
+summary_runtime_base ~= 5.3208s
+
+iterations/s = 12 / 5.3208 = 2.255308 iter/s
+```
+
+đọc thành câu:
+
+```text
+"trung bình mỗi giây bài test hoàn tất khoảng 2.255 iteration"
+```
+
+Còn:
+
+```text
+iteration_duration avg = 1.77s
+```
+
+đọc thành câu:
+
+```text
+"trung bình một iteration mất khoảng 1.77 giây để chạy xong"
 ```
 
 Hai số này không phải cùng một thứ, nên không "đổi ngang" 1-1 cho nhau.
