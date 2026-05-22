@@ -905,6 +905,13 @@ Nên kết luận đúng hơn là:
 - server xử lý chậm: `waiting` tăng rõ và thường chiếm phần lớn thời gian request.
 - payload/băng thông: `receiving` tăng rõ.
 
+Kết luận của ví dụ này:
+
+- số đại diện để báo cáo năng lực run là `median(iterations/s) = 2.21 iter/s`
+- run xấu `R4` không nên dùng làm headline, nhưng phải dùng để chốt biên an toàn
+- với `p95` xấu nhất `4.9s`, `safe_time ~= 147s`, nên `maxDuration=120s` là rủi ro cao
+- phần kết nối/network xấu lên rõ so với baseline, nhưng chưa đủ dữ kiện để nói nó là bottleneck duy nhất
+
 ### Các tình huống thường gặp với `maxDuration` và `vus`
 
 Tình huống A:
