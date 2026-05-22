@@ -678,3 +678,27 @@ estimated_total_iteration_rate
 constant-vus không biết trước tổng iteration.
 Tổng iteration là kết quả của: vus, duration, iteration_duration, gracefulStop.
 ```
+
+## 12. Kết luận chốt: đọc số nào?
+
+`constant-vus` là closed model: VU xong việc thì mới lấy iteration tiếp theo.
+
+Nên khi báo cáo 1 run:
+
+- số chính: `iterations/s` và `http_reqs/s`
+- số phụ: `iteration_duration avg` để nói một iteration thường mất bao lâu
+- `med` để nói nhịp điển hình
+- `p90/p95` để nhìn đuôi chậm và chừa biên an toàn
+
+Khi sizing:
+
+- dùng `effective_iteration_time`
+- nếu có nhiều run cùng cấu hình, lấy `median(iterations/s)` giữa các run làm số đại diện
+- run đẹp nhất chỉ nên ghi là best observed, không dùng làm headline cho sizing
+- không dùng riêng `http_req_duration` để suy throughput của cả iteration
+
+Điểm mấu chốt:
+
+```text
+iteration_duration càng lớn -> throughput của constant-vus càng giảm
+```

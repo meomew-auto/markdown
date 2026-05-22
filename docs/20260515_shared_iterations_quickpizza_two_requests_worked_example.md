@@ -746,3 +746,29 @@ peak_total_rate
 8. per_vu_rate nên tính từ effective_iteration_time; trong demo không có minIterationDuration nên gần bằng iteration_duration
 9. summary `iterations/s` là cột `/s` của Counter `iterations`, trung bình trên cả run; không nhân thêm `vus`
 ```
+
+## 14. Kết luận chốt: đọc số nào?
+
+`shared-iterations` là kiểu: tổng `iterations` cố định, từng VU tự tranh nhau kho work.
+
+Nên khi báo cáo 1 run:
+
+- số chính: `iterations/s`
+- số phụ: `http_reqs/s`, `checks_total_rate`
+- `iteration_duration avg` để nói 1 VU thường bận bao lâu
+- `med` để nói nhịp điển hình
+- `p90/p95` để xem đuôi chậm và chừa biên an toàn
+
+Khi sizing:
+
+- dùng `effective_iteration_time`
+- không suy `per_vu_iteration_count` từ summary alone, vì VU nhanh/chậm chia việc khác nhau
+- nếu nhiều run cùng cấu hình, lấy `median(iterations/s)` giữa các run làm số đại diện
+- run đẹp nhất chỉ là best observed, không phải số đại diện cho sizing
+
+Điểm mấu chốt:
+
+```text
+tổng work biết trước
+per-VU work thì không biết trước
+```
