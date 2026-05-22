@@ -468,176 +468,115 @@ ra trên một khoảng thời gian đủ dài.
 
 ### 7.1. Nên dùng `avg`, `med`, hay `p90/p95`?
 
-Không có một số đúng cho mọi mục đích. Phải hỏi trước: bạn muốn mô tả cái gì?
+Mục này trả lời 2 câu hỏi khác nhau:
 
-Lấy `iteration_duration` của run này:
+1. Chạy xong rồi, báo cáo tốc độ thực tế của run này.
+2. Chưa chạy, muốn ước lượng có kịp `maxDuration` không.
+
+Nếu không tách 2 mục tiêu này, rất dễ chọn sai `avg/med/p95`.
+
+Số của run hiện tại:
 
 ```text
-avg    = 1.77s
-med    = 1.52s
-p(90)  = 2.27s
-p(95)  = 2.27s
+iteration_duration
+  avg   = 1.77s
+  med   = 1.52s
+  p(95) = 2.27s
 ```
 
-Trong run này `p90` và `p95` bằng nhau vì số sample iteration ít, và cả hai cùng rơi vào phần đuôi chậm
-của tập sample.
-
-Suy ra tốc độ ước lượng của 1 VU:
+Quy đổi về tốc độ 1 VU:
 
 ```text
-per_vu_rate_from_avg
-  ≈ 1 / 1.77
-  ≈ 0.565 iter/s
-
-per_vu_rate_from_med
-  ≈ 1 / 1.52
-  ≈ 0.658 iter/s
-
-per_vu_rate_from_p95
-  ≈ 1 / 2.27
-  ≈ 0.441 iter/s
+from_avg: 1 / 1.77 ≈ 0.565 iter/s
+from_med: 1 / 1.52 ≈ 0.658 iter/s
+from_p95: 1 / 2.27 ≈ 0.441 iter/s
 ```
 
-Cắt nghĩa theo đúng nhu cầu thực tế:
+### Chọn số nào cho đúng mục tiêu?
 
-- Câu hỏi 1: "run vừa chạy xong, tốc độ trung bình thực tế là bao nhiêu?"
-  -> ưu tiên `iterations/s` trong summary.
-  -> nếu cần quy về thời gian/iteration thì dùng `avg`.
-- Câu hỏi 2: "một vòng lặp điển hình của VU là bao lâu?"
-  -> dùng `med` (trung vị), vì ít bị kéo bởi vài sample quá chậm.
-- Câu hỏi 3: "nếu muốn tính bảo thủ để sizing thời gian hoàn thành?"
-  -> dùng `p90` hoặc `p95` để nhìn vùng chậm.
-  -> nhớ: `p95 = X` nghĩa là khoảng 95% iteration có duration <= `X`, không phải "95% iteration đều
-     chậm bằng X".
-- Câu hỏi 4: "tốc độ nhanh nhất có thể?"
-  -> không dùng `min` để planning, vì `min` thường chỉ là một sample đẹp hiếm gặp.
+- Báo cáo kết quả run vừa chạy:
+  dùng `iterations/s` (hoặc `avg` khi cần đổi qua giây/iteration).
+- Mô tả nhịp điển hình:
+  dùng `med`.
+- Ước lượng deadline (`maxDuration`) theo hướng an toàn:
+  dùng thêm `p90/p95`.
 
-Ví dụ sâu A (dữ liệu khá đều):
+Giải nghĩa nhanh:
+
+- `đuôi chậm`: một nhóm nhỏ iteration rất chậm so với phần còn lại.
+- `lạc quan`: ước lượng quá nhanh, nên tưởng kịp nhưng thực tế không kịp.
+- `bảo thủ`: ước lượng chậm hơn để chừa biên an toàn.
+
+Lưu ý nghĩa của `p95`:
 
 ```text
-iteration_duration samples (s):
-1.50, 1.52, 1.53, 1.54, 1.55, 1.56, 1.57, 1.58, 1.60
-
-avg  ≈ 1.55s
-med  = 1.55s
-p95  ≈ 1.59s
+p95 = X
+=> khoảng 95% iteration có duration <= X
+=> khoảng 5% iteration chậm hơn X
 ```
 
-Suy ra:
+không phải "95% iteration đều chậm bằng X".
+
+### Ví dụ sâu: chọn sai số sẽ ra kết luận sai
+
+Giả sử:
 
 ```text
-1/avg ≈ 0.65 iter/s
-1/med ≈ 0.65 iter/s
-1/p95 ≈ 0.63 iter/s
-```
-
-Ba số gần nhau, nên chọn `avg` hay `med` hay `p95` cũng không lệch nhiều.
-
-Ví dụ sâu B (có đuôi chậm rõ ràng):
-
-```text
-iteration_duration samples (s):
-1.50, 1.50, 1.52, 1.52, 1.53, 1.55, 1.60, 3.00, 7.00
-
-avg  ≈ 2.30s
-med  = 1.53s
-p90  ≈ 3.80s
-p95  ≈ 5.40s
-```
-
-Suy ra:
-
-```text
-1/avg ≈ 0.43 iter/s
-1/med ≈ 0.65 iter/s
-1/p90 ≈ 0.26 iter/s
-1/p95 ≈ 0.19 iter/s
-```
-
-Ý nghĩa:
-
-- Nếu bạn lấy `med` để ước lượng completion time, bạn sẽ rất lạc quan trong case có đuôi chậm.
-- Nếu bạn lấy `p95`, bạn đang chấp nhận giả định bảo thủ hơn: tốc độ dự phòng thấp, nhưng an toàn hơn cho
-  planning.
-- Nếu mục tiêu là report kết quả của chính run vừa chạy, `avg` hoặc `iterations/s` vẫn là hợp lý nhất.
-
-Giải nghĩa 3 từ dễ nhầm:
-
-- `đuôi chậm`: một nhóm nhỏ iteration chậm hơn hẳn phần còn lại. Ví dụ phần lớn 1.5s nhưng có vài cái 3s,
-  5s, 7s.
-- `lạc quan`: ước lượng nhanh hơn thực tế, tức bạn nghĩ test sẽ xong sớm hơn thực tế.
-- `sizing bảo thủ`: cố tình tính theo phía chậm hơn để chừa biên an toàn khi set `maxDuration`, số VU, hoặc
-  deadline chạy test.
-
-Ví dụ sâu C (thấy rõ hậu quả khi chọn sai):
-
-Giả sử bạn muốn chạy:
-
-```text
-executor: per-vu-iterations
+executor = per-vu-iterations
 vus = 4
 iterations_per_vu = 30
 maxDuration = 50s
 ```
 
-Mỗi VU phải chạy `30` iteration. Ước lượng thời gian một VU cần:
+Với executor này, mỗi VU phải tự chạy đủ `30` vòng. Thời gian run gần đúng theo:
 
 ```text
-time_per_vu ~= iterations_per_vu * chosen_iteration_time
+estimated_run_time ~= iterations_per_vu * chosen_iteration_time
 ```
 
 Nếu lấy `med = 1.53s`:
 
 ```text
-time_per_vu_from_med
-  ~= 30 * 1.53
-  ~= 45.9s
+30 * 1.53 = 45.9s
 ```
 
-Nhìn vào đây bạn sẽ kết luận "kịp trong 50s". Đây là kết luận lạc quan.
+Kết luận sẽ là "kịp 50s" (lạc quan).
 
 Nếu lấy `avg = 2.30s`:
 
 ```text
-time_per_vu_from_avg
-  ~= 30 * 2.30
-  ~= 69.0s
+30 * 2.30 = 69.0s
 ```
 
-Đã vượt `50s`.
+Đã không kịp `50s`.
 
 Nếu lấy `p95 = 5.40s`:
 
 ```text
-time_per_vu_from_p95
-  ~= 30 * 5.40
-  ~= 162s
+30 * 5.40 = 162s
 ```
 
-Rõ ràng không thể đặt `maxDuration=50s` rồi kỳ vọng ổn.
+Rủi ro chậm rất cao, càng không thể giữ `maxDuration=50s`.
 
-Kết quả thực tế dễ gặp khi chọn quá lạc quan:
+Kết luận của ví dụ này:
 
-- test có thể chạm `maxDuration` sớm hơn dự tính
-- không đủ thời gian để hoàn thành hết iteration
-- summary có thể xuất hiện iteration bị ngắt/không hoàn tất (ví dụ `interrupted iterations` tăng)
+- chọn `med` để chốt deadline có thể báo sai theo hướng "quá đẹp"
+- chọn `p90/p95` giúp thấy trước rủi ro đuôi chậm
+- chọn `avg`/`iterations/s` phù hợp để báo cáo cái đã xảy ra
 
-Vì vậy, khi dùng số để `sizing`:
+### Các tình huống thường gặp với `maxDuration` và `vus`
 
-- dùng `med` để mô tả nhịp điển hình
-- dùng `p90/p95` để kiểm tra rủi ro đuôi chậm trước khi chốt `maxDuration`
-- sau khi chạy thật, dùng `iterations/s` hoặc `avg` để báo cáo kết quả run vừa xảy ra
+Tình huống A:
 
-Rule quyết định nhanh (để không bị mơ hồ):
+```text
+time_from_med < maxDuration
+và
+time_from_p95 < maxDuration
+```
 
-1. Báo cáo kết quả run vừa chạy:
-   `iterations/s` (hoặc `avg` nếu cần quy đổi qua thời gian/iteration).
-2. Mô tả "nhịp thường gặp":
-   `med`.
-3. Chốt cấu hình có deadline (`maxDuration`) hoặc cần chừa biên:
-   kiểm tra thêm `p90/p95`.
+Kết luận: khá an toàn, ít rủi ro hụt deadline.
 
-Nếu thấy:
+Tình huống B:
 
 ```text
 time_from_med < maxDuration
@@ -645,46 +584,59 @@ nhưng
 time_from_p95 > maxDuration
 ```
 
-thì nghĩa là cấu hình hiện tại có rủi ro đuôi chậm. Lúc đó nên:
+Kết luận: đang có rủi ro đuôi chậm. Có thể lúc chạy thật sẽ chạm trần thời gian.
 
-- nới `maxDuration`, hoặc
-- giảm số iteration mỗi VU, hoặc
-- tối ưu thời gian mỗi iteration trước khi chốt bài test chính thức.
-
-Áp ngay vào chính demo này sẽ thấy khác biệt:
+Tình huống C:
 
 ```text
-avg  -> 0.565 iter/s
-med  -> 0.658 iter/s
-p95  -> 0.441 iter/s
+time_from_avg > maxDuration
 ```
 
-`med` cho ra số lớn hơn `avg`, nghĩa là nếu lấy `med` để trả lời "run này thực tế chạy được bao nhiêu"
-thì sẽ hơi lạc quan. `p95` cho ra số nhỏ hơn `avg`, nên nếu lấy `p95` để dự đoán thì sẽ bảo thủ hơn.
+Kết luận: cấu hình hiện tại gần như chắc chắn không kịp.
 
-Nếu muốn bám sát nhất vào kết quả thật của chính run này, có thể đọc thẳng từ summary:
+Khi gặp B hoặc C, các cách xử lý thường là:
+
+- tăng `maxDuration`
+- giảm `iterations_per_vu`
+- giảm `vus` nếu mục tiêu không bắt buộc tải cao như vậy
+- hoặc tối ưu script/SUT để kéo `iteration_duration` xuống
+
+Ghi chú quan trọng về `vus` trong `per-vu-iterations`:
+
+- tăng `vus` sẽ tăng tổng tải lên hệ thống (`total iterations = vus * iterations_per_vu`)
+- tải cao hơn thường làm response chậm hơn, kéo `avg/p95` lên
+- nên việc tăng `vus` có thể làm rủi ro chạm `maxDuration` cao hơn, dù công thức giấy ban đầu nhìn có vẻ đủ
+
+### Kết luận chốt: lấy thang nào?
+
+Nếu mục tiêu là:
 
 ```text
-iterations/s toàn bài = 2.255308/s
-vus = 4
-
-actual_avg_per_vu_iter_rate
-  = 2.255308 / 4
-  ≈ 0.564 iter/s
+báo cáo kết quả của run vừa chạy xong
 ```
 
-Số này gần như trùng với cách tính từ `avg`:
+thì chốt theo thứ tự:
+
+1. Số chính: `iterations/s` (và `http_reqs/s` nếu bạn báo theo request).
+2. Số bổ trợ: `avg` để đổi qua thời gian/iteration hoặc quy về per-VU.
+3. `med`, `p90`, `p95`: dùng để giải thích phân phối và rủi ro, không dùng làm số headline của kết quả run.
+
+Áp vào chính run QuickPizza này:
 
 ```text
-1 / 1.77 ≈ 0.565 iter/s
+headline (run result):
+  iterations/s = 2.255308
+  http_reqs/s  = 4.510616
+
+supporting numbers:
+  avg iteration duration = 1.77s
+  per-VU iteration rate  ~= 2.255308 / 4 ~= 0.564 iter/s
 ```
 
-Nên với bài QuickPizza này:
+Nói ngắn gọn:
 
-- hỏi "run này đã chạy trung bình bao nhiêu iteration mỗi giây?" -> đọc `iterations/s`
-- hỏi "quy ra 1 VU trung bình làm được bao nhiêu?" -> lấy `iterations/s / vus` hoặc `1 / avg`
-- hỏi "1 iteration điển hình thường ra sao?" -> xem `med`
-- hỏi "muốn tính chặt tay hơn theo hướng chậm" -> xem `p90/p95`
+- báo cáo "run vừa xảy ra": ưu tiên `iterations/s`, `http_reqs/s`
+- đánh giá rủi ro để set cấu hình lần sau: xem thêm `p90/p95`
 
 ### 7.2. 1 VU trong 1 giây chạy được bao nhiêu request?
 
