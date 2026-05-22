@@ -1006,8 +1006,15 @@ cấu hình 2 (tăng tải):
 ```
 
 Ở `per-vu-iterations`, công thức giấy không có nhân trực tiếp theo `vus` trong thời gian mỗi VU. Nhưng
-khi `vus` tăng, hệ thống có thể chậm hơn, làm `avg/p95` tăng theo. Vì vậy tăng `vus` vẫn có thể đẩy test
-vào trạng thái không kịp `maxDuration`.
+khi `vus` tăng, số request đồng thời tăng theo, nên hệ thống có thể bị cạnh tranh tài nguyên nhiều hơn
+(CPU, DB, connection pool, network, rate limit...). Lúc đó mỗi request phải chờ lâu hơn, làm `avg/p95`
+tăng theo. Vì vậy tăng `vus` vẫn có thể đẩy test vào trạng thái không kịp `maxDuration`.
+
+Lưu ý:
+
+- không phải lúc nào tăng `vus` cũng làm chậm
+- nếu hệ thống còn dư tải, `p95` có thể gần như không đổi
+- ví dụ này chỉ nói: khi hệ thống bắt đầu gần ngưỡng, tăng `vus` thường làm nó chậm rõ hơn
 
 Ghi chú quan trọng về `vus` trong `per-vu-iterations`:
 
@@ -1016,6 +1023,11 @@ Ghi chú quan trọng về `vus` trong `per-vu-iterations`:
 - nên việc tăng `vus` có thể làm rủi ro chạm `maxDuration` cao hơn, dù công thức giấy ban đầu nhìn có vẻ đủ
 
 ### Kết luận chốt: lấy thang nào?
+
+Có 2 tầng khác nhau:
+
+1. Báo cáo **1 run vừa chạy xong**.
+2. Tổng kết **nhiều run cùng cấu hình** để chốt năng lực/độ ổn định.
 
 Nếu mục tiêu là:
 
@@ -1028,6 +1040,18 @@ thì chốt theo thứ tự:
 1. Số chính: `iterations/s` (và `http_reqs/s` nếu bạn báo theo request).
 2. Số bổ trợ: `avg` để đổi qua thời gian/iteration hoặc quy về per-VU.
 3. `med`, `p90`, `p95`: dùng để giải thích phân phối và rủi ro, không dùng làm số headline của kết quả run.
+
+Nếu mục tiêu là:
+
+```text
+tổng kết 3-5 run cùng cấu hình
+```
+
+thì:
+
+1. lấy `iterations/s` của từng run
+2. chọn `median` giữa các run làm số đại diện
+3. xem thêm run xấu nhất để chốt biên an toàn (`p95`, `maxDuration`, lỗi)
 
 Áp vào chính run QuickPizza này:
 
