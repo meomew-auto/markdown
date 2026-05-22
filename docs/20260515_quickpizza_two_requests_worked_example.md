@@ -841,6 +841,22 @@ median = 2.21 iter/s
 
 Nên số đại diện báo cáo là khoảng `2.21 iter/s` (không lấy run đẹp nhất `2.31`).
 
+Vì sao không lấy run đẹp nhất?
+
+- run đẹp nhất chỉ là best-case, không phải mức điển hình
+- nó có thể đến từ may mắn thời điểm chạy: network đẹp hơn, máy ít bận hơn, cache nóng hơn
+- nếu lấy nó làm headline, bạn sẽ dễ báo cáo quá cao khả năng thật của hệ thống
+
+Nói ngắn:
+
+```text
+best run = trần trên nhìn thấy được
+median run = mức đại diện dễ tin hơn
+```
+
+Nếu mục tiêu là "cho thấy hệ thống đạt tối đa bao nhiêu trong một lần đẹp nhất" thì có thể nêu run đẹp nhất, nhưng
+phải ghi rõ đó là best observed, không phải số đại diện để sizing.
+
 Bước 2 - chốt `maxDuration` theo hướng an toàn:
 
 ```text
