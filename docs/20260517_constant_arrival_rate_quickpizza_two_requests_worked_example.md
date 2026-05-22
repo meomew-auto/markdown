@@ -600,3 +600,30 @@ summary_runtime_base ~= completed_iterations / iterations_rate
 - `interrupted iterations` là iteration đã start nhưng bị cancel.
 - Không so sánh trực tiếp summary completed rate với target start rate để kết luận đạt/không đạt lịch start.
 - Summary completed rate có thể thấp hơn target start rate vì summary tính trên runtime thực tế, bao gồm thời gian iteration cuối finish trong `gracefulStop`.
+
+## 11. Kết luận chốt: đọc số nào?
+
+`constant-arrival-rate` là open model: mục tiêu chính là nhịp start iteration (`lambda`).
+
+Nên đọc theo thứ tự:
+
+1. `lambda` hoặc `rate/timeUnit` = nhịp muốn start.
+2. `iterations/s` trong summary = nhịp completed thật.
+3. `dropped_iterations` = mốc start bị bỏ.
+4. `iteration_duration` = thời gian 1 iteration giữ 1 VU bận.
+
+Khi sizing VU:
+
+- dùng `W_effective ~= max(iteration_duration, minIterationDuration)` nếu có min
+- nếu không có min thì thường lấy gần bằng `iteration_duration`
+- để an toàn hơn, dùng `iteration_duration p95` thay vì chỉ `avg`
+- nếu nhiều run cùng cấu hình, lấy `median(iterations/s)` giữa các run làm số đại diện
+
+Điểm mấu chốt:
+
+```text
+lambda = nhịp start mong muốn
+iterations/s = nhịp hoàn thành thực tế
+```
+
+Hai số này có thể khác nhau nếu thiếu VU hoặc có interrupt/drop.

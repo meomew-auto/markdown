@@ -536,3 +536,26 @@ muốn tính request tổng ở demo này:
 http_reqs = iterations * 2
 vì mỗi completed iteration chạy đủ 2 HTTP requests
 ```
+
+## 8. Kết luận chốt: đọc số nào?
+
+`ramping-vus` là closed model nhưng số VU thay đổi theo timeline.
+
+Nên khi báo cáo 1 run:
+
+- số chính: `iterations/s` và `http_reqs/s` của toàn scenario
+- `iteration_duration avg` để nói 1 iteration thường mất bao lâu
+- `med` để nói nhịp điển hình
+- `p90/p95` để nhìn phần chậm, nhất là khi ramp down hoặc cuối scenario
+
+Khi sizing:
+
+- đừng lấy summary `iterations/s` làm peak của từng stage
+- peak từng đoạn phải nhìn theo timeline / số VU active trong đoạn đó
+- `iteration_duration p95` giúp bảo thủ hơn nếu run dao động
+
+Nếu nhiều run cùng cấu hình:
+
+- lấy `median(iterations/s)` giữa các run làm số đại diện
+- run đẹp nhất chỉ nên ghi là best observed
+- run xấu nhất giữ lại để xem grace/ramp-down có tạo interrupted iterations không

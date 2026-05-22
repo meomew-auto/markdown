@@ -162,3 +162,29 @@ không phải average rate của cả timeline
 slot hiện tại bị drop nếu không có VU rảnh
 unplanned VU chỉ giúp các slot sau
 ```
+
+## 6. Kết luận chốt: đọc số nào?
+
+`ramping-arrival-rate` cũng là open model, nhưng nhịp start thay đổi theo stage.
+
+Nên khi báo cáo 1 run:
+
+- số chính: `lambda_start`, `lambda_peak`, và `iterations/s` thực tế của summary
+- `dropped_iterations` để biết có bỏ mốc start nào không
+- `http_reqs/s` nếu muốn nhìn theo request
+- `iteration_duration avg/med/p95` để mô tả VU bị bận bao lâu
+
+Khi sizing:
+
+- lấy `lambda_peak` làm nhịp cần bảo vệ
+- dùng `W_effective_p95` để tránh lạc quan
+- công thức chốt là `safe_vus ~= ceil(lambda_peak * W_effective_p95 * safety_factor)`
+- nhiều run cùng cấu hình thì lấy `median(iterations/s)` giữa các run làm số đại diện, run xấu nhất giữ để kiểm tra drop
+
+Điểm mấu chốt:
+
+```text
+stage curve quyết định nhịp start
+VU sizing quyết định có drop hay không
+summary completed rate chỉ là kết quả cuối
+```
