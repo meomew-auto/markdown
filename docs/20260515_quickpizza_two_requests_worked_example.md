@@ -561,6 +561,96 @@ Suy ra:
   planning.
 - Nếu mục tiêu là report kết quả của chính run vừa chạy, `avg` hoặc `iterations/s` vẫn là hợp lý nhất.
 
+Giải nghĩa 3 từ dễ nhầm:
+
+- `đuôi chậm`: một nhóm nhỏ iteration chậm hơn hẳn phần còn lại. Ví dụ phần lớn 1.5s nhưng có vài cái 3s,
+  5s, 7s.
+- `lạc quan`: ước lượng nhanh hơn thực tế, tức bạn nghĩ test sẽ xong sớm hơn thực tế.
+- `sizing bảo thủ`: cố tình tính theo phía chậm hơn để chừa biên an toàn khi set `maxDuration`, số VU, hoặc
+  deadline chạy test.
+
+Ví dụ sâu C (thấy rõ hậu quả khi chọn sai):
+
+Giả sử bạn muốn chạy:
+
+```text
+executor: per-vu-iterations
+vus = 4
+iterations_per_vu = 30
+maxDuration = 50s
+```
+
+Mỗi VU phải chạy `30` iteration. Ước lượng thời gian một VU cần:
+
+```text
+time_per_vu ~= iterations_per_vu * chosen_iteration_time
+```
+
+Nếu lấy `med = 1.53s`:
+
+```text
+time_per_vu_from_med
+  ~= 30 * 1.53
+  ~= 45.9s
+```
+
+Nhìn vào đây bạn sẽ kết luận "kịp trong 50s". Đây là kết luận lạc quan.
+
+Nếu lấy `avg = 2.30s`:
+
+```text
+time_per_vu_from_avg
+  ~= 30 * 2.30
+  ~= 69.0s
+```
+
+Đã vượt `50s`.
+
+Nếu lấy `p95 = 5.40s`:
+
+```text
+time_per_vu_from_p95
+  ~= 30 * 5.40
+  ~= 162s
+```
+
+Rõ ràng không thể đặt `maxDuration=50s` rồi kỳ vọng ổn.
+
+Kết quả thực tế dễ gặp khi chọn quá lạc quan:
+
+- test có thể chạm `maxDuration` sớm hơn dự tính
+- không đủ thời gian để hoàn thành hết iteration
+- summary có thể xuất hiện iteration bị ngắt/không hoàn tất (ví dụ `interrupted iterations` tăng)
+
+Vì vậy, khi dùng số để `sizing`:
+
+- dùng `med` để mô tả nhịp điển hình
+- dùng `p90/p95` để kiểm tra rủi ro đuôi chậm trước khi chốt `maxDuration`
+- sau khi chạy thật, dùng `iterations/s` hoặc `avg` để báo cáo kết quả run vừa xảy ra
+
+Rule quyết định nhanh (để không bị mơ hồ):
+
+1. Báo cáo kết quả run vừa chạy:
+   `iterations/s` (hoặc `avg` nếu cần quy đổi qua thời gian/iteration).
+2. Mô tả "nhịp thường gặp":
+   `med`.
+3. Chốt cấu hình có deadline (`maxDuration`) hoặc cần chừa biên:
+   kiểm tra thêm `p90/p95`.
+
+Nếu thấy:
+
+```text
+time_from_med < maxDuration
+nhưng
+time_from_p95 > maxDuration
+```
+
+thì nghĩa là cấu hình hiện tại có rủi ro đuôi chậm. Lúc đó nên:
+
+- nới `maxDuration`, hoặc
+- giảm số iteration mỗi VU, hoặc
+- tối ưu thời gian mỗi iteration trước khi chốt bài test chính thức.
+
 Áp ngay vào chính demo này sẽ thấy khác biệt:
 
 ```text
