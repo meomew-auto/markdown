@@ -502,6 +502,39 @@ from_p95: 1 / 2.27 ≈ 0.441 iter/s
 - Ước lượng deadline (`maxDuration`) theo hướng an toàn:
   dùng thêm `p90/p95`.
 
+`Mô tả nhịp điển hình` nghĩa là:
+
+- bạn không hỏi "tổng thể trung bình bao nhiêu", mà hỏi:
+  "đa số iteration thường chạy ở mức nào?"
+- đây là nhịp mà phần lớn VU hay gặp nhất trong run, không bị vài mẫu chậm bất thường kéo lệch.
+
+Vì vậy dùng `med` (p50) là hợp lý:
+
+```text
+med = X
+=> khoảng 50% iteration nhanh hơn hoặc bằng X
+=> khoảng 50% iteration chậm hơn hoặc bằng X
+```
+
+Ví dụ ngắn:
+
+```text
+10 iteration:
+9 iteration = 1.5s
+1 iteration = 7.0s
+
+med = 1.5s   (đúng với nhịp đa số)
+avg = 2.05s  (bị 1 mẫu chậm kéo lên)
+```
+
+Nên khi bạn muốn viết câu kiểu:
+
+```text
+"nhịp chạy thường gặp của bài test này vào khoảng ..."
+```
+
+thì điền bằng `med` sẽ đúng ý hơn `avg`.
+
 Phân biệt rõ 2 đại lượng:
 
 ```text
@@ -613,6 +646,20 @@ time_from_p95 < maxDuration
 
 Kết luận: khá an toàn, ít rủi ro hụt deadline.
 
+Ví dụ số A:
+
+```text
+executor = per-vu-iterations
+vus = 4
+iterations_per_vu = 3
+maxDuration = 30s
+p95 = 2.27s
+
+time_from_p95 ~= 3 * 2.27 = 6.81s
+```
+
+`6.81s < 30s` nên khá dư thời gian, rủi ro thấp.
+
 Tình huống B:
 
 ```text
@@ -623,6 +670,22 @@ time_from_p95 > maxDuration
 
 Kết luận: đang có rủi ro đuôi chậm. Có thể lúc chạy thật sẽ chạm trần thời gian.
 
+Ví dụ số B:
+
+```text
+executor = per-vu-iterations
+vus = 4
+iterations_per_vu = 30
+maxDuration = 50s
+med = 1.53s
+p95 = 2.27s
+
+time_from_med ~= 30 * 1.53 = 45.9s   (kịp)
+time_from_p95 ~= 30 * 2.27 = 68.1s   (không kịp)
+```
+
+Nhìn `med` thì tưởng ổn, nhưng nhìn `p95` thì thấy rủi ro vượt `maxDuration`.
+
 Tình huống C:
 
 ```text
@@ -631,12 +694,42 @@ time_from_avg > maxDuration
 
 Kết luận: cấu hình hiện tại gần như chắc chắn không kịp.
 
+Ví dụ số C:
+
+```text
+executor = per-vu-iterations
+vus = 4
+iterations_per_vu = 30
+maxDuration = 50s
+avg = 1.77s
+
+time_from_avg ~= 30 * 1.77 = 53.1s
+```
+
+`53.1s > 50s` nên ngay cả theo trung bình cũng đã vượt trần.
+
 Khi gặp B hoặc C, các cách xử lý thường là:
 
 - tăng `maxDuration`
 - giảm `iterations_per_vu`
 - giảm `vus` nếu mục tiêu không bắt buộc tải cao như vậy
 - hoặc tối ưu script/SUT để kéo `iteration_duration` xuống
+
+Ví dụ thêm về `vus` (vì `vus` làm đổi tải hệ thống):
+
+```text
+cấu hình 1:
+  vus = 4, iterations_per_vu = 30, p95 = 2.27s
+  time_from_p95 ~= 68.1s
+
+cấu hình 2 (tăng tải):
+  vus = 12, iterations_per_vu = 30, p95 tăng lên 4.20s
+  time_from_p95 ~= 126s
+```
+
+Ở `per-vu-iterations`, công thức giấy không có nhân trực tiếp theo `vus` trong thời gian mỗi VU. Nhưng
+khi `vus` tăng, hệ thống có thể chậm hơn, làm `avg/p95` tăng theo. Vì vậy tăng `vus` vẫn có thể đẩy test
+vào trạng thái không kịp `maxDuration`.
 
 Ghi chú quan trọng về `vus` trong `per-vu-iterations`:
 
