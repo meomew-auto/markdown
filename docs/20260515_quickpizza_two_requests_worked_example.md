@@ -884,13 +884,25 @@ http_req_waiting          220ms       240ms
 http_req_receiving        14ms        16ms
 ```
 
-Mẫu này cho thấy nghẽn chính nằm ở kết nối/network (vì blocked/connecting/tls cùng tăng mạnh, còn waiting
-chỉ tăng nhẹ).
+Mẫu này cho thấy phần kết nối/network xấu lên rõ:
+
+```text
+blocked   ~ x28
+connecting~ x17.5
+tls       ~ x14
+```
+
+Nhưng `waiting` vẫn là phần lớn thời gian của request.
+Nên kết luận đúng hơn là:
+
+- network/kết nối có tăng rõ so với baseline
+- chưa đủ dữ kiện để nói network là nghẽn chính
+- run xấu này có thể là tổng hợp của network + server, nhưng phần network đã xấu lên thấy rõ
 
 Để dễ phân loại nhanh:
 
-- network/kết nối: `blocked`, `connecting`, `tls` tăng đồng thời.
-- server xử lý chậm: `waiting` tăng rõ, còn các metric kết nối tăng ít.
+- network/kết nối: `blocked`, `connecting`, `tls` tăng mạnh so với baseline.
+- server xử lý chậm: `waiting` tăng rõ và thường chiếm phần lớn thời gian request.
 - payload/băng thông: `receiving` tăng rõ.
 
 ### Các tình huống thường gặp với `maxDuration` và `vus`
