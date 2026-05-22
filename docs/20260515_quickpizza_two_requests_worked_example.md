@@ -626,13 +626,40 @@ Nếu lấy `p95 = 5.40s`:
 30 * 5.40 = 162s
 ```
 
-Rủi ro chậm rất cao, càng không thể giữ `maxDuration=50s`.
+`162s` đã lớn hơn rất nhiều so với `maxDuration=50s`.
+
+Nghĩa là:
+
+- nếu vẫn giữ `maxDuration=50s`, test rất dễ chạm trần thời gian trước khi chạy xong đủ iteration
+- khi đó có thể xuất hiện iteration không hoàn tất trong summary (ví dụ interrupted tăng)
 
 Kết luận của ví dụ này:
 
 - chọn `med` để chốt deadline có thể báo sai theo hướng "quá đẹp"
 - chọn `p90/p95` giúp thấy trước rủi ro đuôi chậm
 - chọn `avg`/`iterations/s` phù hợp để báo cáo cái đã xảy ra
+
+Nếu đã thấy vượt `maxDuration` thì làm gì?
+
+Bạn phải chốt ưu tiên trước:
+
+1. Giữ workload (vẫn muốn `30 iterations/VU`):
+   tăng `maxDuration` lên mức đủ lớn.
+   Với ví dụ này, mốc bảo thủ theo `p95` là khoảng `162s`, nên thực tế thường đặt cao hơn mốc đó một ít để có
+   biên an toàn.
+2. Giữ thời gian (`maxDuration=50s`):
+   giảm workload.
+   Ví dụ tính ngược số iteration mỗi VU:
+
+```text
+theo p95: floor(50 / 5.40) = 9 iterations/VU (bảo thủ)
+theo avg: floor(50 / 2.30) = 21 iterations/VU (điển hình)
+```
+
+Nghĩa là giữ `30 iterations/VU` là quá cao cho deadline 50s trong điều kiện hiện tại.
+
+3. Giữ cả workload và deadline:
+   bắt buộc phải tối ưu hệ thống/script để kéo `iteration_duration` xuống rõ rệt, nếu không sẽ không khả thi.
 
 Nếu thực tế phụ thuộc network/SUT dao động thì sao?
 
