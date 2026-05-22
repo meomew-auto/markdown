@@ -495,11 +495,48 @@ from_p95: 1 / 2.27 ≈ 0.441 iter/s
 ### Chọn số nào cho đúng mục tiêu?
 
 - Báo cáo kết quả run vừa chạy:
-  dùng `iterations/s` (hoặc `avg` khi cần đổi qua giây/iteration).
+  dùng `iterations/s` làm số chính.
+  `avg` chỉ là số phụ để diễn giải thời gian mỗi iteration, không thay thế `iterations/s`.
 - Mô tả nhịp điển hình:
   dùng `med`.
 - Ước lượng deadline (`maxDuration`) theo hướng an toàn:
   dùng thêm `p90/p95`.
+
+Phân biệt rõ 2 đại lượng:
+
+```text
+iterations/s
+  = completed_iterations / summary_runtime_base
+  (đơn vị: iteration mỗi giây của toàn run)
+
+iteration_duration avg
+  = tổng duration của các iteration hoàn tất / số iteration hoàn tất
+  (đơn vị: giây mỗi iteration)
+```
+
+Hai số này không phải cùng một thứ, nên không "đổi ngang" 1-1 cho nhau.
+
+Chỉ khi điều kiện khá ổn định (closed model, số VU hoạt động gần cố định, không bị ngắt/ramp mạnh), mới có
+thể xấp xỉ:
+
+```text
+iterations/s ~= active_vus / avg_iteration_duration
+```
+
+Trong demo này:
+
+```text
+4 / 1.77 ~= 2.26 iter/s
+```
+
+gần với summary:
+
+```text
+2.255308 iter/s
+```
+
+nên nhìn có vẻ "đổi được". Nhưng đó là xấp xỉ theo điều kiện run này, không phải công thức đúng tuyệt đối
+cho mọi bài test.
 
 Giải nghĩa nhanh:
 
