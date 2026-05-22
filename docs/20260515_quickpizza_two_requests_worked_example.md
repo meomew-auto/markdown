@@ -1409,7 +1409,9 @@ Phần chênh này đến từ:
 
 - `check()`
 - JS overhead
-- runtime/scheduling overhead
+- runtime overhead
+- event loop overhead
+- scheduling overhead
 - và việc `http_req_duration avg` là trung bình của **mọi request**, không phải trung bình riêng của đúng 1 iteration
 
 ### Công thức chuẩn, viết ngắn
@@ -1425,6 +1427,23 @@ Trong đó `non_http_time` gồm:
 - `check()`
 - logic JS ngoài request
 - overhead của runtime / event loop / scheduling
+
+Nói kỹ hơn:
+
+- `runtime overhead`: thời gian k6/Sobek phải bỏ ra để chạy JS, set `__ITER`, xử lý `check()`, tạo/đọc
+  context, ghi metric, đổi kiểu dữ liệu, GC... Nó là chi phí để "vận hành JS", không phải chi phí request.
+- `event loop overhead`: thời gian xử lý các callback/promise/async work mà script hoặc module đã đăng ký.
+  Trong core, `runFn()` gọi `eventloop.Start(...)` và sau đó `WaitOnRegistered()`; nếu còn callback đã
+  đăng ký, iteration chưa kết thúc ngay.
+- `scheduling overhead`: thời gian phát sinh do việc VU/goroutine phải tranh CPU với tác vụ khác, phải
+  chờ được chạy lại, hoặc chờ hệ điều hành/scheduler đánh thức. Đây là phần tôi **suy ra từ kiến trúc chạy**
+  của k6, không phải một metric riêng.
+
+Lưu ý:
+
+- nếu script chỉ sync và rất gọn, 3 phần này thường nhỏ
+- nếu có async, promise, callback, nhiều VU, hoặc máy đang bận, 3 phần này có thể tăng rõ
+- chúng không phải là HTTP time, nên không nằm trong `http_req_duration`
 
 Với demo này:
 
