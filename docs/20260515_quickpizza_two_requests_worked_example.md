@@ -777,6 +777,33 @@ Chiến lược thực tế (khuyên dùng):
 
 Khi thấy `iteration_duration` tăng, bóc thêm metric HTTP để biết chậm ở đâu:
 
+`iteration_duration tăng` ở đây nghĩa là:
+
+- so với mốc chuẩn trước đó (baseline) của cùng script/cùng options/cùng môi trường,
+- các số như `avg` hoặc `p95` của `iteration_duration` tăng lên rõ rệt.
+
+Ví dụ:
+
+```text
+baseline: iteration_duration p95 = 2.2s
+run mới:  iteration_duration p95 = 3.1s
+```
+
+thì có thể nói run mới đang chậm hơn baseline.
+
+Với demo này (2 request nối tiếp + sleep(1)), có thể nghĩ gần đúng:
+
+```text
+iteration_duration
+  ~= req1_time + req2_time + sleep_time + js/check overhead
+```
+
+Nên khi `iteration_duration` tăng, đừng kết luận ngay là server chậm. Phải tách:
+
+1. `sleep_time` hoặc logic script có đổi không?
+   - ví dụ đổi `sleep(1)` thành `sleep(2)` thì `iteration_duration` tăng ~1s là bình thường.
+2. nếu script không đổi, mới soi các metric HTTP để xem nghẽn ở đâu.
+
 - `http_req_blocked`/`http_req_connecting`/`http_req_tls_handshaking` tăng:
   thường nghiêng về mạng/kết nối.
 - `http_req_waiting` tăng:
