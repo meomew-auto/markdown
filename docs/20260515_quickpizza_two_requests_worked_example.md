@@ -649,11 +649,40 @@ Bạn phải chốt ưu tiên trước:
    biên an toàn.
 2. Giữ thời gian (`maxDuration=50s`):
    giảm workload.
-   Ví dụ tính ngược số iteration mỗi VU:
+   Ví dụ tính ngược số iteration mỗi VU (viết rõ từng bước):
 
 ```text
-theo p95: floor(50 / 5.40) = 9 iterations/VU (bảo thủ)
-theo avg: floor(50 / 2.30) = 21 iterations/VU (điển hình)
+Điều kiện cần để kịp thời gian:
+
+iterations_per_vu * chosen_iteration_time <= maxDuration
+
+=> iterations_per_vu <= maxDuration / chosen_iteration_time
+```
+
+Vì `iterations_per_vu` phải là số nguyên, nên lấy phần nguyên xuống:
+
+```text
+iterations_per_vu_max = floor(maxDuration / chosen_iteration_time)
+```
+
+Áp số cụ thể:
+
+```text
+theo p95 = 5.40s:
+  50 / 5.40 = 9.26
+  floor(9.26) = 9 iterations/VU
+
+  kiểm tra:
+    9 * 5.40 = 48.6s  (kịp)
+   10 * 5.40 = 54.0s  (vượt 50s)
+
+theo avg = 2.30s:
+  50 / 2.30 = 21.73
+  floor(21.73) = 21 iterations/VU
+
+  kiểm tra:
+    21 * 2.30 = 48.3s (kịp)
+    22 * 2.30 = 50.6s (vượt 50s)
 ```
 
 Nghĩa là giữ `30 iterations/VU` là quá cao cho deadline 50s trong điều kiện hiện tại.
