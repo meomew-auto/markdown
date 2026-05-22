@@ -634,6 +634,63 @@ Kết luận của ví dụ này:
 - chọn `p90/p95` giúp thấy trước rủi ro đuôi chậm
 - chọn `avg`/`iterations/s` phù hợp để báo cáo cái đã xảy ra
 
+Nếu thực tế phụ thuộc network/SUT dao động thì sao?
+
+Điểm quan trọng:
+
+- `chosen_iteration_time` không phải hằng số cố định. Nó là một phân phối thời gian.
+- mỗi lần run chỉ là một ảnh chụp của phân phối đó tại thời điểm chạy.
+- network chậm, queue tăng, CPU bận... sẽ làm cả phân phối dịch sang phải (chậm hơn).
+
+Vì vậy, với `per-vu-iterations`, thay vì giữ 1 con số duy nhất, nên nhìn theo 3 lớp:
+
+```text
+optimistic_time ~= iterations_per_vu * med
+typical_time    ~= iterations_per_vu * avg
+safe_time       ~= iterations_per_vu * p95
+```
+
+Ý nghĩa ra quyết định:
+
+- nếu `optimistic_time > maxDuration`:
+  gần như chắc chắn không kịp.
+- nếu `typical_time < maxDuration` nhưng `safe_time > maxDuration`:
+  có thể kịp ở run "đẹp", nhưng dễ fail khi network/SUT xấu hơn bình thường.
+- nếu `safe_time < maxDuration`:
+  thường an toàn hơn cho vận hành thực tế.
+
+Ví dụ ngay với `iterations_per_vu = 30`, `maxDuration = 50s`:
+
+```text
+med=1.53s  -> optimistic_time ~= 45.9s
+avg=2.30s  -> typical_time    ~= 69.0s
+p95=5.40s  -> safe_time       ~= 162s
+```
+
+Nhìn vào đây:
+
+- run đẹp có thể tưởng "kịp"
+- nhưng run thực tế có dao động thì rất dễ vượt trần thời gian
+
+Chiến lược thực tế (khuyên dùng):
+
+1. Chạy cùng cấu hình ít nhất 3-5 lần.
+2. Báo cáo năng lực run:
+   lấy `median` của `iterations/s` giữa các run (không lấy run đẹp nhất).
+3. Chốt `maxDuration`:
+   kiểm tra `p95` của từng run và lấy run xấu nhất làm tham chiếu an toàn.
+4. Nếu độ dao động lớn (run này rất nhanh, run kia rất chậm):
+   chưa kết luận vội về capacity của hệ thống, cần ổn định lại môi trường test trước.
+
+Khi thấy `iteration_duration` tăng, bóc thêm metric HTTP để biết chậm ở đâu:
+
+- `http_req_blocked`/`http_req_connecting`/`http_req_tls_handshaking` tăng:
+  thường nghiêng về mạng/kết nối.
+- `http_req_waiting` tăng:
+  thường nghiêng về server xử lý chậm hơn.
+- `http_req_receiving` tăng:
+  thường do payload lớn hoặc băng thông/đường truyền.
+
 ### Các tình huống thường gặp với `maxDuration` và `vus`
 
 Tình huống A:
