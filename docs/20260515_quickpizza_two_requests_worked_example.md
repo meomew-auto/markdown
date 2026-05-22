@@ -1305,11 +1305,30 @@ Nó không đo "bao nhiêu event mỗi giây". Nó đo "mỗi event mất bao l�
 
 ## 8.1. `http_req_duration` và `iteration_duration` liên hệ thế nào?
 
-Mỗi iteration ở đây là:
+Không phải `iteration` chỉ là một nhóm request.
+
+`iteration` là **1 lần chạy xong toàn bộ hàm `default()`** (hoặc hàm được executor gọi).
+Trong lần chạy đó có thể có:
+
+- nhiều HTTP request
+- `sleep()`
+- `check()`
+- vòng lặp, `if`, parse JSON, logic JS khác
+- overhead của runtime
+
+Với demo này, 1 iteration cụ thể là:
 
 ```text
 request 1 + request 2 + sleep(1) + check + overhead
 ```
+
+Nên hiểu đúng là:
+
+- `http_req_duration` = thời gian của **từng request**
+- `iteration_duration` = thời gian của **cả iteration**
+
+Trong core, `iteration_duration` được lấy từ `endTime - startTime` của một lần chạy JS hoàn chỉnh
+(`internal/js/runner.go:runFn()`), và chỉ emit khi iteration hoàn tất.
 
 ### Nhìn ở trạng thái nhanh nhất
 
@@ -1341,7 +1360,7 @@ Nghĩa là:
 
 ```text
 iteration nhanh nhất
-≈ 2 request nhanh nhất + sleep(1)
+≈ 2 request nhanh nhất + sleep(1) + check + JS/runtime overhead nhỏ
 ```
 
 ### Nhìn ở trung bình
@@ -1367,10 +1386,56 @@ Chênh lệch:
 
 Phần chênh này đến từ:
 
-- request đầu tiên của mỗi VU chậm hơn
 - `check()`
 - JS overhead
 - runtime/scheduling overhead
+- và việc `http_req_duration avg` là trung bình của **mọi request**, không phải trung bình riêng của đúng 1 iteration
+
+### Công thức chuẩn, viết ngắn
+
+```text
+iteration_duration
+  ≈ Σ(http_req_duration_i) + non_http_time
+```
+
+Trong đó `non_http_time` gồm:
+
+- `sleep()`
+- `check()`
+- logic JS ngoài request
+- overhead của runtime / event loop / scheduling
+
+Với demo này:
+
+```text
+iteration_duration
+  ≈ http_req_duration(req1)
+   + http_req_duration(req2)
+   + sleep(1)
+   + check + overhead
+```
+
+Áp số avg để nhìn nhanh:
+
+```text
+2 * 260.76ms + 1s
+= 1.52152s
+```
+
+So với:
+
+```text
+iteration_duration avg = 1.77s
+```
+
+Chênh lệch khoảng:
+
+```text
+1.77 - 1.52152
+= 0.24848s
+```
+
+Đó là phần `check`, JS overhead, và runtime overhead còn lại.
 
 ## 9. `Gauge`: `vus` và `vus_max` đọc theo công thức nào?
 
