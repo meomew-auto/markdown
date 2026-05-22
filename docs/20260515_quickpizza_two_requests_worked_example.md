@@ -424,13 +424,25 @@ checks_succeeded...: 100.00% 24 out of 24
 checks_failed......: 0.00%   0 out of 24
 ```
 
-## 7. 1 VU trong 1 giây chạy được bao nhiêu iteration?
+## 7. 1 VU trong 1 giây chạy được bao nhiêu iteration và bao nhiêu request?
 
-Lấy `iteration_duration`:
+Với bài này, executor là `per-vu-iterations`, tức kiểu closed model:
 
 ```text
-iteration_duration avg = 1.77s
-iteration_duration min = 1.52s
+1 VU chạy xong iteration hiện tại
+-> mới lấy iteration tiếp theo
+```
+
+Vì vậy câu hỏi:
+
+```text
+1 VU trong 1 giây chạy được bao nhiêu?
+```
+
+thực chất là đổi ngược từ:
+
+```text
+1 iteration trung bình mất bao lâu?
 ```
 
 Trong demo này không set `minIterationDuration`, nên có thể lấy gần đúng:
@@ -445,31 +457,148 @@ Nếu có `minIterationDuration`, phải dùng:
 effective_iteration_time ~= max(iteration_duration, minIterationDuration)
 ```
 
-Suy ra tốc độ của 1 VU:
+Phải hiểu cho đúng:
 
 ```text
-per_vu_rate_avg
+0.56 iter/s
+```
+
+không có nghĩa là mỗi đúng 1 giây VU sẽ luôn hoàn thành 0.56 iteration. Nó chỉ là tốc độ trung bình hóa
+ra trên một khoảng thời gian đủ dài.
+
+### 7.1. Nên dùng `avg`, `med`, hay `p90/p95`?
+
+Không có một số đúng cho mọi mục đích. Phải hỏi trước: bạn muốn mô tả cái gì?
+
+Lấy `iteration_duration` của run này:
+
+```text
+avg    = 1.77s
+med    = 1.52s
+p(90)  = 2.27s
+p(95)  = 2.27s
+```
+
+Trong run này `p90` và `p95` bằng nhau vì số sample iteration ít, và cả hai cùng rơi vào phần đuôi chậm
+của tập sample.
+
+Suy ra tốc độ ước lượng của 1 VU:
+
+```text
+per_vu_rate_from_avg
   ≈ 1 / 1.77
   ≈ 0.565 iter/s
 
-per_vu_rate_fast
+per_vu_rate_from_med
   ≈ 1 / 1.52
   ≈ 0.658 iter/s
+
+per_vu_rate_from_p95
+  ≈ 1 / 2.27
+  ≈ 0.441 iter/s
 ```
 
-Nếu nhân với `4 VU`:
+Cắt nghĩa:
+
+- Dùng `avg` khi câu hỏi là: trong lần chạy này, trung bình thực tế 1 VU làm được bao nhiêu. Đây là số
+  hợp lý nhất để mô tả cái đã xảy ra trong cả run.
+- Dùng `med` khi câu hỏi là: một iteration điển hình, không quá nhanh, không bị kéo bởi vài iteration
+  chậm. Số này hay dùng để nhìn "mặt bằng thường gặp".
+- Dùng `p90` hoặc `p95` khi muốn tính theo hướng bảo thủ hơn, ví dụ: nếu iteration nghiêng về phía chậm
+  thì 1 VU còn chạy được bao nhiêu. Số này phù hợp hơn cho capacity planning hoặc ước lượng xem test có
+  dễ chạm `maxDuration` không.
+- Không nên dùng `min` để dự đoán throughput. `min` chỉ là sample nhanh nhất, thường quá lạc quan.
+
+Áp ngay vào chính demo này sẽ thấy khác biệt:
 
 ```text
-estimated_total_rate_from_avg
-  ≈ 4 * 0.565
-  ≈ 2.26 iter/s
+avg  -> 0.565 iter/s
+med  -> 0.658 iter/s
+p95  -> 0.441 iter/s
 ```
 
-Khá sát với:
+`med` cho ra số lớn hơn `avg`, nghĩa là nếu lấy `med` để trả lời "run này thực tế chạy được bao nhiêu"
+thì sẽ hơi lạc quan. `p95` cho ra số nhỏ hơn `avg`, nên nếu lấy `p95` để dự đoán thì sẽ bảo thủ hơn.
+
+Nếu muốn bám sát nhất vào kết quả thật của chính run này, có thể đọc thẳng từ summary:
 
 ```text
-iterations/s = 2.255308/s
+iterations/s toàn bài = 2.255308/s
+vus = 4
+
+actual_avg_per_vu_iter_rate
+  = 2.255308 / 4
+  ≈ 0.564 iter/s
 ```
+
+Số này gần như trùng với cách tính từ `avg`:
+
+```text
+1 / 1.77 ≈ 0.565 iter/s
+```
+
+Nên với bài QuickPizza này:
+
+- hỏi "run này đã chạy trung bình bao nhiêu iteration mỗi giây?" -> đọc `iterations/s`
+- hỏi "quy ra 1 VU trung bình làm được bao nhiêu?" -> lấy `iterations/s / vus` hoặc `1 / avg`
+- hỏi "1 iteration điển hình thường ra sao?" -> xem `med`
+- hỏi "muốn tính chặt tay hơn theo hướng chậm" -> xem `p90/p95`
+
+### 7.2. 1 VU trong 1 giây chạy được bao nhiêu request?
+
+Ở demo này:
+
+```text
+1 completed iteration
+  = 2 HTTP requests
+```
+
+Nên chỉ cần lấy tốc độ iteration rồi nhân `2`:
+
+```text
+per_vu_http_req_rate_from_avg
+  ≈ 2 * 0.565
+  ≈ 1.13 req/s
+
+per_vu_http_req_rate_from_med
+  ≈ 2 * 0.658
+  ≈ 1.32 req/s
+
+per_vu_http_req_rate_from_p95
+  ≈ 2 * 0.441
+  ≈ 0.88 req/s
+```
+
+Nếu đọc theo kết quả thực tế của cả run:
+
+```text
+http_reqs/s toàn bài = 4.510616/s
+
+actual_avg_per_vu_http_req_rate
+  = 4.510616 / 4
+  ≈ 1.128 req/s
+```
+
+Hoặc lấy từ `iterations/s`:
+
+```text
+2 * 2.255308
+  = 4.510616 req/s
+```
+
+Tức là:
+
+- cả bài test này chạy trung bình khoảng `4.51 request/s`
+- mỗi VU chạy trung bình khoảng `1.13 request/s`
+
+Lưu ý quan trọng:
+
+- Cách nhân `2 * iterations/s` chỉ đúng vì demo này rất sạch: mỗi iteration hoàn thành đều gọi đúng 2
+  request.
+- Nếu code có nhánh `if`, có request thứ hai bị bỏ qua, có request retry, hoặc iteration dừng giữa chừng
+  thì phải đọc `http_reqs` thật từ summary, không được nhân máy móc.
+- Hai request trong bài này được gọi nối tiếp, không phải bắn song song. Nên `1.13 req/s mỗi VU` là
+  tốc độ trung bình của cả vòng lặp, không phải cứ mỗi giây phát đều hai request.
 
 ## 8. `Trend`: `http_req_duration` và `iteration_duration` đọc theo công thức nào?
 
