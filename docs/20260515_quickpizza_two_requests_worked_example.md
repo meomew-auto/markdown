@@ -638,6 +638,45 @@ Nói ngắn gọn:
 - báo cáo "run vừa xảy ra": ưu tiên `iterations/s`, `http_reqs/s`
 - đánh giá rủi ro để set cấu hình lần sau: xem thêm `p90/p95`
 
+### Chiến lược thực tế khi số liệu dao động
+
+Đúng, số đo không cố định theo từng giây. Có lúc nhanh, lúc chậm là bình thường.
+
+Lý do thường gặp:
+
+- response time của hệ thống không đều theo thời gian
+- queue/CPU/GC làm một số iteration chậm đột ngột
+- network jitter
+- đầu run có warm-up (kết nối, cache) rồi mới ổn định
+
+Vì vậy chiến lược không phải chọn 1 số duy nhất rồi tin tuyệt đối, mà là:
+
+1. Chạy cùng cấu hình ít nhất 3 lần.
+2. Báo cáo kết quả run:
+   dùng `iterations/s`, `http_reqs/s` của từng run, rồi lấy giá trị giữa (median theo run) làm số đại diện.
+3. Đọc rủi ro:
+   xem thêm `iteration_duration p90/p95` và `http_req_duration p90/p95`.
+4. Quyết định cấu hình:
+   không chỉ nhìn tốc độ, phải nhìn cùng `maxDuration` và tỉ lệ lỗi (`http_req_failed`, `checks`).
+
+Rule ra quyết định với `maxDuration` và `vus`:
+
+- Nếu throughput ổn (`iterations/s` đạt mục tiêu) và `p95` vẫn trong ngưỡng chấp nhận:
+  có thể giữ cấu hình.
+- Nếu throughput đạt nhưng `p95` tăng mạnh khi tăng `vus`:
+  hệ thống đang gần ngưỡng, nên coi là rủi ro dù số trung bình vẫn đẹp.
+- Nếu phải dùng `med` mới "kịp maxDuration" nhưng `p95` báo không kịp:
+  coi như chưa an toàn, cần nới `maxDuration` hoặc giảm tải.
+- Nếu `http_req_failed` hoặc `checks_failed` tăng khi tăng `vus`:
+  ưu tiên xử lý lỗi/độ ổn định trước khi đẩy thêm tải.
+
+Kết luận thực tế:
+
+- Có, việc chọn thang đo là rất quan trọng.
+- Có, số liệu sẽ dao động theo thời điểm.
+- Khi báo cáo run vừa chạy: lấy `iterations/s`, `http_reqs/s`.
+- Khi chốt cấu hình cho lần chạy sau: bắt buộc xem thêm `p90/p95` và lỗi, không chỉ nhìn `avg` hay `med`.
+
 ### 7.2. 1 VU trong 1 giây chạy được bao nhiêu request?
 
 Ở demo này:
