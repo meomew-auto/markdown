@@ -1330,6 +1330,27 @@ Nên hiểu đúng là:
 Trong core, `iteration_duration` được lấy từ `endTime - startTime` của một lần chạy JS hoàn chỉnh
 (`internal/js/runner.go:runFn()`), và chỉ emit khi iteration hoàn tất.
 
+Ví dụ 1 iteration:
+
+```text
+request 1 http_req_duration = 260ms
+request 2 http_req_duration = 261ms
+sleep(1) = 1000ms
+check + JS/runtime overhead = 250ms
+
+iteration_duration
+  ≈ 260 + 261 + 1000 + 250
+  = 1771ms
+  = 1.771s
+```
+
+Đây là cách hiểu đúng hơn:
+
+```text
+1 iteration = toàn bộ công việc của 1 vòng chạy
+2 request chỉ là 1 phần trong đó
+```
+
 ### Nhìn ở trạng thái nhanh nhất
 
 ```text
