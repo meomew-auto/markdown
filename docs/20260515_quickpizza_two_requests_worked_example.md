@@ -498,16 +498,68 @@ per_vu_rate_from_p95
   ≈ 0.441 iter/s
 ```
 
-Cắt nghĩa:
+Cắt nghĩa theo đúng nhu cầu thực tế:
 
-- Dùng `avg` khi câu hỏi là: trong lần chạy này, trung bình thực tế 1 VU làm được bao nhiêu. Đây là số
-  hợp lý nhất để mô tả cái đã xảy ra trong cả run.
-- Dùng `med` khi câu hỏi là: một iteration điển hình, không quá nhanh, không bị kéo bởi vài iteration
-  chậm. Số này hay dùng để nhìn "mặt bằng thường gặp".
-- Dùng `p90` hoặc `p95` khi muốn tính theo hướng bảo thủ hơn, ví dụ: nếu iteration nghiêng về phía chậm
-  thì 1 VU còn chạy được bao nhiêu. Số này phù hợp hơn cho capacity planning hoặc ước lượng xem test có
-  dễ chạm `maxDuration` không.
-- Không nên dùng `min` để dự đoán throughput. `min` chỉ là sample nhanh nhất, thường quá lạc quan.
+- Câu hỏi 1: "run vừa chạy xong, tốc độ trung bình thực tế là bao nhiêu?"
+  -> ưu tiên `iterations/s` trong summary.
+  -> nếu cần quy về thời gian/iteration thì dùng `avg`.
+- Câu hỏi 2: "một vòng lặp điển hình của VU là bao lâu?"
+  -> dùng `med` (trung vị), vì ít bị kéo bởi vài sample quá chậm.
+- Câu hỏi 3: "nếu muốn tính bảo thủ để sizing thời gian hoàn thành?"
+  -> dùng `p90` hoặc `p95` để nhìn vùng chậm.
+  -> nhớ: `p95 = X` nghĩa là khoảng 95% iteration có duration <= `X`, không phải "95% iteration đều
+     chậm bằng X".
+- Câu hỏi 4: "tốc độ nhanh nhất có thể?"
+  -> không dùng `min` để planning, vì `min` thường chỉ là một sample đẹp hiếm gặp.
+
+Ví dụ sâu A (dữ liệu khá đều):
+
+```text
+iteration_duration samples (s):
+1.50, 1.52, 1.53, 1.54, 1.55, 1.56, 1.57, 1.58, 1.60
+
+avg  ≈ 1.55s
+med  = 1.55s
+p95  ≈ 1.59s
+```
+
+Suy ra:
+
+```text
+1/avg ≈ 0.65 iter/s
+1/med ≈ 0.65 iter/s
+1/p95 ≈ 0.63 iter/s
+```
+
+Ba số gần nhau, nên chọn `avg` hay `med` hay `p95` cũng không lệch nhiều.
+
+Ví dụ sâu B (có đuôi chậm rõ ràng):
+
+```text
+iteration_duration samples (s):
+1.50, 1.50, 1.52, 1.52, 1.53, 1.55, 1.60, 3.00, 7.00
+
+avg  ≈ 2.30s
+med  = 1.53s
+p90  ≈ 3.80s
+p95  ≈ 5.40s
+```
+
+Suy ra:
+
+```text
+1/avg ≈ 0.43 iter/s
+1/med ≈ 0.65 iter/s
+1/p90 ≈ 0.26 iter/s
+1/p95 ≈ 0.19 iter/s
+```
+
+Ý nghĩa:
+
+- Nếu bạn lấy `med` để ước lượng completion time, bạn sẽ rất lạc quan trong case có đuôi chậm.
+- Nếu bạn lấy `p95`, bạn đang chấp nhận giả định bảo thủ hơn: tốc độ dự phòng thấp, nhưng an toàn hơn cho
+  planning.
+- Nếu mục tiêu là report kết quả của chính run vừa chạy, `avg` hoặc `iterations/s` vẫn là hợp lý nhất.
 
 Áp ngay vào chính demo này sẽ thấy khác biệt:
 
