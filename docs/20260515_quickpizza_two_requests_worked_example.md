@@ -733,14 +733,20 @@ typical_time    ~= iterations_per_vu * avg
 safe_time       ~= iterations_per_vu * p95
 ```
 
+Dịch nghĩa đời thường:
+
+- `optimistic_time`: thời gian theo kịch bản đẹp (đa số vòng chạy nhanh).
+- `typical_time`: thời gian theo mức trung bình thường gặp.
+- `safe_time`: thời gian theo kịch bản chậm (đã tính phần đuôi chậm).
+
 Ý nghĩa ra quyết định:
 
 - nếu `optimistic_time > maxDuration`:
-  gần như chắc chắn không kịp.
+  ngay cả kịch bản đẹp còn không kịp, gần như chắc chắn fail deadline.
 - nếu `typical_time < maxDuration` nhưng `safe_time > maxDuration`:
-  có thể kịp ở run "đẹp", nhưng dễ fail khi network/SUT xấu hơn bình thường.
+  có thể kịp ở run đẹp, nhưng rất nhạy với dao động network/SUT, dễ trượt deadline.
 - nếu `safe_time < maxDuration`:
-  thường an toàn hơn cho vận hành thực tế.
+  thường an toàn hơn khi chạy thực tế.
 
 Ví dụ ngay với `iterations_per_vu = 30`, `maxDuration = 50s`:
 
@@ -750,10 +756,14 @@ avg=2.30s  -> typical_time    ~= 69.0s
 p95=5.40s  -> safe_time       ~= 162s
 ```
 
-Nhìn vào đây:
+Đọc ví dụ này như sau:
 
-- run đẹp có thể tưởng "kịp"
-- nhưng run thực tế có dao động thì rất dễ vượt trần thời gian
+- kịch bản đẹp (`med`) thì có vẻ kịp: `45.9s < 50s`
+- mức trung bình đã không kịp: `69.0s > 50s`
+- mức an toàn càng không kịp: `162s > 50s`
+
+Kết luận: cấu hình `30 iterations/VU` với `maxDuration=50s` là quá rủi ro, không nên chốt nếu mục tiêu là
+ổn định.
 
 Chiến lược thực tế (khuyên dùng):
 
@@ -773,6 +783,72 @@ Khi thấy `iteration_duration` tăng, bóc thêm metric HTTP để biết chậ
   thường nghiêng về server xử lý chậm hơn.
 - `http_req_receiving` tăng:
   thường do payload lớn hoặc băng thông/đường truyền.
+
+Ví dụ chi tiết khi áp chiến lược này:
+
+Giữ cố định cấu hình:
+
+```text
+executor = per-vu-iterations
+vus = 4
+iterations_per_vu = 30
+```
+
+Chạy 5 lần, thu được:
+
+```text
+Run   iterations/s   iteration_duration p95
+R1    2.24           2.4s
+R2    2.18           2.6s
+R3    2.31           2.5s
+R4    1.72           4.9s
+R5    2.21           2.7s
+```
+
+Bước 1 - báo cáo năng lực run:
+
+```text
+sort(iterations/s) = 1.72, 2.18, 2.21, 2.24, 2.31
+median = 2.21 iter/s
+```
+
+Nên số đại diện báo cáo là khoảng `2.21 iter/s` (không lấy run đẹp nhất `2.31`).
+
+Bước 2 - chốt `maxDuration` theo hướng an toàn:
+
+```text
+p95 xấu nhất = 4.9s (run R4)
+safe_time ~= iterations_per_vu * p95_worst
+         ~= 30 * 4.9
+         ~= 147s
+```
+
+Đọc kết quả:
+
+- nếu bạn đặt `maxDuration=120s`: rủi ro cao (vì `< 147s`)
+- nếu đặt `maxDuration` quanh `150-160s`: an toàn hơn nhiều
+
+Bước 3 - truy nguyên nguyên nhân run xấu (R4):
+
+So nhanh median metric HTTP của 4 run "ổn" so với run R4:
+
+```text
+Metric                    run ổn      R4
+http_req_blocked          1ms         28ms
+http_req_connecting       2ms         35ms
+http_req_tls_handshaking  3ms         42ms
+http_req_waiting          220ms       240ms
+http_req_receiving        14ms        16ms
+```
+
+Mẫu này cho thấy nghẽn chính nằm ở kết nối/network (vì blocked/connecting/tls cùng tăng mạnh, còn waiting
+chỉ tăng nhẹ).
+
+Để dễ phân loại nhanh:
+
+- network/kết nối: `blocked`, `connecting`, `tls` tăng đồng thời.
+- server xử lý chậm: `waiting` tăng rõ, còn các metric kết nối tăng ít.
+- payload/băng thông: `receiving` tăng rõ.
 
 ### Các tình huống thường gặp với `maxDuration` và `vus`
 
