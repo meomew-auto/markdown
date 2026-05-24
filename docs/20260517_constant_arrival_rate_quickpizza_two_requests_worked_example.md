@@ -473,6 +473,103 @@ capacity_with_2_vus ~= 2 / 1.76
 
 nhỏ hơn target `2 iterations/s`, rất dễ có `dropped_iterations`.
 
+### 6.1. Nên dùng `avg`, `med`, hay `p90/p95`?
+
+Với `constant-arrival-rate`, phải tách 2 việc:
+
+1. k6 đang cố start theo target bao nhiêu iteration mỗi giây
+2. mỗi iteration giữ 1 VU bận bao lâu
+
+Ở bài này:
+
+```text
+target lambda = 2 iterations/s
+iteration_duration
+  avg   = 1.76s
+  med   = 1.52s
+  p(95) = 2.07s
+```
+
+Vì đây là open model, `lambda = 2 iterations/s` là nhịp start mục tiêu do lịch thời gian điều khiển.
+Nó không phải số lấy ra từ `iteration_duration`.
+
+`iteration_duration` ở đây dùng chủ yếu để trả lời câu:
+
+```text
+1 iteration giữ 1 VU bận bao lâu
+=> muốn giữ đúng target start rate thì cần bao nhiêu VU
+```
+
+Đổi từng số sang năng suất của 1 VU:
+
+```text
+from_avg: 1 / 1.76 ~= 0.57 iter/s/VU
+from_med: 1 / 1.52 ~= 0.66 iter/s/VU
+from_p95: 1 / 2.07 ~= 0.48 iter/s/VU
+```
+
+Đổi tiếp sang số VU tối thiểu để giữ target `lambda = 2`:
+
+```text
+required_vus_from_avg
+  ~= ceil(2 * 1.76)
+  = 4
+
+required_vus_from_med
+  ~= ceil(2 * 1.52)
+  = 4
+
+required_vus_from_p95
+  ~= ceil(2 * 2.07)
+  = 5
+```
+
+Đọc kết quả:
+
+- nếu nhìn theo `med`, bạn sẽ thấy bài này khá nhẹ
+- nếu nhìn theo `avg`, run hiện tại cần khoảng 4 VU để giữ target
+- nếu nhìn theo `p95`, nên chừa khoảng 5 VU để đỡ lạc quan hơn
+
+Chọn số nào cho đúng mục tiêu?
+
+- Báo cáo run vừa chạy xong:
+  số chính vẫn là target `lambda = 2 iterations/s`, summary `iterations/s`, và `dropped_iterations`.
+- Giải thích vì sao cần bao nhiêu VU:
+  dùng `iteration_duration avg`.
+- Muốn ước lượng số VU an toàn hơn:
+  dùng `p90/p95`.
+- `med` dùng để mô tả iteration thường gặp, không phải số chốt chính cho sizing.
+
+Điểm rất quan trọng:
+
+```text
+constant-arrival-rate:
+  headline trước hết là giữ lịch start có đạt không
+
+closed model:
+  headline thường là đã hoàn thành được bao nhiêu mỗi giây
+```
+
+Vì vậy ở bài này:
+
+- `iterations/s` trong summary là nhịp completed thật
+- `lambda` là nhịp start mục tiêu
+- `dropped_iterations` cho biết có mốc start nào bị bỏ hay không
+
+Nếu:
+
+```text
+dropped_iterations = 0
+và summary iterations/s gần target lambda
+```
+
+thì có thể nói run đang giữ target khá tốt.
+
+Nếu `dropped_iterations` tăng, `avg/p95` của `iteration_duration` sẽ giúp bạn giải thích vì sao:
+
+- iteration bận lâu hơn
+- cùng số VU đó không đủ để nhận các mốc start tiếp theo
+
 ## 7. HTTP request rate trong bài này
 
 Vì 1 iteration có 2 HTTP requests:

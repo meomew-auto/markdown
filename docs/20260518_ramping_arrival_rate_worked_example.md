@@ -108,6 +108,94 @@ safety_factor = hệ số an toàn, thường > 1
 safe_vus ~= ceil(lambda_peak * W_effective_p95 * safety_factor)
 ```
 
+## 3.1. Nên dùng `avg`, `med`, hay `p90/p95`?
+
+Với `ramping-arrival-rate`, ý nghĩa của các số này gần giống `constant-arrival-rate`, nhưng khó hơn ở chỗ
+target start rate không đứng yên mà đổi theo stage.
+
+Ở executor này phải tách rõ:
+
+```text
+rate timeline
+  = lịch start iteration theo thời gian
+
+iteration_duration
+  = thời gian một iteration giữ 1 VU bận
+```
+
+Cho nên `avg`/`med`/`p95` không dùng để thay thế `lambda`.
+Chúng dùng để ước lượng:
+
+```text
+đang cần bao nhiêu VU để theo kịp đoạn rate cao nhất
+```
+
+Trong demo này:
+
+```text
+lambda_peak = 8 iterations/s
+W_effective ~= 0.4s
+```
+
+Nếu quy ra các cách nhìn:
+
+```text
+required_vus ~= ceil(lambda_peak * chosen_W)
+```
+
+Giả sử:
+
+```text
+chosen_W = med  -> cách nhìn điển hình
+chosen_W = avg  -> cách nhìn trung bình
+chosen_W = p95  -> cách nhìn bảo thủ hơn
+```
+
+Ví dụ nếu summary cho:
+
+```text
+med ~ 0.40s
+avg ~ 0.43s
+p95 ~ 0.52s
+```
+
+thì:
+
+```text
+from_med: ceil(8 * 0.40) = 4 VUs
+from_avg: ceil(8 * 0.43) = 4 VUs
+from_p95: ceil(8 * 0.52) = 5 VUs
+```
+
+Đọc ý nghĩa:
+
+- `med`: đa số iteration đang khá nhẹ, 4 VU có thể đủ trong run đẹp
+- `avg`: nhìn mức trung bình, vẫn có thể thấy 4 VU đủ
+- `p95`: nếu muốn chừa biên cho các iteration chậm hơn, nên chuẩn bị 5 VU
+
+Chọn số nào cho đúng mục tiêu?
+
+- Báo cáo bài test vừa chạy:
+  số chính là `lambda_start`, `lambda_peak`, `iterations/s` thực tế, và `dropped_iterations`.
+- Giải thích vì sao peak cần từng đó VU:
+  dùng `iteration_duration avg`.
+- Sizing bảo thủ cho peak stage:
+  dùng `p90/p95`, rồi nhân thêm `safety_factor` nếu workload dao động.
+- `med` chỉ nên dùng để mô tả iteration thường gặp, không nên là số chốt duy nhất cho capacity planning.
+
+Điểm cần nhớ:
+
+```text
+ramping-arrival-rate:
+  bài toán chính = đoạn nào của timeline cần nhiều VU nhất
+```
+
+Vì vậy:
+
+- `iterations/s` của summary là average completed rate của toàn run
+- nhưng sizing phải nhìn `lambda_peak`
+- còn `avg/p95` giúp biến `lambda_peak` thành số VU cần gần đúng
+
 ## 4. Đọc output theo core
 
 Nếu run sạch:

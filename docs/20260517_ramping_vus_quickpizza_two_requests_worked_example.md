@@ -516,6 +516,89 @@ average_http_request_rate = 24 / 6.7722 ≈ 3.543856 req/s
 effective_iteration_time ~= iteration_duration vì demo này không set minIterationDuration
 ```
 
+## 6.1. Nên dùng `avg`, `med`, hay `p90/p95`?
+
+Với `ramping-vus`, vẫn là closed model:
+
+```text
+VU chạy xong iteration hiện tại
+-> mới tự lấy iteration tiếp theo
+```
+
+Khác với `constant-vus`, số VU active không cố định suốt bài test mà thay đổi theo timeline ramp.
+Vì vậy khi đọc `avg`/`med`/`p95`, phải nhớ:
+
+```text
+iteration_duration = thời gian 1 iteration giữ 1 VU bận
+iterations/s       = tốc độ trung bình của toàn scenario trên cả timeline ramp
+```
+
+Số của run hiện tại:
+
+```text
+iteration_duration
+  avg   = 1.71s
+  med   = 1.54s
+  p(95) = 2.10s
+```
+
+Đổi ra tốc độ ước lượng của 1 VU:
+
+```text
+from_avg: 1 / 1.71 ~= 0.58 iter/s/VU
+from_med: 1 / 1.54 ~= 0.65 iter/s/VU
+from_p95: 1 / 2.10 ~= 0.48 iter/s/VU
+```
+
+Cách đọc:
+
+- `med`: iteration kiểu thường gặp chạy quanh mức nào
+- `avg`: trung bình toàn bộ các iteration đã hoàn tất trong run
+- `p95`: phần iteration gần cuối phân phối chậm tới đâu
+
+Ở executor này, không nên lấy:
+
+```text
+active_vus cố định * per_vu_rate
+```
+
+cho cả bài test, vì `active_vus` thay đổi theo stage.
+
+Nên dùng số nào cho đúng mục tiêu?
+
+- Báo cáo run vừa chạy xong:
+  dùng `iterations/s` và `http_reqs/s` của summary làm số chính.
+- Giải thích vì sao tốc độ trung bình của run ra mức đó:
+  dùng thêm `iteration_duration avg`.
+- Mô tả nhịp thường gặp của iteration:
+  dùng `med`.
+- Nhìn rủi ro chậm khi tăng VU ở các stage cao hơn hoặc gần cuối run:
+  dùng `p90/p95`.
+
+Ví dụ đọc trực giác:
+
+```text
+med = 1.54s
+=> phần lớn iteration chạy quanh mức khoảng 1.5 giây
+
+p95 = 2.10s
+=> có một nhóm iteration chậm hơn đáng kể, kéo tới khoảng hơn 2 giây
+```
+
+Nghĩa là:
+
+- nếu chỉ nhìn `med`, bạn sẽ thấy bài test chạy khá đẹp
+- nhưng nhìn thêm `p95` sẽ thấy phần đuôi chậm, nhất là khi VU tăng lên ở stage cao
+
+Với `ramping-vus`, phần summary `/s` là average của cả timeline đã ramp lên rồi ramp xuống.
+Nó không phải peak của stage cao nhất.
+
+Vì vậy:
+
+- muốn báo cáo kết quả run: ưu tiên `iterations/s`
+- muốn giải thích phân phối iteration: xem `avg`, `med`, `p95`
+- muốn sizing bảo thủ hơn cho stage cao: ưu tiên nhìn `p95`, không chỉ `avg`
+
 ## 7. Điều nên nhớ sau bài này
 
 ```text
