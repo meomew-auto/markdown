@@ -469,6 +469,97 @@ iterations.....................: 12    2.333723/s
 
 Gần khớp.
 
+### 7.1. Nên dùng `avg`, `med`, hay `p90/p95`?
+
+Với `constant-vus`, k6 giữ một số VU cố định và mỗi VU tự loop:
+
+```text
+VU chạy xong iteration hiện tại
+-> VU start iteration tiếp theo
+```
+
+Nên ở executor này, `iteration_duration` ảnh hưởng trực tiếp tới tốc độ hoàn thành iteration.
+Iteration càng lâu thì cùng một số VU sẽ hoàn thành được ít iteration hơn trong cùng `duration`.
+
+Số của run hiện tại:
+
+```text
+iteration_duration
+  avg   = 1.7s
+  med   = 1.52s
+  p(95) = 2.06s
+```
+
+Đổi ra tốc độ ước lượng của 1 VU:
+
+```text
+from_avg: 1 / 1.7  ~= 0.59 iter/s/VU
+from_med: 1 / 1.52 ~= 0.66 iter/s/VU
+from_p95: 1 / 2.06 ~= 0.49 iter/s/VU
+```
+
+Vì run này có `vus = 4`, tốc độ cả pool có thể ước lượng:
+
+```text
+theo avg:
+  4 / 1.7 ~= 2.35 iter/s
+
+theo med:
+  4 / 1.52 ~= 2.63 iter/s
+
+theo p95:
+  4 / 2.06 ~= 1.94 iter/s
+```
+
+Summary thực tế:
+
+```text
+iterations.....................: 12    2.333723/s
+```
+
+Vì vậy trong run này, số tính từ `avg` gần với summary nhất.
+Lý do là summary `/s` cũng là tốc độ trung bình trên cả run, còn `avg` là thời gian trung bình của các
+iteration đã hoàn tất.
+
+Chọn số nào cho đúng mục tiêu?
+
+- Báo cáo run vừa chạy xong:
+  dùng `iterations/s` và `http_reqs/s` trong summary làm số chính.
+- Giải thích vì sao tốc độ run ra mức đó:
+  dùng thêm `iteration_duration avg`.
+- Mô tả một iteration kiểu thường gặp:
+  dùng `med`.
+- Ước lượng bảo thủ khi sợ đuôi chậm:
+  dùng `p90/p95`.
+
+Ví dụ nếu dùng để ước lượng số iteration trong `duration = 5s`:
+
+```text
+estimated_iterations ~= vus * duration / chosen_iteration_time
+```
+
+Áp số:
+
+```text
+theo avg:
+  4 * 5 / 1.7 ~= 11.76 iteration
+
+theo med:
+  4 * 5 / 1.52 ~= 13.16 iteration
+
+theo p95:
+  4 * 5 / 2.06 ~= 9.70 iteration
+```
+
+Đọc kết quả:
+
+- `med` cho bức tranh đẹp hơn, vì nó nhìn vào mốc thường gặp.
+- `avg` hợp để giải thích tốc độ trung bình đã xảy ra.
+- `p95` chậm hơn, nhưng hữu ích nếu muốn chừa biên cho các iteration chậm.
+
+Lưu ý: đây là ước lượng. Với `constant-vus`, iteration được start theo vòng lặp của VU và phần cuối run còn
+chịu ảnh hưởng của `duration`/`gracefulStop`, nên con số completed cuối cùng vẫn phải đọc từ summary.
+
 ## 8. Tại sao không dùng `http_req_duration` để tính iterations/s?
 
 Output:
