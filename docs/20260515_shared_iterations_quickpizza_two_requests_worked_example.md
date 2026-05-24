@@ -756,8 +756,26 @@ Nên khi báo cáo 1 run:
 - số chính: `iterations/s`
 - số phụ: `http_reqs/s`, `checks_total_rate`
 - `iteration_duration avg` để nói 1 VU thường bận bao lâu
-- `med` để nói nhịp điển hình
-- `p90/p95` để xem đuôi chậm và chừa biên an toàn
+- `med` để nói một lượt chạy "thường thấy" của iteration
+- `p90/p95` để nhìn phần chậm ở cuối phân phối, nhất là khi muốn chừa biên an toàn
+
+Nên dùng số nào?
+
+- Báo cáo run vừa chạy xong: dùng `iterations/s` làm số chính
+- Muốn nói thời gian 1 iteration kiểu nào là phổ biến: dùng `med`
+- Muốn ước lượng an toàn hơn khi chốt giới hạn thời gian: dùng `p90/p95`
+- Không nên lấy `avg` một mình để kết luận nhanh, vì một vài iteration rất chậm có thể kéo lệch trung bình
+
+Ví dụ dễ hiểu:
+
+```text
+9 iteration mất 100ms
+1 iteration mất 5000ms
+
+avg bị kéo lên rất mạnh bởi 1 iteration chậm
+med vẫn nói đúng hơn phần lớn iteration đang chạy quanh đâu
+p95 cho thấy phần đuôi chậm có đáng lo không
+```
 
 Khi sizing:
 
