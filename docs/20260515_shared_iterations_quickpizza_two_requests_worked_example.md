@@ -403,7 +403,161 @@ Muốn thấy rõ mỗi VU thực tế chạy bao nhiêu iteration, xem demo chu
 examples/shared_iterations_vu_speed_count_demo.js
 ```
 
-### Tính `per_vu_rate`
+### 7.1. Nên dùng `avg`, `med`, hay `p90/p95`?
+
+Mục này giống bài `per-vu-iterations`, nhưng công thức phải đổi theo executor.
+
+Với `per-vu-iterations`, mỗi VU có quota riêng:
+
+```text
+thời gian gần đúng của 1 VU ~= iterations_per_vu * chosen_iteration_time
+```
+
+Còn với `shared-iterations`, quota không nằm trên từng VU. Toàn scenario có một kho chung:
+
+```text
+total_iterations = 12
+vus = 4
+```
+
+Nên câu hỏi đúng hơn là:
+
+```text
+cả pool 4 VU xử lý kho 12 iteration nhanh cỡ nào?
+```
+
+không phải:
+
+```text
+mỗi VU chắc chắn chạy 12 / 4 = 3 iteration trong bao lâu?
+```
+
+Số của run hiện tại:
+
+```text
+iteration_duration
+  avg   = 1.72s
+  med   = 1.5s
+  p(95) = 2.15s
+```
+
+Đổi ra tốc độ ước lượng của 1 VU:
+
+```text
+from_avg: 1 / 1.72 ~= 0.58 iter/s
+from_med: 1 / 1.5  ~= 0.67 iter/s
+from_p95: 1 / 2.15 ~= 0.47 iter/s
+```
+
+Cách đọc từng số:
+
+- `med = 1.5s`: một iteration kiểu thường gặp mất khoảng `1.5s`
+- `avg = 1.72s`: trung bình một iteration mất khoảng `1.72s`
+- `p95 = 2.15s`: khoảng 95% iteration có duration nhỏ hơn hoặc bằng `2.15s`
+
+`p95 = 2.15s` không có nghĩa là 95% iteration đều chậm đúng `2.15s`.
+Nó chỉ nói mốc gần cuối của phân phối. Nếu `p95` cao hơn `med` nhiều, nghĩa là có một nhóm iteration
+chậm ở phần đuôi.
+
+Với `shared-iterations`, nếu tạm giả định 4 VU đều đang active và tốc độ gần giống nhau, có thể ước lượng
+tốc độ cả pool:
+
+```text
+estimated_total_rate ~= active_vus / chosen_iteration_time
+```
+
+Nếu chọn `avg`:
+
+```text
+estimated_total_rate_from_avg
+  ~= 4 / 1.72
+  ~= 2.32 iter/s
+```
+
+Khớp với summary:
+
+```text
+iterations.........: 12      2.317275/s
+```
+
+Nếu chọn `med`:
+
+```text
+estimated_total_rate_from_med
+  ~= 4 / 1.5
+  ~= 2.67 iter/s
+```
+
+Đây là cách nhìn lạc quan hơn, vì nó dùng mốc "thường gặp" và bỏ qua phần iteration chậm.
+
+Nếu chọn `p95`:
+
+```text
+estimated_total_rate_from_p95
+  ~= 4 / 2.15
+  ~= 1.86 iter/s
+```
+
+Đây là cách nhìn bảo thủ hơn, vì nó giả định iteration nghiêng về phía chậm.
+
+Từ tốc độ cả pool, có thể ước lượng thời gian hoàn thành kho chung:
+
+```text
+estimated_finish_time ~= total_iterations / estimated_total_rate
+```
+
+Áp số:
+
+```text
+theo avg:
+  12 / 2.32 ~= 5.17s
+
+theo med:
+  12 / 2.67 ~= 4.49s
+
+theo p95:
+  12 / 1.86 ~= 6.45s
+```
+
+Đọc kết quả:
+
+- lấy `med` thì dự đoán đẹp hơn: khoảng `4.49s`
+- lấy `avg` thì gần với kết quả summary của run này: khoảng `5.17s`
+- lấy `p95` thì chậm hơn nhưng an toàn hơn khi dùng để so với `maxDuration`
+
+Chọn số nào cho đúng mục tiêu?
+
+- Báo cáo run vừa chạy xong:
+  dùng `iterations/s` trong summary làm số chính.
+- Giải thích vì sao `iterations/s` ra mức đó:
+  dùng thêm `iteration_duration avg`.
+- Mô tả nhịp thường gặp của iteration:
+  dùng `med`.
+- Ước lượng có dễ chạm `maxDuration` không:
+  dùng thêm `p90/p95`.
+
+Điểm khác quan trọng so với `per-vu-iterations`:
+
+```text
+per-vu-iterations:
+  mỗi VU có quota riêng
+  => ước lượng thời gian theo quota của 1 VU
+
+shared-iterations:
+  cả scenario có kho iteration chung
+  => ước lượng thời gian theo sức xử lý của cả pool VU
+```
+
+Vì vậy, trong `shared-iterations`, đừng lấy:
+
+```text
+total_iterations / vus
+```
+
+rồi coi đó là số iteration chắc chắn của từng VU. VU nhanh có thể lấy nhiều việc hơn, VU chậm có thể lấy ít
+việc hơn.
+
+### 7.2. Tính `per_vu_rate`
 
 Output:
 
@@ -439,7 +593,7 @@ Khớp với summary:
 iterations.........: 12      2.317275/s
 ```
 
-### Nhưng không được suy ra "mỗi VU chạy đúng 3 iteration"
+### 7.3. Nhưng không được suy ra "mỗi VU chạy đúng 3 iteration"
 
 Vì đây là `shared-iterations`, nên:
 
@@ -759,28 +913,12 @@ Nên khi báo cáo 1 run:
 - `med` để nói một lượt chạy "thường thấy" của iteration
 - `p90/p95` để nhìn phần chậm ở cuối phân phối, nhất là khi muốn chừa biên an toàn
 
-Nên dùng số nào?
-
-- Báo cáo run vừa chạy xong: dùng `iterations/s` làm số chính
-- Muốn nói thời gian 1 iteration kiểu nào là phổ biến: dùng `med`
-- Muốn ước lượng an toàn hơn khi chốt giới hạn thời gian: dùng `p90/p95`
-- Không nên lấy `avg` một mình để kết luận nhanh, vì một vài iteration rất chậm có thể kéo lệch trung bình
-
-Ví dụ dễ hiểu:
-
-```text
-9 iteration mất 100ms
-1 iteration mất 5000ms
-
-avg bị kéo lên rất mạnh bởi 1 iteration chậm
-med vẫn nói đúng hơn phần lớn iteration đang chạy quanh đâu
-p95 cho thấy phần đuôi chậm có đáng lo không
-```
+Phần chọn `avg`/`med`/`p90`/`p95` đã tách kỹ ở mục 7.1.
 
 Khi sizing:
 
 - dùng `effective_iteration_time`
-- không suy `per_vu_iteration_count` từ summary alone, vì VU nhanh/chậm chia việc khác nhau
+- không suy `per_vu_iteration_count` chỉ từ summary, vì VU nhanh/chậm chia việc khác nhau
 - nếu nhiều run cùng cấu hình, lấy `median(iterations/s)` giữa các run làm số đại diện
 - run đẹp nhất chỉ là best observed, không phải số đại diện cho sizing
 
