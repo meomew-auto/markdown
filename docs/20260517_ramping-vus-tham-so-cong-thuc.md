@@ -684,56 +684,186 @@ checks_total..: 24
 
 ## 3.8. `gracefulRampDown` và `gracefulStop` tính như nào?
 
-Nên tách thành 2 câu:
-
-1. `gracefulRampDown`
-   ```text
-   khi timeline giảm VU
-   VU bị scale xuống không start iteration mới
-   nhưng iteration đang chạy có thể finish thêm tối đa gracefulRampDown
-   ```
-
-2. `gracefulStop`
-   ```text
-   khi hết toàn bộ timeline
-   iteration đang chạy ở cuối scenario có thể finish thêm tối đa gracefulStop
-   ```
-
-Nếu `gracefulRampDown = 0s`:
+Hai field nhìn giống nhau nhưng tác động ở 2 thời điểm khác nhau. Tách rõ:
 
 ```text
-VU bị scale xuống có thể bị interrupt ngay
+gracefulRampDown : grace giữa timeline, khi 1 stage giảm VU
+gracefulStop     : grace cuối timeline, khi cả scenario hết
 ```
 
-Nếu `gracefulRampDown > thời gian iteration còn lại`:
+Tóm tắt 1 dòng cho từng cái:
 
 ```text
-iteration có thể finish sạch dù timeline đã giảm VU
+gracefulRampDown : "VU bị scale xuống được phép finish iteration đang chạy
+                   thêm tối đa N giây trước khi bị hard-stop"
+
+gracefulStop     : "khi cả scenario kết thúc (sum stages), iteration đang chạy
+                   được phép tiếp tục thêm tối đa N giây trước khi bị cancel"
 ```
 
-Nhưng có một caveat rất quan trọng ở gần cuối scenario:
+Default values:
 
 ```text
-gracefulStop vẫn là trần wall-clock cuối cùng của executor
+gracefulRampDown = 30s
+gracefulStop     = 30s
 ```
 
-Nói đời thường:
+Đọc từ `ramping_vus.go:42-57`. Cả 2 đều là `null.Duration`, có thể set 0s
+hoặc tắt hẳn (set `0s` = no grace, hard-stop ngay).
+
+### 3.8.1. `gracefulRampDown` — grace khi giảm VU giữa timeline
+
+Khi 1 stage giảm số VU (ví dụ stage `4 -> 2`), executor sẽ:
 
 ```text
-gracefulRampDown = thời gian nới thêm khi bị giảm VU giữa timeline
-gracefulStop     = thời gian nới thêm khi cả scenario đi tới đoạn kết
+1) emit step (timeOffset=stageEnd, plannedVUs=2)
+2) gọi vuHandle[3].gracefulStop()  -> chuyển state sang toGracefulStop
+                                       không start iter mới
+                                       iter đang chạy được tiếp tục
+3) gọi vuHandle[2].gracefulStop()  -> tương tự
+4) reserve thêm "gracefulRampDown" giây cho 2 VU đó kịp finish iter
+5) nếu sau gracefulRampDown VU vẫn còn iter chưa xong
+   -> hardStop() -> iter bị interrupt
 ```
 
-Nếu một VU bị scale-down quá sát cuối scenario thì thời gian finish thật của nó có thể bị
-`gracefulStop` cắt ngắn. Nghĩa là:
+Đọc từ core (`ramping_vus.go:313-417`, `vu_handle.go:147-181`):
 
 ```text
-gracefulStop < gracefulRampDown
-=> grace cuối thực tế có thể ngắn hơn gracefulRampDown
+- reserveVUsForGracefulRampDowns() sinh ra gracefulSteps
+  giữ chỗ VU đang ramp-down trong gracefulRampDown giây sau khi bị scale
+- maxAllowedVUsHandlerStrategy() theo dõi gracefulSteps
+  khi đến hạn -> hardStop() VU
 ```
 
-Đây là đúng với comment trong core `ramping_vus.go`: step cuối luôn bị chặn ở
-`sum(stages) + gracefulStop`.
+#### Ví dụ đầy đủ
+
+Config:
+
+```js
+scenarios: {
+  demo_rampdown: {
+    executor: "ramping-vus",
+    startVUs: 4,
+    stages: [
+      { duration: "5s", target: 4 },   // hold 4 VU
+      { duration: "1s", target: 2 },   // ramp xuống 2 VU
+      { duration: "5s", target: 2 },   // hold 2 VU
+    ],
+    gracefulRampDown: "3s",
+    gracefulStop: "2s",
+  },
+},
+
+// code: mỗi iter sleep 4s
+export default function () { sleep(4); }
+```
+
+Timeline:
+
+```text
+t=0s    plannedVUs=4, 4 VU bắt đầu iter#0 (sleep 4s)
+t=4s    4 VU finish iter#0, vào iter#1 (đến t=8s xong)
+t=5s    stage 1 bắt đầu (4 -> 2 trong 1s)
+t=6s    stage 1 kết thúc, plannedVUs=2
+        -> VU=3, VU=4 nhận gracefulStop()
+        -> chúng đang ở giữa iter#1 (đã chạy 2s, còn 2s nữa)
+        -> được reserve thêm gracefulRampDown=3s, hạn cuối = t=6+3 = t=9s
+t=8s    VU=3, VU=4 finish iter#1 sạch (2s < 3s grace)
+        -> không vào iter#2 (đã ở state toGracefulStop)
+        -> ReturnVU về pool
+t=8s..11s  chỉ còn VU=1, VU=2 chạy
+```
+
+Nếu đổi `iter time = 5s` (lâu hơn grace):
+
+```text
+t=6s    VU=3, VU=4 đang ở iter#1 (đã chạy 1s, còn 4s)
+        reserve grace 3s, hạn cuối = t=9s
+t=9s    grace hết, VU=3, VU=4 vẫn còn 1s iter chưa xong
+        -> hardStop() -> 2 interrupted iterations
+```
+
+Nếu set `gracefulRampDown: "0s"`:
+
+```text
+t=6s    VU=3, VU=4 bị hardStop ngay tại đây
+        iter đang chạy bị cancel ngay -> 2 interrupted iterations
+```
+
+### 3.8.2. `gracefulStop` — grace ở cuối scenario
+
+Khi `t = regular_duration` (sum tất cả stage.duration), scenario "kết thúc"
+nhưng iteration đang chạy có thể được phép tiếp tục thêm `gracefulStop` giây.
+
+Đọc từ core (`ramping_vus.go:494-563`):
+
+```text
+regularDuration, _ := lib.GetEndOffset(rawSteps)
+maxDuration, _    := lib.GetEndOffset(gracefulSteps)
+// progress bar bám regularDuration
+// nhưng VU được phép chạy tới maxDuration
+// step cuối bị cap ở sum(stages) + gracefulStop
+```
+
+#### Ví dụ đầy đủ
+
+Config:
+
+```js
+scenarios: {
+  demo_stop: {
+    executor: "ramping-vus",
+    startVUs: 2,
+    stages: [
+      { duration: "5s", target: 2 },   // hold 2 VU trong 5s
+    ],
+    gracefulStop: "3s",
+  },
+},
+
+// code: mỗi iter sleep 4s
+export default function () { sleep(4); }
+```
+
+Timeline:
+
+```text
+t=0s    plannedVUs=2, 2 VU vào iter#0 (đến t=4s)
+t=4s    2 VU finish iter#0, vào iter#1 (sẽ xong ở t=8s)
+t=5s    regular_duration = 5s -> scenario "kết thúc"
+        progress bar đã 100%
+        nhưng 2 VU đang ở iter#1 (đã chạy 1s, còn 3s)
+        gracefulStop = 3s -> được phép tiếp tục đến t=5+3 = t=8s
+t=8s    2 VU finish iter#1 đúng lúc grace hết -> không bị interrupt
+        scenario thật sự kết thúc
+```
+
+Header in:
+
+```text
+* demo_stop: Up to 2 looping VUs for 5s over 1 stages (gracefulStop: 3s)
+8s max duration (incl. graceful stop)
+```
+
+Nếu code sleep 6s thay vì 4s:
+
+```text
+t=5s    iter#0 đang chạy (đã 5s, còn 1s)
+t=6s    iter#0 xong, vào iter#1? KHÔNG
+        scenario đã hết regular_duration -> không start iter mới
+        VU chỉ chờ đến hết grace
+t=8s    grace hết, VU không có iter đang chạy nữa -> exit clean
+```
+
+Nếu code sleep 10s:
+
+```text
+t=5s    iter#0 đang chạy (đã 5s, còn 5s)
+t=8s    grace hết, iter#0 vẫn còn 2s
+        -> hardStop -> 2 interrupted iterations
+```
+
+
 
 ## 3.9. Checklist core đã lọc cho `ramping-vus`
 
