@@ -1778,15 +1778,34 @@ scenarios: (100.00%) 1 scenario, 3 max VUs, 12s max duration (incl. graceful sto
   -> max planned VUs = 3 (target lớn nhất)
 
 "12s max duration (incl. graceful stop)"
-  -> startTime + regular_duration + gracefulStop
-  -> 3s + 8s + 2s = 13s? -> nhưng header in 12s
+  -> startTime + regular_duration + gracefulRampDown
+  -> 3s + 8s + 1s = 12s ✓
 ```
 
-Lưu ý nhỏ: với 1 scenario duy nhất, k6 có thể tính `max duration` của test theo
-`max(startTime + regular_duration + gracefulStop)` qua các scenario, và khi
-chỉ có 1 scenario thì hiển thị có thể khác chút tùy phiên bản. Quan trọng nhất
-là đọc đúng phần nội bộ scenario `8s` và phần `startTime: 3s` được k6 ghi rõ
-trong dòng dưới.
+Vì sao `+gracefulRampDown` chứ không phải `+gracefulStop`?
+
+Đọc `ramping_vus.go:494-499`:
+
+```go
+maxDuration, _ := lib.GetEndOffset(vlv.gracefulSteps)
+```
+
+`gracefulSteps` là timeline đã reserve thêm chỗ cho VU đang ramp-down kịp finish
+iteration. Stage cuối ramp `4 -> 0`, k6 reserve thêm `gracefulRampDown = 1s` sau
+khi ramp kết thúc, nên end offset của `gracefulSteps` =
+`regular_duration + gracefulRampDown`.
+
+Có cap ở `gracefulStop`: `step cuối bị cap ở sum(stages) + gracefulStop`
+(`ramping_vus.go:437-451`). Trong demo này `gracefulRampDown=1s < gracefulStop=2s`,
+nên cap không bind. Nếu `gracefulRampDown > gracefulStop`, kết quả sẽ bị cap
+xuống `regular_duration + gracefulStop`.
+
+Tóm lại công thức:
+
+```text
+header max duration = startTime + regular_duration + min(gracefulRampDown, gracefulStop_cap)
+                    ≈ startTime + regular_duration + gracefulRampDown (case thường gặp)
+```
 
 Output thật theo mốc thời gian (mốc đo từ lúc test start, không phải scenario start):
 
@@ -2018,9 +2037,12 @@ scenarios: (100.00%) 1 scenario, 4 max VUs, 8s max duration (incl. graceful stop
 ```text
 regular_duration = 0 + 5 + 2 = 7s
 max_planned_vus  = 4 (target lớn nhất, đạt ngay tại t=0)
-header max duration nội bộ = 7s + gracefulStop 2s = 9s
-header thực in 8s -> tùy phiên bản, đọc dòng "for 7s over 3 stages" là chuẩn nhất
+header max duration = regular_duration + min(gracefulRampDown, gracefulStop_cap)
+                    = 7s + min(1s, 2s) = 7s + 1s = 8s ✓
 ```
+
+Cùng logic như case A.1: `gracefulSteps` reserve thêm `gracefulRampDown=1s` sau
+ramp-down stage cuối, end offset = `7s + 1s = 8s`, không cap bởi `gracefulStop=2s`.
 
 Output thật theo mốc thời gian:
 
