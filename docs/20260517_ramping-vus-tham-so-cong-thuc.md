@@ -870,7 +870,27 @@ t=6.0s   VU=3 bị hardStop NGAY -> iter#1 đang chạy bị cancel -> +1 interr
 ### 3.8.2. `gracefulStop` — grace ở cuối scenario
 
 Khi `t = regular_duration` (sum tất cả stage.duration), scenario "kết thúc"
-nhưng iteration đang chạy có thể được phép tiếp tục thêm `gracefulStop` giây.
+nhưng iteration đang chạy có thể được phép tiếp tục thêm `gracefulStop` giây
+trước khi VU bị hard-stop.
+
+**Hai trục độc lập (giống 3.8.1)**:
+
+```text
+Trục stage   : stage 0 chiếm t=0..5  (do duration=5s)
+              regular_duration = 5s
+              max_duration = regular_duration + gracefulStop = 5+3 = 8s
+
+Trục VU iter : iter_duration = 4s (do code sleep(4))
+              VU=1 iter#0 = t=0..4
+              VU=1 iter#1 = t=4..8
+
+VU finish iter#0 ở t=4 -> KHÔNG phải scenario hết
+                          (stage 0 vẫn đang chạy, mới hết 4/5s)
+                          VU vào iter#1 ngay
+Stage 0 hết ở t=5      -> KHÔNG cắt iter đang chạy
+                          (VU đang ở giữa iter#1)
+                          VU tiếp tục iter#1 trong gracefulStop
+```
 
 Đọc từ core (`ramping_vus.go:494-563`):
 
@@ -902,17 +922,32 @@ scenarios: {
 export default function () { sleep(4); }
 ```
 
-Timeline:
+Tách 2 trục:
 
 ```text
-t=0s    plannedVUs=2, 2 VU vào iter#0 (đến t=4s)
-t=4s    2 VU finish iter#0, vào iter#1 (sẽ xong ở t=8s)
-t=5s    regular_duration = 5s -> scenario "kết thúc"
-        progress bar đã 100%
-        nhưng 2 VU đang ở iter#1 (đã chạy 1s, còn 3s)
-        gracefulStop = 3s -> được phép tiếp tục đến t=5+3 = t=8s
-t=8s    2 VU finish iter#1 đúng lúc grace hết -> không bị interrupt
-        scenario thật sự kết thúc
+stage 0    : t=0..5 (hold 2 VU)
+iter time  : 4s (do sleep(4))
+grace cuối : 3s -> max_duration = 8s
+```
+
+Timeline đầy đủ:
+
+```text
+t=0.0s   plannedVUs=2 (startVUs=2)
+         VU=1, VU=2 activate, đồng loạt vào iter#0 (đến t=4.0s)
+
+t=4.0s   VU=1, VU=2 finish iter#0
+         lập tức vào iter#1 (sẽ đến t=8.0s nếu không bị cắt)
+         stage 0 vẫn đang chạy (mới hết 4/5s)
+
+t=5.0s   stage 0 kết thúc -> regular_duration hết
+         progress bar 100%
+         VU đang ở iter#1 (đã chạy 1s, còn 3s)
+         vào pha grace: gracefulStop = 3s
+         max_duration = 5+3 = 8s
+
+t=8.0s   VU=1, VU=2 finish iter#1 đúng lúc grace hết (3s = grace)
+         scenario thật sự kết thúc, không có interrupted iter
 ```
 
 Header in:
@@ -922,22 +957,182 @@ Header in:
 8s max duration (incl. graceful stop)
 ```
 
-Nếu code sleep 6s thay vì 4s:
+#### Biến thể 1: code `sleep(6)` (iter dài hơn 1 stage nhưng vẫn vừa grace)
 
 ```text
-t=5s    iter#0 đang chạy (đã 5s, còn 1s)
-t=6s    iter#0 xong, vào iter#1? KHÔNG
-        scenario đã hết regular_duration -> không start iter mới
-        VU chỉ chờ đến hết grace
-t=8s    grace hết, VU không có iter đang chạy nữa -> exit clean
+iter time = 6s
+trục VU: iter#0 = t=0..6, iter#1 = t=6..12
+
+t=0.0s   2 VU vào iter#0 (đến t=6.0s)
+t=5.0s   stage 0 hết, vào pha grace
+         VU đang ở iter#0 (đã chạy 5s, còn 1s)
+t=6.0s   VU finish iter#0 (1s qua < grace 3s, finish clean)
+         có vào iter#1 không? KHÔNG
+         vì regular_duration đã hết, VU đang ở state toGracefulStop
+         -> ReturnVU về pool
+t=8.0s   không có gì xảy ra (đã exit từ t=6s)
 ```
 
-Nếu code sleep 10s:
+#### Biến thể 2: code `sleep(10)` (iter dài hơn cả grace)
 
 ```text
-t=5s    iter#0 đang chạy (đã 5s, còn 5s)
-t=8s    grace hết, iter#0 vẫn còn 2s
-        -> hardStop -> 2 interrupted iterations
+iter time = 10s
+trục VU: iter#0 = t=0..10
+
+t=0.0s   2 VU vào iter#0 (sẽ đến t=10.0s nếu không bị cắt)
+t=5.0s   stage 0 hết, vào pha grace
+         VU đang ở iter#0 (đã chạy 5s, còn 5s)
+t=8.0s   grace hết, VU vẫn còn 2s iter chưa xong
+         -> hardStop -> 2 interrupted iterations
+         summary: 0 complete, 2 interrupted
+```
+
+#### Biến thể 3: `gracefulStop: "0s"`
+
+```text
+t=5.0s   stage 0 hết, KHÔNG có grace
+         VU đang ở iter#1 (đã 1s, còn 3s) -> hardStop ngay
+         -> 2 interrupted iterations
+```
+
+### 3.8.3. Khi `gracefulRampDown` gặp `gracefulStop` ở cuối scenario
+
+Caveat quan trọng từ core (`ramping_vus.go:437-451`):
+
+```text
+step cuối của gracefulSteps luôn bị cap ở sum(stages) + gracefulStop
+```
+
+Nghĩa là: nếu 1 VU bị scale-down quá sát cuối scenario, grace cuối thật của
+nó **không phải** `gracefulRampDown` mà là phần còn lại tính theo
+`sum(stages) + gracefulStop`.
+
+#### Ví dụ minh chứng
+
+Config:
+
+```js
+scenarios: {
+  demo_combined: {
+    executor: "ramping-vus",
+    startVUs: 4,
+    stages: [
+      { duration: "8s", target: 4 },   // hold 4 VU trong 8s
+      { duration: "1s", target: 0 },   // ramp 4 -> 0 trong 1s cuối
+    ],
+    gracefulRampDown: "10s",   // grace mid rất dài
+    gracefulStop: "1s",        // grace end rất ngắn
+  },
+},
+
+// code: mỗi iter sleep 5s
+export default function () { sleep(5); }
+```
+
+Tách 2 trục:
+
+```text
+stage 0: t=0..8 (hold 4 VU)
+stage 1: t=8..9 (ramp 4 -> 0, step_interval = 1/4 = 0.25s)
+
+iter time = 5s
+
+regular_duration = 9s
+gracefulRampDown = 10s -> nếu áp riêng, grace có thể kéo đến t=8.25+10 = 18.25s
+gracefulStop     = 1s   -> cap end của max_duration = 9+1 = 10s
+```
+
+Timeline:
+
+```text
+t=0.0s   4 VU activate, vào iter#0 (đến t=5.0s)
+
+t=5.0s   4 VU finish iter#0, vào iter#1 (sẽ đến t=10.0s nếu không bị cắt)
+
+t=8.0s   stage 1 bắt đầu (ramp 4 -> 0 trong 1s)
+         step_interval = 1s / 4 = 0.25s
+         emit step (plannedVUs=4) -> không thay đổi
+
+t=8.25s  emit step (plannedVUs=3), VU=4 nhận gracefulStop()
+         VU=4 đang ở iter#1 (đã chạy 3.25s, còn 1.75s)
+         theo gracefulRampDown=10s, grace của VU=4 đến t=8.25+10 = 18.25s
+         NHƯNG bị cap bởi sum(stages) + gracefulStop = 9+1 = 10s
+         => grace thực của VU=4 = min(18.25, 10) = đến t=10.0s (còn 1.75s)
+
+t=8.5s   emit step (plannedVUs=2), VU=3 nhận gracefulStop()
+         grace VU=3 cap ở t=10.0s (còn 1.5s)
+
+t=8.75s  emit step (plannedVUs=1), VU=2 nhận gracefulStop()
+         grace VU=2 cap ở t=10.0s (còn 1.25s)
+
+t=9.0s   emit step (plannedVUs=0), VU=1 nhận gracefulStop()
+         regular_duration hết
+         grace VU=1 cap ở t=10.0s (còn 1.0s)
+
+t=10.0s  iter#1 của 4 VU đều cần đến t=10.0s mới xong (đã chạy 5s)
+         vừa khớp grace cap -> tất cả finish clean
+         scenario kết thúc
+```
+
+#### Nếu đổi `iter time = 8s`?
+
+```text
+t=8.25s  VU=4 nhận gracefulStop, đang ở iter#1 (đã 3.25s, còn 4.75s)
+         grace cap ở t=10.0s (còn 1.75s)
+t=10.0s  grace cap hết, VU=4 vẫn còn 3s iter
+         -> hardStop -> 1 interrupted
+
+t=10.0s  tương tự VU=3, VU=2, VU=1 đều bị hardStop
+         => 4 interrupted iterations
+```
+
+Ngược lại, nếu đặt `gracefulStop` rất dài (ví dụ `15s`):
+
+```text
+gracefulStop = 15s -> cap end = 9+15 = 24s
+gracefulRampDown = 10s
+
+VU=4 bị scale tại t=8.25s
+  grace VU=4 = min(8.25+10, 24) = min(18.25, 24) = 18.25s
+  -> grace VU=4 thật = 10s (gracefulRampDown bind)
+```
+
+Lúc này `gracefulRampDown` mới bind. Cap chỉ kích hoạt khi
+`gracefulStop < gracefulRampDown`.
+
+#### Tóm gọn quy tắc
+
+```text
+grace_thực_của_VU_bị_scale_xuống_tại_t_scale
+  = min(t_scale + gracefulRampDown, regular_duration + gracefulStop) - t_scale
+  = min(gracefulRampDown, regular_duration + gracefulStop - t_scale)
+```
+
+3 case:
+
+```text
+1) VU scale ở giữa timeline, còn xa cuối:
+   regular_duration + gracefulStop - t_scale > gracefulRampDown
+   => grace = gracefulRampDown (case bình thường)
+
+2) VU scale sát cuối:
+   regular_duration + gracefulStop - t_scale < gracefulRampDown
+   => grace = phần còn lại = ngắn hơn gracefulRampDown
+
+3) VU scale đúng cuối (t_scale = regular_duration):
+   => grace = gracefulStop
+```
+
+#### Khi nào cần để ý caveat này?
+
+```text
+- khi gracefulRampDown >> gracefulStop và stage cuối là ramp xuống
+  (như demo trên: 10s vs 1s)
+- khi muốn VU đang ở iter dài finish sạch ở cuối scenario
+  -> phải set gracefulStop đủ lớn, không đủ nếu chỉ set gracefulRampDown
+
+Quy tắc thực tế: nếu cuối scenario có ramp-down,
+gracefulStop nên >= gracefulRampDown để tránh cap bind sớm
 ```
 
 
