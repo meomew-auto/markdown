@@ -781,6 +781,129 @@ executor sẽ:
    - nếu VU còn iter chưa xong -> hardStop() -> iter bị interrupt
 ```
 
+##### Giải thích kỹ bước 3-4
+
+**Bước 3 — "reserve trong gracefulSteps" là gì?**
+
+Executor giữ 2 timeline song song (xem `ramping_vus.go:177-417`):
+
+```text
+rawSteps      : số VU active theo CONFIG stages
+                ví dụ stage 4->2 thì rawSteps có step (t=stageEnd, plannedVUs=2)
+
+gracefulSteps : số VU executor RESERVE để giữ cho VU đang finish iter
+                = rawSteps + delay xuống VU theo gracefulRampDown
+                ví dụ rawSteps có step (plannedVUs=2) tại t=6s
+                  thì gracefulSteps có step (plannedVUs=2) tại t=6+3 = 9s
+                  (delay đúng gracefulRampDown=3s)
+```
+
+`gracefulSteps` = "ngưỡng hard-stop". Trong khoảng `[t_scale, t_scale + gracefulRampDown]`:
+
+```text
+- rawSteps đã giảm        -> VU không start iter mới (đã ở toGracefulStop)
+- gracefulSteps chưa giảm -> VU CHƯA bị hardStop, vẫn được phép finish iter
+```
+
+`reserveVUsForGracefulRampDowns()` (`ramping_vus.go:313-417`) là hàm sinh
+`gracefulSteps` từ `rawSteps`. Mỗi lần `rawSteps` giảm VU, function này thêm
+1 step tương ứng vào `gracefulSteps` nhưng dời về sau `gracefulRampDown` giây.
+
+**Bước 4 — sau gracefulRampDown thì sao?**
+
+Executor có 2 vòng lặp xử lý 2 timeline (`ramping_vus.go:548-562`):
+
+```text
+- scheduledVUsHandlerStrategy (theo rawSteps)
+  -> khi rawSteps giảm: gọi vuHandle[i].gracefulStop()
+  -> đây là bước 2 ở trên
+
+- maxAllowedVUsHandlerStrategy (theo gracefulSteps)
+  -> khi gracefulSteps giảm: gọi vuHandle[i].hardStop()
+  -> đây là bước 4
+```
+
+Tại mốc `t_hard = t_scale + gracefulRampDown`, executor kiểm tra state của VU:
+
+```text
+case A: VU đã finish iter trước t_hard
+        -> ReturnVU đã được gọi trong runLoopsIfPossible()
+        -> handle về state = stopped
+        -> hardStop() là no-op (xem vu_handle.go:165-181, switch case toHardStop, stopped)
+        => không có gì xấu xảy ra, VU clean
+
+case B: VU vẫn đang chạy iter tại t_hard
+        -> hardStop() gọi vh.cancel() -> hủy context của iteration
+        -> goroutine runIter trả về false (do context cancelled)
+        -> iteration đếm vào interrupted_iterations metric
+        -> VU về state = stopped
+        => +1 interrupted iteration
+```
+
+Đọc cụ thể từ `vu_handle.go:165-181`:
+
+```go
+func (vh *vuHandle) hardStop() {
+    switch vh.state {
+    case toHardStop, stopped:
+        return                          // case A: no-op
+    case starting:
+        vh.changeState(stopped)
+    case running, toGracefulStop:
+        vh.changeState(toHardStop)
+    }
+    vh.cancel()                         // case B: cancel context của iter
+    vh.ctx, vh.cancel = context.WithCancel(vh.parentCtx)
+}
+```
+
+**Ví dụ áp vào demo_rampdown**
+
+Config: `gracefulRampDown=3s`, stage 1 ramp 4->2 trong 1s từ t=5s. Code `sleep(4)`.
+
+```text
+rawSteps:
+  t=0s     plannedVUs=4
+  t=5.0s   plannedVUs=4   (start stage 1, chưa giảm)
+  t=5.5s   plannedVUs=3   <- VU=4 nhận gracefulStop
+  t=6.0s   plannedVUs=2   <- VU=3 nhận gracefulStop
+
+gracefulSteps:
+  t=0s     plannedVUs=4
+  t=5.0s   plannedVUs=4
+  t=8.5s   plannedVUs=3   <- t=5.5 + 3s grace, mốc hardStop của VU=4
+  t=9.0s   plannedVUs=2   <- t=6.0 + 3s grace, mốc hardStop của VU=3
+
+VU=4:
+  iter#1 chạy t=4..8 (sleep 4s)
+  bị gracefulStop ở t=5.5s -> không start iter mới
+  finish iter#1 tại t=8.0s -> ReturnVU clean
+  tại t=8.5s executor gọi hardStop(): VU đã ở state=stopped -> NO-OP (case A)
+
+VU=3:
+  iter#1 chạy t=4..8
+  bị gracefulStop ở t=6.0s
+  finish iter#1 tại t=8.0s -> ReturnVU clean
+  tại t=9.0s executor gọi hardStop(): NO-OP (case A)
+```
+
+Nếu code `sleep(5)` (lâu hơn):
+
+```text
+VU=4:
+  iter#1 chạy t=4..9 (sleep 5s)
+  bị gracefulStop ở t=5.5s
+  tại t=8.5s grace hết, iter#1 vẫn còn 0.5s
+  hardStop() vào case B: cancel context iter
+  -> iter#1 bị cắt -> +1 interrupted
+
+VU=3:
+  iter#1 chạy t=4..9
+  bị gracefulStop ở t=6.0s
+  tại t=9.0s grace hết, iter#1 vừa xong (đúng lúc)
+  có thể finish clean hoặc hardStop tùy race condition
+```
+
 Lưu ý index:
 
 ```text
