@@ -43,6 +43,7 @@ docs/20260517_ramping_vus_quickpizza_two_requests_worked_example.md
 - [Demo VU nhanhchậm](#5-demo-vu-nhanhchậm)
 - [Demo gracefulRampDown và interrupted](#6-demo-gracefulrampdown-và-interrupted)
 - [Demo stage trùng target trùng duration duration=0s](#63-demo-stage-trùng-target--trùng-duration--duration0s)
+- [Edge case startTime và stage 0 duration=0s](#635-edge-case-starttime-và-stage-0-duration0s)
 - [Demo QuickPizza 2 requests / iteration](#7-demo-quickpizza-2-requests--iteration)
 - [So sánh với constant-vus per-vu shared arrival-rate](#8-so-sánh-với-constant-vus-per-vu-shared-arrival-rate)
 - [Cheat sheet](#9-cheat-sheet)
@@ -1334,7 +1335,58 @@ Nhớ 4 ý:
    chúng chạy song song theo startTime của từng scenario
    ```
 
-## 7. Demo QuickPizza `2 requests / iteration`
+### 6.3.5. Edge case: `startTime` và stage 0 `duration=0s`
+
+Hai biến thể hay gây nhầm:
+
+```text
+A. scenario.startTime > 0     -> dịch toàn bộ timeline về sau N giây
+B. stage[0].duration = 0s     -> instant jump VU ngay tại t=0 nội bộ
+```
+
+Cả hai không "phá" model `ramping-vus`, chỉ thay đổi mốc thời gian. Đọc kỹ
+từng case bên dưới để không nhầm với khái niệm khác.
+
+#### A. `scenario.startTime`: dịch timeline
+
+`startTime` là field của scenario (thuộc `BaseConfig`), default `0s`. Nó nói
+scenario này chờ bao lâu sau khi test bắt đầu mới được "active".
+
+File demo:
+
+```text
+examples/ramping_vus_starttime_demo.js
+```
+
+Code:
+
+```js
+export const options = {
+  scenarios: {
+    delayed_scenario: {
+      executor: "ramping-vus",
+      startTime: "3s",
+      startVUs: 1,
+      stages: [
+        { duration: "3s", target: 3 },
+        { duration: "3s", target: 3 },
+        { duration: "2s", target: 0 },
+      ],
+      gracefulRampDown: "1s",
+      gracefulStop: "2s",
+    },
+  },
+};
+```
+
+Header thật:
+
+```text
+scenarios: (100.00%) 1 scenario, 3 max VUs, 12s max duration (incl. graceful stop):
+         * delayed_scenario: Up to 3 looping VUs for 8s over 3 stages (gracefulRampDown: 1s, startTime: 3s, gracefulStop: 2s)
+```
+
+
 
 File:
 
