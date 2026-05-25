@@ -2031,7 +2031,742 @@ Nếu muốn ép tất cả VU active từ đầu:
 - dùng cho test cần baseline ổn định, không spike RAM
 ```
 
-## 4. So sánh với constant-arrival-rate
+### 3.20. Stages trùng target rate, duration=0s, rate=0
+
+Tương tự `ramping-vus`, các edge case stages cũng tồn tại trong `ramping-arrival-rate`,
+nhưng tác động lên RATE thay vì lên VU.
+
+#### 3.20.1. Stages trùng target rate (hold)
+
+Khi `from == to` trong `cal()`, code rơi vào nhánh `else` (`ramping_arrival_rate.go:269-278`):
+
+```go
+} else {
+    endCount += dur * to
+    for ; i <= endCount; i += float64(next()) {
+        select {
+        case <-done:
+            return
+        case ch <- time.Duration((i-doneSoFar)/to) + stageStart:
+        }
+    }
+}
+```
+
+Đây là plateau: rate giữ nguyên trong toàn bộ stage.
+
+Ví dụ:
+
+```js
+startRate: 4,
+timeUnit: "1s",
+stages: [
+  { duration: "2s", target: 4 },   // hold 4/s vì from(4) == to(4)
+  { duration: "2s", target: 4 },   // hold 4/s tiếp (target trùng stage trước)
+  { duration: "2s", target: 8 },   // ramp 4 -> 8
+]
+```
+
+Trong stage 1 và 2, gap đều = `1/4 = 0.25s`. Slot phân bố đều trong tổng 4s đầu.
+Stage 1 và stage 2 chạy giống hệt nhau về behavior, chỉ khác ở `stageStart`.
+
+Đây là cách hợp lệ để diễn tả:
+
+```text
+"giữ rate X/s trong N giây"
+```
+
+mà không cần đổi sang `constant-arrival-rate`.
+
+#### 3.20.2. Stage `duration: 0s` (instant jump rate)
+
+Đọc `cal()` (`ramping_arrival_rate.go:253-282`):
+
+```go
+for _, stage := range varc.Stages {
+    to = float64(stage.Target.ValueOrZero()) / timeUnit
+    dur = float64(stage.Duration.Duration)        // = 0 nếu duration=0s
+    if from != to {
+        endCount += dur * ((to-from)/2 + from)    // = 0 vì dur=0
+        for ; i <= endCount; ... { ... }          // không vào loop vì endCount không tăng
+    } else {
+        endCount += dur * to                       // = 0
+        for ; i <= endCount; ... { ... }
+    }
+    doneSoFar = endCount
+    from = to                                      // QUAN TRỌNG: from nhảy ngay sang to
+    stageStart += stage.Duration.TimeDuration()   // += 0
+}
+```
+
+Hai chuyện xảy ra cùng lúc:
+
+```text
+1) `from = to` -> rate đầu stage kế tiếp nhảy sang giá trị target của stage 0s
+2) stageStart không thay đổi -> stage kế tiếp bắt đầu đúng tại cùng mốc thời gian
+3) endCount không tăng -> không có slot nào trong stage 0s
+```
+
+Hệ quả: stage `duration: 0s` "instant jump" rate.
+
+Ví dụ:
+
+```js
+startRate: 2,
+timeUnit: "1s",
+stages: [
+  { duration: "2s", target: 2 },   // hold 2/s
+  { duration: "0s", target: 10 },  // instant jump rate 2 -> 10
+  { duration: "3s", target: 10 },  // hold 10/s
+]
+```
+
+Đường rate(t):
+
+```text
+t=0..2s : rate = 2/s (hold)
+t=2s    : rate đột ngột nhảy lên 10/s
+t=2..5s : rate = 10/s (hold)
+```
+
+Trong khi đó stage không 0s sẽ ramp tuyến tính 2 -> 10:
+
+```text
+t=0..2s : rate = 2/s
+t=2..5s : rate ramp 2 -> 10 trong 3s (gap dần nhỏ lại)
+```
+
+Bảng so sánh:
+
+| Form | Tổng thời gian | Pattern rate |
+| --- | --- | --- |
+| `[{2s,2}, {0s,10}, {3s,10}]` | 5s | 2/s trong 2s rồi 10/s trong 3s |
+| `[{2s,2}, {3s,10}]` | 5s | 2/s trong 2s rồi ramp 2 -> 10 trong 3s |
+
+Khi nào dùng form 0s?
+
+```text
+- muốn diễn tả "rate spike đột ngột" thay vì ramp dần
+- muốn pattern bậc thang rõ ràng
+- không phải simulate organic growth
+```
+
+#### 3.20.3. Stage `target: 0` (rate giảm về 0)
+
+Khi rate ramp xuống 0:
+
+```text
+to = 0
+nhánh from != to: endCount += dur * ((0 - from)/2 + from) = dur * from / 2
+=> stage này chỉ tạo dur * from / 2 slots
+```
+
+Ví dụ:
+
+```text
+from = 4/s, to = 0/s, dur = 2s
+endCount += 2 * (4/2) = 4 slots
+```
+
+So với hold ở rate trung bình:
+
+```text
+nếu hold ở 2/s (avg) trong 2s -> cũng 4 slots
+nhưng phân bố khác:
+  hold: gap đều 0.5s
+  ramp xuống 0: gap dần lớn (vì rate giảm)
+```
+
+Edge case: nếu stage tiếp theo cũng có target=0 (rate giữ 0):
+
+```text
+from = 0, to = 0
+nhánh else: endCount += dur * 0 = 0 -> không slot nào
+=> stage hold rate 0 nghĩa là KHÔNG CÓ SLOT trong toàn bộ stage
+```
+
+Đọc thêm tại 4.1 (edge case rate ramp xuống 0 ở giữa).
+
+#### 3.20.4. Stage `target` âm (Validate reject)
+
+Đọc `helpers.go:51-55`:
+
+```go
+if !s.Target.Valid {
+    errors = append(errors, fmt.Errorf("stage %d doesn't have a target", stageNum))
+} else if s.Target.Int64 < 0 {
+    errors = append(errors, fmt.Errorf("the target for stage %d can't be negative", stageNum))
+}
+```
+
+`startRate` âm cũng bị reject (`ramping_arrival_rate.go:90-92`):
+
+```go
+if varc.StartRate.Int64 < 0 {
+    errors = append(errors, fmt.Errorf("the startRate value can't be negative"))
+}
+```
+
+Nên không có chuyện rate âm trong runtime.
+
+#### 3.20.5. Tổng kết
+
+```text
+- target trùng (từ stage này sang stage khác cùng giá trị) -> hold rate
+- duration: 0s + target khác -> instant jump rate
+- target: 0 (ramp xuống) -> stage có ít slot, gap dần lớn
+- target: 0 (sau khi đã ở 0) -> stage không có slot
+- target âm hoặc startRate âm -> Validate reject
+```
+
+## 4. Edge cases
+
+### 4.1. Stage rate ramp xuống 0 ở giữa
+
+Đây là kịch bản hay gặp khi muốn mô phỏng "tải xuống đáy rồi lại lên":
+
+```js
+startRate: 5,
+timeUnit: "1s",
+stages: [
+  { duration: "2s", target: 10 },  // ramp 5 -> 10
+  { duration: "2s", target: 0 },   // ramp 10 -> 0 (xuống đáy)
+  { duration: "2s", target: 8 },   // ramp 0 -> 8 (lên lại)
+],
+preAllocatedVUs: 4,
+maxVUs: 8,
+```
+
+#### 4.1.1. Số slot từng stage
+
+```text
+stage 1 (5 -> 10, dur=2s): endCount += 2 * (5+10)/2 = 15 slots
+stage 2 (10 -> 0, dur=2s): endCount += 2 * (10+0)/2 = 10 slots
+stage 3 (0 -> 8, dur=2s):  endCount += 2 * (0+8)/2 = 8 slots
+
+scheduled_iterations_total = 15 + 10 + 8 = 33 slots
+```
+
+#### 4.1.2. Khi rate đi qua 0 thì sao?
+
+Trong stage 2, rate giảm từ 10 xuống 0:
+
+```text
+t=2s    rate=10/s
+t=2.5s  rate=7.5/s
+t=3s    rate=5/s
+t=3.5s  rate=2.5/s
+t=4s    rate=0/s (đáy)
+```
+
+Ở gần `t=4s`, rate gần 0 nhưng vẫn đếm diện tích tích lũy. Slot cuối stage 2
+xuất hiện gần `t=4s` (chưa hẳn đúng `t=4s` vì có thể "phần lẻ" carry sang stage 3
+qua `doneSoFar`).
+
+#### 4.1.3. Rate "qua đáy" rồi lên lại
+
+Đọc `cal()` xử lý chuyển stage 2 -> stage 3:
+
+```text
+Sau stage 2:
+  doneSoFar = 25  (15 + 10)
+  from = 0  (vì stage 2 to = 0)
+
+Stage 3:
+  to = 8/s
+  dur = 2s
+  endCount += 2 * (0+8)/2 = 8 -> endCount = 33
+
+Vì from=0, to=8, công thức:
+  x = (0*2 - sqrt(2*(0 + 2*(i-25)*8))) / (0-8)
+    = -sqrt(16*(i-25)) / -8
+    = sqrt(16*(i-25)) / 8
+    = sqrt(i-25) / 2
+```
+
+Slot đầu tiên của stage 3 (i=26):
+
+```text
+x = sqrt(1) / 2 = 0.5s từ đầu stage 3
+=> wall-clock = stageStart_stage3 + 0.5 = 4 + 0.5 = 4.5s
+```
+
+Slot thứ 2 (i=27):
+
+```text
+x = sqrt(2) / 2 ≈ 0.707s
+=> wall-clock ≈ 4.707s
+```
+
+Slot tiếp theo (i=28):
+
+```text
+x = sqrt(3) / 2 ≈ 0.866s
+```
+
+Khoảng cách giảm dần (vì rate đang tăng):
+
+```text
+gap_26_27 ≈ 0.207s
+gap_27_28 ≈ 0.159s
+gap_28_29 ≈ 0.135s
+...
+gap cuối ≈ 1/8 = 0.125s
+```
+
+Đúng với rate(t):
+
+```text
+rate(t=4.5s in stage3) ≈ 0 + 8*(0.5/2) = 2/s -> gap ~ 0.5s? thực tế đo 0.207s
+```
+
+Sai số bởi vì gap không hoàn toàn = `1/rate(t_k)` mà là tích phân của rate.
+Nhưng đại khái:
+
+```text
+- đầu stage 3 rate tăng từ 0 -> gap rất lớn ban đầu (slot 26 cách t=4s tới 0.5s)
+- càng về cuối stage 3 rate càng cao -> gap nhỏ
+```
+
+#### 4.1.4. Hệ quả với pool VU
+
+Trong khoảng rate xuống đáy:
+
+```text
+- ít slot fire -> ít iter mới chạy
+- VU đang chạy iter cũ vẫn bận đến khi finish
+- nếu W_effective lớn, pool vẫn nhiều VU bận trong vài giây sau khi rate giảm
+```
+
+Khi rate lên lại:
+
+```text
+- slot bắt đầu fire
+- pool có thể đã có VU rảnh (do rate trước đó thấp)
+- nhưng cũng có thể VU mới rảnh chưa kịp pickup, phụ thuộc timing
+```
+
+Quan sát: nếu rate spike lên ngay sau đáy, nguy cơ drop có thể tăng vì
+VU không còn được "tách quota" theo timeline.
+
+#### 4.1.5. Trường hợp `target: 0` ở stage cuối
+
+Stage cuối có thể là ramp xuống 0:
+
+```js
+stages: [
+  { duration: "2s", target: 10 },
+  { duration: "2s", target: 0 },   // stage cuối ramp xuống 0
+]
+```
+
+Khi rate xuống 0 cuối scenario:
+
+```text
+- slot cuối fire trước t=regular_duration
+- regDurationCtx hết tại t=regular_duration -> Run() loop thoát
+- iter đang chạy được phép finish trong gracefulStop
+```
+
+Pattern này hợp lý cho "soft landing" thay vì cắt đột ngột.
+
+### 4.2. `timeUnit` lớn (phút) tương tác với stages
+
+Default `timeUnit = "1s"`. Có thể đổi sang phút, giờ:
+
+```js
+startRate: 60,
+timeUnit: "1m",     // 60 iter/min = 1 iter/s
+stages: [
+  { duration: "30s", target: 120 },   // ramp lên 120/min = 2/s
+  { duration: "60s", target: 60 },    // ramp xuống 60/min = 1/s
+]
+```
+
+#### 4.2.1. Cách core scale
+
+Đọc `cal()` (`ramping_arrival_rate.go:245-247`):
+
+```go
+timeUnit = float64(varc.TimeUnit.Duration)         // nanoseconds của timeUnit
+from = float64(varc.StartRate.ValueOrZero()) / timeUnit
+```
+
+Đọc kỹ:
+
+```text
+timeUnit = 1m = 60_000_000_000 nanoseconds
+startRate = 60
+from = 60 / 60_000_000_000 = 1e-9 (iter per nanosecond)
+
+trong stage 1:
+  to = 120 / 60_000_000_000 = 2e-9
+  dur = 30s = 30_000_000_000 ns
+  endCount += dur * (from+to)/2
+           = 30_000_000_000 * 1.5e-9
+           = 45 slots
+
+stage 2:
+  to = 60 / 60_000_000_000 = 1e-9
+  dur = 60s = 60_000_000_000 ns
+  endCount += 60_000_000_000 * 1.5e-9 = 90 slots
+
+scheduled_iterations_total = 45 + 90 = 135 slots
+```
+
+Tương đương rate per second:
+
+```text
+stage 1: ramp 1/s -> 2/s trong 30s -> avg 1.5/s -> 45 slots ✓
+stage 2: ramp 2/s -> 1/s trong 60s -> avg 1.5/s -> 90 slots ✓
+```
+
+#### 4.2.2. timeUnit lớn khi rate nhỏ
+
+Nếu rate < 1 mỗi giây, `timeUnit` lớn rất hữu ích:
+
+```js
+startRate: 1,
+timeUnit: "10s",    // 1 iter / 10s = 0.1/s
+stages: [
+  { duration: "60s", target: 6 },     // ramp 0.1/s -> 0.6/s
+]
+```
+
+Ngược lại, nếu set `timeUnit: "1s"` với rate phân số:
+
+```js
+rate: 0.6,         // KHÔNG hợp lệ - rate là null.Int (số nguyên)
+timeUnit: "1s",
+```
+
+Đọc `ramping_arrival_rate.go:37`:
+
+```go
+StartRate null.Int           `json:"startRate"`
+```
+
+`StartRate` là `null.Int`, không nhận float. Nên muốn rate phân số phải scale
+qua `timeUnit`:
+
+```text
+1 iter / 10s = 0.1 iter/s -> dùng startRate=1, timeUnit="10s"
+6 iter / 10s = 0.6 iter/s -> dùng startRate=6, timeUnit="10s"
+```
+
+#### 4.2.3. Tương tác stages
+
+Stage duration luôn theo wall-clock thật, không scale theo `timeUnit`:
+
+```text
+stage.duration = 30s nghĩa là 30 giây thật, không phải 30 đơn vị timeUnit
+stage.target  = rate đích, đo theo timeUnit
+```
+
+Nên với `timeUnit: "1m"`:
+
+```text
+stages: [{ duration: "30s", target: 120 }]
+=> 30 giây, ramp tới 120 iter/phút (= 2/s)
+=> KHÔNG phải 30 phút
+```
+
+#### 4.2.4. Khi nào dùng timeUnit khác 1s?
+
+```text
+- rate dạng X/phút, X/giờ (ngữ cảnh nghiệp vụ)
+  ví dụ: 1000 transaction/phút
+- rate < 1/s (cần phân số)
+  ví dụ: 1 báo cáo / 10s = startRate=1, timeUnit="10s"
+- consistency với SLO/contract dùng đơn vị phút/giờ
+```
+
+Tránh dùng `timeUnit` quá lớn (vài giờ trở lên) trong demo:
+
+```text
+- đơn vị quá lớn so với scenario duration -> rate có thể quá thấp, ít slot
+- dễ nhầm khi đọc lại config
+```
+
+### 4.3. preAllocatedVUs quá thấp so với rate đỉnh
+
+Đây là tình huống điển hình khi sizing sai. Phân tích chi tiết.
+
+#### 4.3.1. Config minh họa
+
+```js
+startRate: 5,
+timeUnit: "1s",
+stages: [
+  { duration: "2s", target: 30 },   // ramp tới 30/s
+  { duration: "3s", target: 30 },   // hold 30/s
+  { duration: "2s", target: 0 },
+],
+preAllocatedVUs: 4,
+maxVUs: 6,
+```
+
+Với `W_effective = 0.5s`:
+
+```text
+required_vus_min_peak = ceil(30 * 0.5) = 15 VUs
+preAllocatedVUs = 4 << 15
+maxVUs = 6 << 15
+```
+
+#### 4.3.2. Diễn biến khi chạy
+
+Stage 1 (`t=0..2s`, ramp 5 -> 30):
+
+```text
+t=0s    rate=5/s, có 4 VU rảnh -> match
+t=0.2s  slot 2: nếu VU 1 chưa xong (mất 0.5s), pool còn 3
+t=0.5s  iter 1 xong (VU 1 rảnh), slot 3 fire (rate ~7.5/s)
+...
+khi rate lên 15/s vẫn chấp nhận được với 4 VU đang loop nhanh
+khi rate lên 25/s -> bắt đầu drop
+```
+
+Khi drop bắt đầu:
+
+```text
+t=t1    slot fire không match -> dropped++ + signal spawn
+t=t1+0.1s   spawner đang init VU#5
+t=t1+0.05s   slot tiếp theo drop, signal vào default (đã pending)
+t=t1+0.1s   VU#5 vào pool, có thể bắt slot kế tiếp
+t=t1+0.2s   slot fire không match, signal spawn VU#6
+t=t1+0.3s   VU#6 vào pool
+=> sau ~0.3s pool đã full max=6, nhưng vẫn không đủ cho rate 30/s
+```
+
+Stage 2 (`t=2..5s`, hold 30/s):
+
+```text
+- pool max=6, capacity = 6/0.5 = 12 iter/s
+- rate target = 30/s
+- drop_rate ~= 30 - 12 = 18/s
+=> 3s * 18 = 54 dropped iterations trong stage hold
+```
+
+Stage 3 (`t=5..7s`, ramp 30 -> 0):
+
+```text
+- rate giảm dần xuống 0
+- drop giảm tương ứng
+- gần cuối stage 3 sẽ không còn drop
+```
+
+#### 4.3.3. Summary kỳ vọng
+
+```text
+scheduled_iterations_total ≈ stages diện tích
+  stage 1: 2 * (5+30)/2 = 35 slots
+  stage 2: 3 * 30 = 90 slots
+  stage 3: 2 * (30+0)/2 = 30 slots
+  total ≈ 155 slots
+
+completed_iterations ≈ capacity_avg * 7s = 12 * 7 ≈ 84 iter (chỉ ước lượng)
+dropped_iterations ≈ 155 - 84 ≈ 71 (rough)
+```
+
+Trong run thực tế con số có thể chệch do init time, jitter, v.v.
+
+#### 4.3.4. Cách phát hiện
+
+Log warning là dấu hiệu sớm:
+
+```text
+WARN [Insufficient VUs, reached 6 active VUs and cannot initialize more]
+```
+
+Dấu hiệu trong summary:
+
+```text
+dropped_iterations....: 71  10.14/s
+iterations............: 84  12.00/s
+```
+
+`dropped_iterations.rate` cao tương đương `iterations.rate` -> chắc chắn thiếu VU.
+
+#### 4.3.5. Cách fix
+
+```text
+1) Tăng preAllocatedVUs lên >= ceil(lambda_peak * W_effective)
+   => baseline đủ, không drop ở peak
+2) Tăng maxVUs lên đủ và để preAllocatedVUs thấp hơn
+   => chấp nhận drop ban đầu, ổn định sau
+3) Giảm rate target nếu test mục tiêu là "X iter/s sustainable"
+4) Tối ưu code iter để giảm W_effective
+   => mỗi VU chạy iter nhanh hơn -> 1 VU đáp ứng nhiều slot hơn
+```
+
+Quy tắc thực tế cho QuickPizza demo (`W_effective ~ 1.7s`):
+
+```text
+30 iter/s -> required_vus = ceil(30 * 1.7) = 51 VUs
+=> phải set preAllocatedVUs >= 51 hoặc maxVUs >> 51
+```
+
+### 4.4. Stages có `duration: 0s`
+
+Mục 3.20.2 đã giới thiệu. Mục này đi sâu vào behavior thực tế.
+
+#### 4.4.1. Use case: rate spike đột ngột
+
+```js
+startRate: 2,
+timeUnit: "1s",
+stages: [
+  { duration: "2s", target: 2 },    // baseline 2/s
+  { duration: "0s", target: 20 },   // spike 2 -> 20 INSTANT
+  { duration: "1s", target: 20 },   // hold 20/s trong 1s
+  { duration: "0s", target: 2 },    // drop 20 -> 2 INSTANT
+  { duration: "2s", target: 2 },    // tiếp tục 2/s
+]
+```
+
+Đường rate(t):
+
+```text
+t=0..2s : rate = 2/s
+t=2s    : rate đột ngột 20/s
+t=2..3s : rate = 20/s
+t=3s    : rate đột ngột 2/s
+t=3..5s : rate = 2/s
+```
+
+Tổng thời gian:
+
+```text
+total_regular_duration = 2 + 0 + 1 + 0 + 2 = 5s
+```
+
+Stage 0s không cộng thêm thời gian.
+
+#### 4.4.2. Slot trong stage 0s
+
+Stage 0s **không có slot riêng**. Đọc `cal()` (mục 3.20.2):
+
+```text
+dur=0 -> endCount không tăng -> không vào loop sinh slot
+```
+
+Slot xảy ra ở các stage khác:
+
+```text
+stage 1 (2s @ 2/s): 4 slots
+stage 2 (0s @ 20/s): 0 slots (instant transition)
+stage 3 (1s @ 20/s): 20 slots (vì from=20, to=20, hold)
+stage 4 (0s @ 2/s): 0 slots (instant transition)
+stage 5 (2s @ 2/s): 4 slots
+
+scheduled_iterations_total = 28
+```
+
+Nhưng cẩn thận: stage 5 thật ra là `from=2, to=2`, nhánh `else`, dur*to = 4 slot.
+stage 1 cũng vậy: 4 slot. Stage 3 với from=20, to=20: dur*to = 20 slot. Tổng 28
+khớp.
+
+#### 4.4.3. Spawn unplanned VU không kịp
+
+Khi spike từ 2/s lên 20/s instant, pool VU thường không kịp catch up:
+
+```text
+trước spike: rate 2/s, pool chỉ cần 2*W VUs = 1-2 VU bận
+spike: rate 20/s, cần 20*W VUs = 10+ VU bận
+
+nếu preAllocatedVUs=4, maxVUs=15:
+  - tại t=2s, slot fire ở rate ~20/s
+  - pool có 4 VU đã rảnh (vì rate thấp trước đó)
+  - 4 slot đầu match nhanh, 4 VU bận
+  - các slot tiếp theo (0.05s/slot ở 20/s) DROP vì pool full bận
+  - signal spawn unplanned, init mất ~50-100ms
+  - đến khi VU#5 vào pool thì đã drop ~1-2 slot
+=> stage hold 1s ở 20/s sẽ có drop liên tục cho tới khi pool đủ ~10 VU
+```
+
+#### 4.4.4. So sánh với ramping dần
+
+```js
+// Form A: instant jump
+{ duration: "2s", target: 2 },
+{ duration: "0s", target: 20 },
+{ duration: "1s", target: 20 },
+
+// Form B: ramp dần
+{ duration: "2s", target: 2 },
+{ duration: "1s", target: 20 },
+```
+
+Slot khác nhau:
+
+```text
+Form A: 4 + 0 + 20 = 24 slots
+Form B: 4 + 1*(2+20)/2 = 4 + 11 = 15 slots
+```
+
+VU sizing khác nhau:
+
+```text
+Form A: required_vus_peak = 20 * W ngay tại t=2s
+Form B: required_vus_peak = 20 * W tại t=3s (cuối ramp)
+       ramp 1s đủ thời gian cho unplanned spawner kịp catch up
+```
+
+Form A test "spike đột ngột", Form B test "tăng dần". Mỗi form mô phỏng tình
+huống khác nhau.
+
+#### 4.4.5. Stage 0s liên tiếp
+
+Có thể có nhiều stage 0s liên tiếp:
+
+```js
+stages: [
+  { duration: "1s", target: 5 },
+  { duration: "0s", target: 10 },
+  { duration: "0s", target: 15 },   // jump tiếp lên 15
+  { duration: "0s", target: 8 },    // jump xuống 8
+  { duration: "1s", target: 8 },
+]
+```
+
+Mỗi stage 0s:
+
+```text
+- không tạo slot
+- chỉ update from = to ngay tại cùng mốc thời gian
+```
+
+Hệ quả: `from` đi qua chuỗi 5 -> 10 -> 15 -> 8 trong cùng 1 thời điểm wall-clock,
+sau đó stage cuối hold 8/s.
+
+Trên đường rate(t), điều này nhìn như "bậc thang đổi nhiều bước":
+
+```text
+t=0..1s : rate=5/s
+t=1s    : 5 -> 10 -> 15 -> 8 (3 nhảy bậc tức thì)
+t=1..2s : rate=8/s
+```
+
+Tuy nhiên các nhảy bậc trung gian không có slot riêng, nên nhìn từ output thì
+chỉ thấy "rate=5/s rồi đột ngột 8/s".
+
+#### 4.4.6. Khi nào dùng?
+
+```text
+- mô phỏng "đổi rate đột ngột" (sự kiện, deploy, switch traffic)
+- pattern bậc thang rõ ràng cho test
+- không phải simulate organic growth (lúc đó nên dùng ramp)
+```
+
+Tránh:
+
+```text
+- duration="0s" với target trùng startRate -> no-op (không nhảy bậc)
+  ví dụ startRate: 5, stages: [{ duration: "0s", target: 5 }] -> không thay đổi
+```
+
+## 5. So sánh với constant-arrival-rate
 
 ```text
 constant-arrival-rate = 1 rate cố định
@@ -2064,7 +2799,7 @@ W_effective
 
 không chỉ nhìn rate trung bình của cả timeline.
 
-## 5. Cheat sheet
+## 6. Cheat sheet
 
 ```text
 startRate = rate lúc bắt đầu

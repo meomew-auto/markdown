@@ -2465,6 +2465,199 @@ Demo `constant_arrival_rate_interrupt_demo.js` minh họa rõ tình huống này
 | Sau duration (gracefulStop) | bất kỳ | regDurationCtx done -> Run() return | không emit metric mới |
 | Iteration đang chạy bị cancel | (cuối gracefulStop) | maxDurationCtx cancel | interrupted_iterations++ |
 
+### 3.15. gracefulStop interaction với arrival timeline
+
+`gracefulStop` ở open model có hành vi khác hẳn `gracefulStop` của closed model. Đây là phần dễ
+nhầm khi user copy mental model từ `constant-vus`.
+
+#### 3.15.1. Hai context khác nhau
+
+`getDurationContexts()` (`lib/executor/helpers.go:141`) tạo hai context:
+
+```text
+regDurationCtx: hết hạn sau `duration`
+maxDurationCtx: hết hạn sau `duration + gracefulStop`
+```
+
+Trong `Run()` của `constant-arrival-rate`:
+
+```go
+startTime, maxDurationCtx, regDurationCtx, cancel := getDurationContexts(parentCtx, duration, gracefulStop)
+```
+
+Hai context được dùng cho hai mục đích:
+
+```text
+regDurationCtx -> điều khiển arrival timeline (trục 1)
+maxDurationCtx -> điều khiển VU iter timeline (trục 2)
+```
+
+Cụ thể trong loop chính:
+
+```go
+for li, gi := 0, start; ; li, gi = li+1, gi+offsets[li%len(offsets)] {
+    t := notScaledTickerPeriod*time.Duration(gi) - time.Since(startTime)
+    timer.Reset(t)
+    select {
+    case <-timer.C:
+        // ... fire mốc, gọi TryRunIteration ...
+    case <-regDurationCtx.Done():
+        return nil           // <-- arrival timeline kết thúc
+    }
+}
+```
+
+Khi `regDurationCtx.Done()`:
+
+```text
+return nil ngay khỏi Run()
+arrival timeline đóng
+không fire mốc nào nữa
+```
+
+Nhưng iteration đang chạy thì sao? `runfn` của VU dùng `maxDurationCtx`, không phải
+`regDurationCtx`. Vì vậy:
+
+```text
+sau khi Run() return:
+  defer cancel() được gọi
+  defer ở dòng 226-230:
+    <-returnedVUs           # đợi goroutine spawn unplanned đóng
+    vusPool.Close()         # đóng channel iterations
+    cancel()                # cancel maxDurationCtx
+    activeVUsWg.Wait()      # đợi VU return
+```
+
+Quan trọng: `vusPool.Close()` chỉ đóng channel `iterations`. Worker goroutine vẫn đang chạy `runfn`
+sẽ chạy tiếp tới khi:
+
+```text
+- runfn finish bình thường (full iteration complete)
+- HOẶC maxDurationCtx bị cancel (sau gracefulStop hết hạn)
+```
+
+#### 3.15.2. Sequence chi tiết tại boundary
+
+Giả sử `duration=4s`, `gracefulStop=2s`, có 2 iteration đang chạy lúc t=4s:
+
+```text
+t=4.000s  regDurationCtx.Done() fire
+          Run() return nil
+          defer block bắt đầu chạy:
+            <-returnedVUs    # spawn goroutine kết thúc
+            vusPool.Close()  # close(iterations channel)
+              -> worker đang range channel: thoát vòng lặp ngay sau khi runfn hiện tại xong
+              -> worker đang chạy runfn: vẫn chạy tới khi runfn return hoặc ctx cancel
+            cancel()         # cancel maxDurationCtx (sau khi <-waitOnProgressChannel xong)
+              !! nhưng cancel() chỉ được gọi sau khi <-waitOnProgressChannel
+              !! mà progress goroutine cũng đang dùng maxDurationCtx, sẽ thoát khi nó done
+              !! thực chất maxDurationCtx tự done sau gracefulStop từ getDurationContexts
+
+t=4.001s  worker VU#1 vẫn đang chạy iter A (giả sử bắt đầu t=3.5s, W=1s)
+t=4.500s  iter A finish bình thường, VU#1 về range channel
+          channel đã closed -> for range thoát -> goroutine của VU#1 return
+t=4.500s  iter B (giả sử bắt đầu t=3.8s, W=1s) còn dở
+t=4.800s  iter B finish bình thường (vẫn trong gracefulStop window)
+t=6.000s  maxDurationCtx hết hạn (4s + 2s)
+          nhưng tới đây mọi iter đã xong -> không có interrupt
+```
+
+Trường hợp iter còn dở quá gracefulStop:
+
+```text
+t=3.5s   iter C bắt đầu (W=3s, không nên xảy ra trong test bình thường)
+t=4.0s   regDurationCtx done, Run() return
+t=6.0s   maxDurationCtx hết hạn, cancel() được gọi
+         iter C bị cancel context -> runfn return false
+         -> count vào interrupted_iterations
+t=6.0s   pool cleanup, scenario kết thúc
+```
+
+#### 3.15.3. gracefulStop = 0s
+
+Nếu set `gracefulStop: "0s"`:
+
+```text
+maxDurationCtx hết hạn = duration + 0 = duration
+regDurationCtx hết hạn = duration
+=> hai context cùng done tại t=duration
+```
+
+Hệ quả:
+
+```text
+mọi iter đang chạy bị cancel ngay tại t=duration
+mọi iter chưa kịp finish trở thành interrupted
+```
+
+Demo `constant_arrival_rate_interrupt_demo.js` minh họa case này: rate=1, duration=1s, function
+sleep 5s, gracefulStop=0s. Iter đầu start tại t=0 và bị cancel tại t=1s.
+
+#### 3.15.4. gracefulStop > duration (test setup không thường gặp)
+
+Set `gracefulStop` rất lớn (ví dụ `gracefulStop: "10s"` cho `duration: "1s"`):
+
+```text
+arrival timeline đóng tại t=1s
+mọi iter đã start được phép chạy tới t=11s
+```
+
+Với W_effective bình thường <1s, gracefulStop dư thừa không gây hại, chỉ làm runtime tổng dài hơn.
+Nhưng nếu W_effective lớn (ví dụ test có HTTP timeout 30s), gracefulStop dài giúp các iter cuối kịp
+finish, tránh interrupted.
+
+Tradeoff:
+
+```text
+gracefulStop nhỏ:
+  + run kết thúc nhanh
+  - dễ có interrupted iter cuối
+
+gracefulStop lớn:
+  + iter cuối hoàn thành đầy đủ, summary chính xác hơn
+  - run kéo dài
+```
+
+Best practice: `gracefulStop ~= 1.5 * iteration_duration_p95`. Đủ để 95% iter cuối kịp finish.
+
+#### 3.15.5. So sánh với closed model gracefulStop
+
+Bảng đối chiếu:
+
+| Aspect | constant-vus (closed) | constant-arrival-rate (open) |
+| --- | --- | --- |
+| Trục bị cắt sau duration | VU loop next iter | arrival timeline fire |
+| Iter đang chạy ở t=duration | finish trong gracefulStop hoặc bị interrupt | finish trong gracefulStop hoặc bị interrupt |
+| Có iter mới start trong gracefulStop? | không (VU không loop nữa) | không (arrival timeline đã đóng) |
+| Drop có xảy ra trong gracefulStop? | n/a (closed không có drop) | không, vì timeline đã đóng |
+
+Điểm chung: cả hai model đều dừng "khởi động iter mới" tại t=duration, và đều cho gracefulStop để
+iter đang chạy finish. Khác biệt chỉ ở "ai khởi động iter mới":
+
+```text
+closed: VU tự loop -> sau duration VU không loop nữa
+open: arrival timeline -> sau duration timeline không fire nữa
+```
+
+#### 3.15.6. Đọc dòng "running" cuối summary
+
+Dòng:
+
+```text
+running (4.2s), 0/4 VUs, 16 complete and 0 interrupted iterations
+```
+
+phản ánh trạng thái cuối:
+
+```text
+4.2s = wall clock thực tế (không nhất thiết = duration + gracefulStop)
+0/4 VUs = 0 VU đang busy / 4 VU đã initialize
+16 complete = 16 iter chạy xong full
+0 interrupted = không iter nào bị cancel cuối scenario
+```
+
+Nếu `interrupted > 0`: gracefulStop không đủ. Tăng gracefulStop hoặc giảm độ phức tạp của iter.
+
 
 ## 4. Demo fixed start schedule đủ VU
 
@@ -2951,7 +3144,456 @@ per-vu-iterations = mỗi VU chạy đúng N vòng
 shared-iterations = cả scenario chạy tổng N vòng
 ```
 
-## 10. Cheat sheet
+## 10. Edge case và config không hợp lệ
+
+Phần này tổng hợp các edge case và cách core xử lý từng tình huống. Mỗi case đều bám theo
+`Validate()` hoặc `Run()` thật trong `lib/executor/constant_arrival_rate.go`.
+
+### 10.1. timeUnit khác giây
+
+`timeUnit` mặc định `1s` nhưng cho phép bất kỳ duration `> 0`:
+
+```js
+rate: 120,
+timeUnit: "1m",     // 120 iter/phút = 2 iter/s
+```
+
+```js
+rate: 100,
+timeUnit: "500ms",  // 100 iter / 500ms = 200 iter/s
+```
+
+```js
+rate: 1,
+timeUnit: "10s",    // 1 iter/10s = 0.1 iter/s
+```
+
+Cách core đọc:
+
+```go
+timeUnit := carc.TimeUnit.TimeDuration()  // mặc định time.Second
+arrivalRate := getScaledArrivalRate(et.Segment, rate, timeUnit)
+tickerPeriod := getTickerPeriod(arrivalRate).TimeDuration()
+```
+
+`getScaledArrivalRate` (`lib/executor/helpers.go:196`) trả về `*big.Rat` với numerator = rate (đã
+scale theo segment), denominator = timeUnit nanoseconds. `getTickerPeriod` lấy nghịch đảo, ra
+duration giữa hai mốc fire.
+
+Ví dụ tính toán:
+
+| rate | timeUnit | lambda (iter/s) | tickerPeriod |
+| --- | --- | --- | --- |
+| 4 | 1s | 4 | 250ms |
+| 60 | 1s | 60 | 16.67ms |
+| 120 | 1m | 2 | 500ms |
+| 1 | 10s | 0.1 | 10s |
+| 600 | 1m | 10 | 100ms |
+| 1 | 1h | 1/3600 | 1h |
+
+Tại sao có `timeUnit`? Để diễn đạt rate tự nhiên cho từng use case:
+
+```text
+"5 đơn hàng/phút" -> rate=5, timeUnit="1m"
+"1000 RPS" -> rate=1000, timeUnit="1s"
+"1 health check / 30s" -> rate=1, timeUnit="30s"
+```
+
+Ba cách viết cho cùng một rate `2 iter/s`:
+
+```js
+{ rate: 2, timeUnit: "1s" }        // tự nhiên
+{ rate: 120, timeUnit: "1m" }      // nếu phù hợp ngữ nghĩa "2/s = 120/m"
+{ rate: 1, timeUnit: "500ms" }     // ngắn nhất
+```
+
+Validate:
+
+```go
+if carc.TimeUnit.TimeDuration() <= 0 {
+    errors = append(errors, fmt.Errorf("the timeUnit must be more than 0"))
+}
+```
+
+`timeUnit = 0` hoặc âm là lỗi config:
+
+```text
+GoError: the timeUnit must be more than 0
+```
+
+### 10.2. rate = 0 hoặc duration rất ngắn
+
+#### 10.2.1. rate = 0
+
+```js
+rate: 0,
+timeUnit: "1s",
+```
+
+`Validate()` chặn ngay (`constant_arrival_rate.go:95-96`):
+
+```go
+} else if carc.Rate.Int64 <= 0 {
+    errors = append(errors, fmt.Errorf("the iteration rate must be more than 0"))
+}
+```
+
+Lỗi:
+
+```text
+GoError: the iteration rate must be more than 0
+```
+
+Lý do thiết kế: `rate=0` nghĩa là không bao giờ fire, executor không có việc làm. Thay vì tạo
+executor "no-op", k6 yêu cầu tác giả test xóa scenario hoặc dùng cách khác.
+
+Nếu muốn scenario "tạm tắt" trong CI: dùng `executor: null` không được, nhưng có thể bỏ scenario
+khỏi `options.scenarios` map, hoặc dùng env flag để skip:
+
+```js
+export const options = {
+  scenarios: __ENV.SKIP_PEAK ? {} : {
+    peak: { executor: "constant-arrival-rate", rate: 100, ... }
+  }
+};
+```
+
+#### 10.2.2. rate âm
+
+```js
+rate: -1,
+```
+
+Cùng error path: `must be more than 0`.
+
+#### 10.2.3. duration rất ngắn
+
+```js
+rate: 100,
+timeUnit: "1s",
+duration: "100ms",
+```
+
+`Validate()` (`constant_arrival_rate.go:104-108`):
+
+```go
+} else if carc.Duration.TimeDuration() < minDuration {
+    errors = append(errors, fmt.Errorf(
+        "the duration must be at least %s, but is %s", minDuration, carc.Duration,
+    ))
+}
+```
+
+`minDuration` được định nghĩa trong `lib/executor/base_config.go` là `1s`. Vì vậy:
+
+```text
+duration < 1s -> lỗi "the duration must be at least 1s, but is 100ms"
+```
+
+Test với `duration < 1s` không hợp lý vì:
+
+```text
+- arrival timeline cần thời gian fire ổn định
+- summary tính rate từ runtime, < 1s là noise
+- gracefulStop cleanup tốn thời gian
+```
+
+#### 10.2.4. duration = 0
+
+```js
+duration: "0s",
+```
+
+Cùng path `< minDuration` -> lỗi.
+
+#### 10.2.5. duration = 1s (cận biên)
+
+```js
+rate: 4,
+timeUnit: "1s",
+duration: "1s",
+```
+
+Hợp lệ. Trong window 1s này có khoảng 4 mốc fire:
+
+```text
+t=0.00s mốc #0
+t=0.25s mốc #1
+t=0.50s mốc #2
+t=0.75s mốc #3
+t=1.00s -> regDurationCtx done, không fire mốc #4
+```
+
+Số mốc fire thực tế phụ thuộc timing chính xác. Có thể có 4 hoặc 5 mốc tùy chính xác của timer.
+
+#### 10.2.6. duration rất dài
+
+```js
+duration: "24h",
+```
+
+Hợp lệ. Test soak chạy 24 tiếng. Lưu ý:
+
+```text
+- gracefulStop nên đủ lớn để cleanup
+- preAllocatedVUs sizing ổn định, không spawn unplanned giữa chừng
+- monitor RAM/CPU dài hạn
+```
+
+### 10.3. preAllocatedVUs = 0
+
+```js
+preAllocatedVUs: 0,
+maxVUs: 5,
+```
+
+Validate:
+
+```go
+if !carc.PreAllocatedVUs.Valid {
+    errors = append(errors, fmt.Errorf("the number of preAllocatedVUs isn't specified"))
+} else if carc.PreAllocatedVUs.Int64 < 0 {
+    errors = append(errors, fmt.Errorf("the number of preAllocatedVUs can't be negative"))
+}
+```
+
+Code chỉ chặn `< 0`, không chặn `= 0`. Vì vậy `preAllocatedVUs: 0` về mặt syntax là hợp lệ.
+
+Tuy nhiên hành vi runtime:
+
+```text
+- vòng for activate trống (`for range preAllocatedVUs` với 0 -> no-op)
+- pool ban đầu trống
+- mốc fire đầu tiên DROP ngay vì pool trống
+- request spawn unplanned VU (nếu maxVUs > 0)
+- VU đầu tiên init xong mới có ai nhận
+```
+
+Sơ đồ minh họa với `preAllocatedVUs=0, maxVUs=2, rate=4, T_init=0.4s`:
+
+```text
+t=0.000s  fire #0 -> pool trống -> DROP, request spawn VU#1
+t=0.250s  fire #1 -> pool trống, đang chờ VU#1 -> DROP (default branch)
+t=0.400s  VU#1 init xong, vào pool idle
+t=0.500s  fire #2 -> VU#1 idle -> nhận, start iter A
+t=0.750s  fire #3 -> VU#1 bận -> DROP, request spawn VU#2
+t=1.000s  fire #4 -> ...
+```
+
+Vì vậy: dù hợp syntax, `preAllocatedVUs: 0` là **anti-pattern**. Nên đặt ít nhất bằng
+`ceil(lambda * W_effective)` để tránh drop ngay từ đầu.
+
+Nếu config:
+
+```js
+preAllocatedVUs: 0,
+maxVUs: 0,    // explicit
+```
+
+thì `HasWork()` trả về false:
+
+```go
+func (carc ConstantArrivalRateConfig) HasWork(et *lib.ExecutionTuple) bool {
+    return carc.GetMaxVUs(et) > 0
+}
+```
+
+Scheduler skip executor này ngay. Không có lỗi nhưng cũng không có gì chạy. Trong
+`Validate()` không có check trực tiếp ngăn case này, nên dễ bị silent skip - cẩn thận khi review
+config.
+
+### 10.4. maxVUs < preAllocatedVUs
+
+```js
+preAllocatedVUs: 10,
+maxVUs: 5,
+```
+
+Validate (`constant_arrival_rate.go:120-122`):
+
+```go
+if !carc.MaxVUs.Valid {
+    carc.MaxVUs.Int64 = carc.PreAllocatedVUs.Int64
+} else if carc.MaxVUs.Int64 < carc.PreAllocatedVUs.Int64 {
+    errors = append(errors, fmt.Errorf("maxVUs can't be less than preAllocatedVUs"))
+}
+```
+
+Lỗi:
+
+```text
+GoError: maxVUs can't be less than preAllocatedVUs
+```
+
+Logic check là đúng theo định nghĩa: `maxVUs` là trần, `preAllocatedVUs` là sàn. Sàn không thể cao
+hơn trần.
+
+Edge case: `maxVUs = preAllocatedVUs`. Hợp lệ, có nghĩa là không cho phép spawn unplanned. Pool
+fixed bằng đúng `preAllocatedVUs`. Đây là setup an toàn cho test reproducibility.
+
+### 10.5. maxVUs không khai báo
+
+```js
+preAllocatedVUs: 10,
+// không có maxVUs
+```
+
+Validate (`constant_arrival_rate.go:117-119`):
+
+```go
+if !carc.MaxVUs.Valid {
+    // TODO: don't change the config while validating
+    carc.MaxVUs.Int64 = carc.PreAllocatedVUs.Int64
+}
+```
+
+Mặc định `maxVUs = preAllocatedVUs`. Tức:
+
+```text
+remainingUnplannedVUs = 0
+không spawn unplanned
+pool fixed
+```
+
+Lưu ý comment `TODO: don't change the config while validating` - đây là technical debt nhỏ trong
+core, nhưng hành vi user-facing là rõ ràng.
+
+### 10.6. preAllocatedVUs rất lớn
+
+```js
+preAllocatedVUs: 10000,
+maxVUs: 10000,
+duration: "10s",
+rate: 1,
+```
+
+Hợp lệ về syntax. Tuy nhiên:
+
+```text
+- init phase tạo 10000 VU thật -> tốn RAM (~MB/VU phụ thuộc init script)
+- chỉ rate=1 nghĩa là 1 iter/s, dùng 10 iter/10s
+- 9990 VU không bao giờ chạy iter
+```
+
+Setup này không lỗi nhưng lãng phí. k6 không tự cảnh báo khi pool size >> capacity cần.
+
+Trong CI/CD, nên có guard:
+
+```js
+const safe_vus = Math.ceil(rate * iter_duration_p95 * 1.5);
+if (safe_vus > preAllocatedVUs) {
+    throw new Error(`preAllocatedVUs ${preAllocatedVUs} too small, need ${safe_vus}`);
+}
+```
+
+(setup-time check, không phải runtime check trong k6).
+
+### 10.7. rate rất lớn
+
+```js
+rate: 100000,
+timeUnit: "1s",
+duration: "10s",
+```
+
+Hợp lệ. Tickerperiod = 10us. Lưu ý:
+
+```text
+- timer.Reset cứ 10us -> Go runtime overhead lên đáng kể
+- syscall vào kernel cho timer cũng tốn
+- iter_duration thấp nhất cũng có overhead per-iter ~1ms
+- thực tế rate > 10000 thường giới hạn bởi máy bắn tải
+```
+
+Cảnh báo riêng: `int64` overflow không xảy ra với rate hợp lý, nhưng nếu config kiểu:
+
+```js
+rate: 999999999999,
+```
+
+`getScaledArrivalRate` dùng `*big.Rat`, không overflow numeric, nhưng tickerPeriod sẽ là
+nanoseconds rất nhỏ -> timer bị clamp tới minimum của Go (~1us). Lúc đó actual fire rate sẽ thấp
+hơn target.
+
+### 10.8. gracefulStop âm
+
+```js
+gracefulStop: "-1s",
+```
+
+`BaseConfig.Validate()` (gọi từ `Validate()` của arrival-rate qua `errors := carc.BaseConfig.Validate()`)
+chặn:
+
+```text
+GoError: scenario gracefulStop must be > 0
+```
+
+(check thực tế nằm trong `lib/executor/base_config.go`).
+
+### 10.9. exec function không tồn tại
+
+```js
+scenarios: {
+  demo: {
+    executor: "constant-arrival-rate",
+    rate: 1,
+    timeUnit: "1s",
+    duration: "5s",
+    preAllocatedVUs: 1,
+    exec: "doesNotExist",   // function này không export
+  }
+}
+```
+
+Lỗi runtime:
+
+```text
+GoError: function 'doesNotExist' not found in exports
+```
+
+(check trong JS runner khi VU init).
+
+### 10.10. Hai scenario khác `startTime` khác nhau dùng chung `__VU`
+
+```js
+scenarios: {
+  early: { executor: "constant-arrival-rate", rate: 2, ... preAllocatedVUs: 5 },
+  late:  { executor: "constant-arrival-rate", rate: 2, ..., startTime: "10s", preAllocatedVUs: 5 },
+}
+```
+
+`__VU` numbering là global theo execution state. VU pool được share giữa scenarios qua
+`es.vus` channel:
+
+```text
+__VU 1..5 được dùng cho early
+sau khi early kết thúc, các VU này về buffer
+late dùng lại từ buffer (có thể là VU 1, 2, ..., 5 hoặc 6..10)
+```
+
+Vì vậy không nên dùng `__VU` để identify "user X" giữa các scenario. Trong arrival-rate, một mốc
+fire có thể được bất kỳ VU idle nào nhận, nên `__VU` cũng không identify "user thật" trong nội bộ
+scenario - chỉ là index của worker.
+
+### 10.11. Bảng tóm tắt edge case
+
+| Case | Validate | Runtime | Khuyến nghị |
+| --- | --- | --- | --- |
+| `rate <= 0` | reject | n/a | luôn dùng rate >= 1 |
+| `timeUnit <= 0` | reject | n/a | mặc định 1s là tốt |
+| `duration < 1s` | reject | n/a | dùng duration >= 1s |
+| `duration` rất dài | pass | OK | check soak setup |
+| `preAllocatedVUs < 0` | reject | n/a | dùng số dương |
+| `preAllocatedVUs = 0` | pass | drop ngay đầu | luôn pre-size đủ |
+| `preAllocatedVUs = 0, maxVUs = 0` | pass | scenario skip (HasWork=false) | đừng làm |
+| `maxVUs` không set | default = preAllocatedVUs | không spawn unplanned | OK nếu pre-size đủ |
+| `maxVUs < preAllocatedVUs` | reject | n/a | thiết kế logic đúng |
+| `maxVUs = preAllocatedVUs` | pass | pool fixed | OK cho test reproducibility |
+| `gracefulStop < 0` | reject (BaseConfig) | n/a | dùng số dương hoặc 0 |
+| `gracefulStop = 0` | pass | iter cuối có thể bị interrupt | dùng nếu chấp nhận interrupt |
+| `exec` không tồn tại | pass parse | runtime error trong VU init | check function name khi viết test |
+
+## 11. Cheat sheet
 
 ```text
 lambda = rate / timeUnit_seconds

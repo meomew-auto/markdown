@@ -1962,6 +1962,7 @@ per_vu_rate
 
 peak_total_rate
   ≈ active_vus * per_vu_rate
+  ≈ vus / effective_iteration_time   (khi mọi VU đều bận)
 
 estimated_http_reqs_count_if_fixed_path
   = completed_iterations * http_requests_per_iteration
@@ -1971,4 +1972,65 @@ estimated_http_reqs_rate_if_fixed_path
 
 VU nhanh
   có thể chạy nhiều iteration hơn VU chậm
+```
+
+Quy tắc nhớ nhanh:
+
+```text
+shared-iterations là CLOSED MODEL
+  -> vus init đủ ở init phase, KHÔNG có unplanned VUs
+  -> không có scale up/down giữa runtime
+  -> VU nào activate xong start iter ngay, không chờ VU khác
+
+iterations >= vus  (validate)
+  -> nếu < vus, fail validate ngay
+
+scenario kết thúc khi:
+  a) atomic counter đã lấy hết kho (attemptedIters > totalIters), hoặc
+  b) hit maxDuration (regDurationDone -> không lấy iter mới)
+
+iter đang chạy khi hết maxDuration:
+  -> được phép tiếp tục thêm gracefulStop giây
+  -> iter time < grace: finish clean, +complete
+  -> iter time > grace: hardStop, +interrupted
+
+dropped_iterations (chỉ xảy ra khi attemptedIters < totalIters):
+  = totalIters - attemptedIters
+  = số iter trong kho chưa được VU lấy đến
+
+interrupted_iterations:
+  = số iter đã start nhưng context cancel trước khi finish
+  -> thường do gracefulStop=0s hoặc iter time >> gracefulStop
+```
+
+Phân phối iter theo tốc độ VU:
+
+```text
+ratio_i = (1/t_i) / sum_j(1/t_j)
+
+iterations_per_vu_i ≈ ratio_i * total_iterations
+                     (khi clean run, đủ thời gian cạn kho)
+```
+
+So sánh nhanh các trường hợp scenario kết thúc:
+
+```text
+Case A: kho cạn trước maxDuration
+        iterations = config, dropped = 0
+
+Case B: hit maxDuration, iter time << grace
+        iterations < config, dropped > 0, interrupted = 0
+
+Case C: hit maxDuration, iter time >> grace
+        iterations rất nhỏ, dropped lớn, interrupted = vus
+```
+
+Liên hệ với executor khác:
+
+```text
+constant-vus       = giữ vus suốt duration, không count iter
+shared-iterations  = giữ vus, đếm tổng iter chung, đua qua atomic
+per-vu-iterations  = giữ vus, mỗi VU quota riêng, không đua
+ramping-vus        = thay đổi vus theo timeline
+*-arrival-rate     = open model, ép tốc độ start iter
 ```

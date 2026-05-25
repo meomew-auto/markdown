@@ -2261,6 +2261,300 @@ iteration_time_wanted = 10s
 Iteration đầu start lúc `0s`, nhưng tới `4s` chưa finish, nên bị interrupt.
 Dòng `[iter-end]` không in ra vì code sau `sleep()` không chạy tiếp sau khi context bị cancel.
 
+### 6.2. Edge case: `duration` rất ngắn so với `iter_duration`
+
+Câu hỏi: nếu `duration` ngắn hơn `iter_duration`, điều gì xảy ra?
+
+Phân tích theo 2 case:
+
+#### 6.2.1. `iter_duration` < `duration + gracefulStop`
+
+```text
+duration = 1s
+gracefulStop = 5s
+iter_duration = 3s
+
+trục scenario : [-- 1s regular --|------ 5s grace ------]
+                0                 1                       6
+
+trục VU iter  : [---- iter#0 (3s) ----|]
+                0                      3
+```
+
+Timeline:
+
+```text
+t=0.0s   N VU activate, vào iter#0 (sẽ đến t=3s)
+t=1.0s   regDurationCtx done -> không start iter mới
+         VU đang ở iter#0 (đã 1s, còn 2s)
+         tiếp tục iter#0 trong grace
+t=3.0s   VU finish iter#0 (2s qua < grace 5s, finish clean)
+         check regDurationDone -> đã đóng -> return
+         goroutine end, ReturnVU
+         tổng: 1 complete/VU, 0 interrupted
+```
+
+Vậy run sẽ có:
+
+```text
+completed_iterations = vus * 1
+duration thật của test = ~iter_duration (3s)
+```
+
+Dù `duration = 1s`, test thật vẫn chạy `iter_duration = 3s` để iter#0 finish.
+Header có thể nói `running (3.x s)` thay vì 1s.
+
+#### 6.2.2. `iter_duration` > `duration + gracefulStop`
+
+```text
+duration = 1s
+gracefulStop = 1s
+iter_duration = 10s
+
+trục scenario : [-- 1s regular --|-- 1s grace --]
+                0                 1               2
+
+trục VU iter  : [-------- iter#0 (10s) -----------------|]
+                0                                        10
+```
+
+Timeline:
+
+```text
+t=0.0s   N VU activate, vào iter#0 (sẽ đến t=10s nếu không cắt)
+t=1.0s   regDurationCtx done
+t=2.0s   maxDurationCtx done
+         VU đang ở iter#0 (đã 2s, còn 8s)
+         -> hard cancel context
+         -> AddInterruptedIterations(1)
+         tổng: 0 complete/VU, 1 interrupted/VU
+```
+
+Vậy run sẽ có:
+
+```text
+completed_iterations = 0
+interrupted_iterations = vus
+warning: "No script iterations fully finished, consider making the test duration longer"
+```
+
+Đây chính là case demo `constant_vus_interrupt_demo.js`. Khi thấy 0 complete,
+warning đó là dấu hiệu rõ.
+
+#### 6.2.3. Nguyên tắc tránh
+
+Khi tuning, đặt `duration` sao cho:
+
+```text
+duration >= 2-3 * effective_iteration_time
+```
+
+Để có ít nhất 2-3 iteration thành công per VU, đảm bảo statistic có ý nghĩa.
+Nếu `effective_iteration_time` không biết trước, cứ:
+
+```text
+- chạy thử 1 lần với duration = 30s
+- đọc iteration_duration.avg
+- tính lại duration phù hợp cho run chính
+```
+
+### 6.3. Edge case: VU đột nhiên chậm trong lúc chạy
+
+Câu hỏi: nếu giữa run, hệ thống bị backend chậm, network spike, hay GC pause,
+một số VU có `iter_duration` đột ngột tăng. Điều gì xảy ra?
+
+Phân tích:
+
+#### 6.3.1. VU chậm vẫn pin (không bị scale-down)
+
+`constant-vus` không có cơ chế scale-down giữa duration. Nếu VU chậm:
+
+```text
+- VU không bị thay thế bằng VU khác
+- VU chậm tự xử lý iter dài hơn của nó
+- iteration_duration.max của summary phản ánh lúc chậm nhất
+- iteration_duration.avg bị kéo lên một chút
+```
+
+Cụ thể:
+
+```text
+config: vus=4, duration=30s, iter_duration bình thường = 1s
+giả sử t=10..15s, backend chậm 5x -> iter mất 5s
+
+trục VU=1 (giả sử VU=1 bị ảnh hưởng):
+  iter#0..9 (t=0..10s): mỗi iter 1s
+  iter#10 (t=10..15s): 5s do backend chậm
+  iter#11..14 (t=15..30s): mỗi iter 1s
+
+VU=1 tổng iter completed: 14
+VU=2,3,4 nếu cũng bị: tương tự ~14
+nếu chỉ VU=1 bị: VU=2,3,4 mỗi cái ~30 iter
+```
+
+Tổng iteration giảm so với run "đẹp" nhưng `constant-vus` vẫn pin 4 VU đến hết.
+
+#### 6.3.2. VU chậm có làm `vus` metric thay đổi không?
+
+Không. `vus` metric phản ánh số VU đang được active (counter của
+`ExecutionState`), không phản ánh tốc độ. VU chậm vẫn được tính là active.
+
+Trong run sạch:
+
+```text
+vus..................: N   min=N      max=N
+```
+
+VU chậm không làm `min < N`. Để `min < N` cần có VU bị ReturnVU sớm (test
+abort, error code chết VU, iteration bị error trầm trọng).
+
+#### 6.3.3. VU chậm ảnh hưởng iteration_rate
+
+Vì `constant-vus` không có target rate, throughput thật phụ thuộc tốc độ
+mỗi VU:
+
+```text
+average_iteration_rate = sum(iter_count_per_vu) / summary_runtime_base
+```
+
+Nếu VU=1 chậm 5x trong 5s:
+
+```text
+trong 5s đó, VU=1 chỉ làm 1 iter thay vì 5 iter
+=> mất 4 iter của VU=1 trong 5s đó
+=> total iter giảm 4
+=> average_iteration_rate giảm tương ứng
+```
+
+Nếu là spike ngắn (~5s) trên test 30s, mức ảnh hưởng nhỏ. Nếu chậm cả run,
+phải xem `iteration_duration.avg` để hiểu tốc độ thật.
+
+#### 6.3.4. Khác biệt với `*-arrival-rate`
+
+`constant-arrival-rate` xử lý chậm khác: nếu VU không kịp meet rate target,
+k6 spawn unplanned VUs (tới `maxVUs`) hoặc emit `dropped_iterations`. Đây là
+cách open model đối phó với hệ thống chậm.
+
+`constant-vus` (closed model) không có cơ chế này. Iteration mới chỉ start
+sau khi iter cũ xong. Nếu chậm thì rate giảm, không có drop, không có spawn
+thêm.
+
+### 6.4. Edge case: `gracefulStop` interaction với iteration đang chạy
+
+3 case quan trọng tóm tắt:
+
+#### 6.4.1. iter ngắn hơn duration (case bình thường)
+
+```text
+config: duration=10s, gracefulStop=2s, iter=0.5s
+
+t=9.5s   VU vào iter cuối (sẽ đến 10s)
+t=10.0s  iter cuối finish (vừa kịp), regDurationDone đóng
+         VU return, không vào iter mới
+         tổng: ceil(10/0.5) = 20 iter/VU
+         interrupted = 0
+```
+
+Hoặc lệch một chút:
+
+```text
+t=9.6s   VU vào iter cuối (sẽ đến 10.1s)
+t=10.0s  regDurationDone đóng
+         VU đang ở iter cuối (đã 0.4s, còn 0.1s)
+t=10.1s  iter cuối finish (0.1s qua < grace 2s, clean)
+         tổng: 20 complete, 0 interrupted
+```
+
+#### 6.4.2. iter dài hơn duration nhưng ngắn hơn duration + grace
+
+```text
+config: duration=5s, gracefulStop=5s, iter=8s
+
+t=0.0s   VU vào iter#0 (sẽ đến 8s)
+t=5.0s   regDurationDone đóng
+         VU đang ở iter#0 (đã 5s, còn 3s)
+t=8.0s   iter#0 finish (3s qua < grace 5s, clean)
+         tổng: 1 complete, 0 interrupted (per VU)
+```
+
+Đây là case "iter dài nhưng vẫn finish". `gracefulStop` đủ để cứu iter cuối.
+
+#### 6.4.3. iter dài hơn duration + grace
+
+```text
+config: duration=3s, gracefulStop=1s, iter=10s
+
+t=0.0s   VU vào iter#0
+t=3.0s   regDurationDone đóng
+t=4.0s   maxDurationCtx done
+         VU vẫn còn 6s iter -> hard cancel
+         tổng: 0 complete, 1 interrupted (per VU)
+```
+
+Case này chính là demo interrupt đã chạy. `gracefulStop` không đủ để cứu.
+
+#### 6.4.4. Race condition tại `t = duration + grace`
+
+Ở đúng mốc `t = duration + gracefulStop`, có race giữa:
+
+- iter finish trước cancel: `AddFullIterations(1)` (`helpers.go:110`)
+- cancel trước iter finish: `AddInterruptedIterations(1)` (`helpers.go:90`)
+
+Đọc từ `getIterationRunner()` (`helpers.go:80-113`):
+
+```go
+err := vu.RunOnce()
+
+select {
+case <-ctx.Done():
+    executionState.AddInterruptedIterations(1)
+    return false
+default:
+    if err != nil {
+        if handleInterrupt(ctx, err) {
+            executionState.AddInterruptedIterations(1)
+            return false
+        }
+        // ...
+    }
+    executionState.AddFullIterations(1)
+    return true
+}
+```
+
+Logic:
+
+```text
+1) RunOnce() chạy iter (có thể bị cancel giữa chừng do ctx done)
+2) Sau khi RunOnce() trả về, check ctx.Done() bằng select non-blocking
+   - nếu ctx done -> interrupted
+   - không -> full iteration
+```
+
+Cho nên ngay cả khi iter "vừa kịp" finish trước cancel, kết quả vẫn dựa vào
+`select ... case <-ctx.Done()`. Race này thường không quan trọng trong load
+test (1 iter trong tổng N iter).
+
+#### 6.4.5. Tóm gọn quy tắc
+
+```text
+nếu effective_iteration_time + max_jitter < duration + gracefulStop:
+   -> iter cuối luôn finish, 0 interrupted
+nếu không:
+   -> có rủi ro interrupted ở iter cuối
+   -> tăng gracefulStop để cứu
+   -> hoặc giảm effective_iteration_time
+```
+
+Quy tắc thực tế:
+
+```text
+gracefulStop >= 2 * effective_iteration_time
+```
+
+Đảm bảo có buffer cho jitter và iter cuối. Default `30s` thường đủ cho test
+HTTP bình thường.
+
 ## 7. Demo QuickPizza `2 requests / iteration`
 
 File:
