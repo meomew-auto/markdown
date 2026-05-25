@@ -886,6 +886,83 @@ t=5.5s   VU=4 bị hardStop NGAY -> iter#1 đang chạy bị cancel -> +1 interr
 t=6.0s   VU=3 bị hardStop NGAY -> iter#1 đang chạy bị cancel -> +1 interrupted
 ```
 
+#### VU sau khi gracefulStop đi đâu? Stage tăng lại có dùng lại không?
+
+Câu trả lời ngắn:
+
+```text
+VU bị scale-down KHÔNG bị destroy
+nó về pool của ExecutionState
+stage sau cần tăng VU thì lấy từ pool ra dùng lại
+__ITER counter của VU GIỮ NGUYÊN qua các lần activate
+```
+
+Lifecycle đầy đủ của 1 VU instance qua các stage:
+
+```text
+1) Init phase   : k6 init đủ maxVUs instance vào pool
+                  mỗi instance đã có JS context, sandbox, biến module-scope
+
+2) Stage tăng   : vuHandle[i].start()
+                  -> gọi getVU() = executionState.GetPlannedVU()
+                  -> lấy 1 InitializedVU từ pool
+                  -> Activate() để tạo runtime context (ActiveVU)
+                  -> handle về state = running
+                  -> VU vào iter ngay
+
+3) Stage giảm   : vuHandle[i].gracefulStop()
+                  -> handle về state = toGracefulStop
+                  -> iter đang chạy được phép finish
+                  -> sau khi finish: returnVU() -> ReturnVU(initVU, false)
+                  -> instance trở lại pool, KHÔNG destroy
+                  -> handle về state = stopped
+
+4) Stage tăng lại: vuHandle[i].start() lần nữa
+                  -> getVU() lấy LẠI 1 instance từ pool
+                  -> có thể là instance khác instance lần 1 (pool không order)
+                  -> Activate() tạo runtime context mới
+                  -> VU vào iter tiếp
+```
+
+Đọc từ core:
+
+```text
+ramping_vus.go:595-613   getVU/returnVU wrapper quanh ExecutionState
+vu_handle.go:115-138     start() gọi getVU + Activate
+vu_handle.go:147-181     gracefulStop / hardStop chuyển state
+```
+
+Hành vi chi tiết qua 1 lần activate-deactivate-activate:
+
+```text
+- Module-scope code (top of file) : chạy 1 LẦN duy nhất ở init phase
+                                    không chạy lại khi activate
+- Biến module-scope (let/const)   : giữ nguyên giá trị giữa các lần activate
+- exec.vu.idInTest (__VU)         : pin cho 1 VU instance, không đổi
+- __ITER (iterationInScenario)    : tăng monotonic, KHÔNG reset
+                                    qua các lần activate
+- Biến trong default function     : reset mỗi iter (scope của hàm)
+```
+
+Ví dụ: stages `[hold 4 -> ramp xuống 2 -> ramp lên 4 lại]` với code log `__ITER`.
+VU=4 sau khi bị scale xuống rồi lên lại sẽ thấy `__ITER` tiếp tục từ chỗ cũ:
+
+```text
+t=0..6s   VU=4 chạy iter#0, iter#1
+t=6s      VU=4 finish iter#1, ReturnVU
+t=8s      stage tăng lại, VU=4 (hoặc 1 instance khác trong pool) start
+          log: __ITER=2  <- KHÔNG reset về 0
+```
+
+Vì sao thiết kế thế?
+
+```text
+- Init JS context tốn (parse module, tạo runtime sandbox)
+- Nếu destroy + init lại mỗi ramp -> spike latency, nhiễu test
+- Pool reuse: chỉ trả về handle, instance sẵn dùng
+- Init phase đã chuẩn bị đủ maxVUs instance từ đầu (xem 1.3, 3.12)
+```
+
 ### 3.8.2. `gracefulStop` — grace ở cuối scenario
 
 Khi `t = regular_duration` (sum tất cả stage.duration), scenario "kết thúc"
