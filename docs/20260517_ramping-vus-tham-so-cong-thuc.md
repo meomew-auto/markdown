@@ -1098,32 +1098,54 @@ trong đó:
   step_interval = stageDuration / |target - fromVUs|
 ```
 
-Áp vào stage demo (`fromVUs=1, target=3, duration=3s, step_interval=1.5s,
-iter=0.5s`):
+Áp vào stage demo (`fromVUs=1, target=3, duration=3s, step_interval=1.5s`).
+Code mỗi iter chỉ có `console.log(...)` (gần như tức thì) + `sleep(0.5)`,
+nên `effective_iteration_time ≈ 0.5s` (verify từ summary:
+`iteration_duration avg=500.33ms`):
 
-| t (scenario) | active_vus | peak_rate |
+| t (scenario) | active_vus | peak_rate = active_vus / 0.5s |
 | --- | --- | --- |
 | 0.0s | 1 | 1 / 0.5 = 2 iter/s |
 | 1.5s | 2 | 2 / 0.5 = 4 iter/s |
 | 3.0s | 3 | 3 / 0.5 = 6 iter/s |
+
+Nếu code khác (ví dụ `sleep(1)` hoặc có HTTP request 200ms + sleep 0.5s),
+mẫu số `0.5` đổi tương ứng:
+
+```text
+sleep(1)              -> effective_iteration_time ≈ 1s   -> rate = active_vus / 1
+http 200ms + sleep(0.5) -> effective_iteration_time ≈ 0.7s -> rate = active_vus / 0.7
+```
 
 Throughput cứ 1.5s lại tăng 1 bậc. Nếu phải "đợi đủ target" mới chạy thì
 throughput ở `0..3s` sẽ là 0 — sai hoàn toàn.
 
 ### 3.13.5. Khi VU đang ở giữa iteration thì stage chuyển sao?
 
-Stage chuyển không cắt ngang iteration đang chạy của VU đã active:
+Stage chuyển không cắt ngang iteration đang chạy của VU đã active.
+
+Giả sử iter time = 0.7s, VU=3 activate ở scenario t=1.5s. Lifeline của VU=3:
 
 ```text
-t=2.99s : VU=3 đang ở giữa iter#1 (sleep 0.5s, còn 0.49s nữa)
-t=3.0s  : stage 1 bắt đầu (target=3 trùng nên không có VU mới)
-t=3.0s  : VU=2 vừa activate, vào iter#0 ngay
-t=3.49s : VU=3 finish iter#1, lập tức vào iter#2
+iter#0: 1.5s -> 2.2s
+iter#1: 2.2s -> 2.9s
+iter#2: 2.9s -> 3.6s   <- iter này "vắt qua" mốc t=3s
 ```
 
-Iteration đang chạy không bị reset hay đếm lại — VU chỉ đơn giản tiếp tục
-loop. Stage chỉ ảnh hưởng đến `plannedVUs` (số VU active tại thời điểm),
-không động tới iteration đang chạy.
+Tại scenario t=3.0s (giả sử stage chuyển):
+
+```text
+VU=3 đang chạy iter#2 (đã chạy 0.1s, còn 0.6s)
+stage 1 bắt đầu (target=3 trùng -> không có VU mới activate)
+VU=3 KHÔNG bị reset, tiếp tục iter#2 cho tới 3.6s rồi vào iter#3
+```
+
+Iteration đang chạy không bị cắt — VU chỉ đơn giản loop tiếp. Stage chuyển
+chỉ ảnh hưởng đến `plannedVUs` (số VU active tại mỗi thời điểm), không động
+tới iteration đang chạy của VU đã active.
+
+Trường hợp duy nhất iter bị cắt là khi VU bị scale-down qua `gracefulStop()`
+hoặc `hardStop()` — xem mục [6. Demo gracefulRampDown và interrupted](#6-demo-gracefulrampdown-và-interrupted).
 
 ### 3.13.6. Điểm dễ nhầm
 
