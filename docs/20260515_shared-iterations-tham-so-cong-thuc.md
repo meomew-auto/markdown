@@ -250,7 +250,102 @@ Những điểm cần lưu ý thêm khi đọc core:
 - **không có fairness guarantee giữa các VU**:
   đây không phải bug, mà là đúng design của executor.
 
-### 1.3. Checklist core đã lọc cho `shared-iterations`
+### 1.3. VU init ở phase nào? Có phải unplanned VUs không?
+
+Câu hỏi hay gặp:
+
+```text
+khi config vus=4, iterations=100 thì 4 VU đó được init lúc nào?
+nếu test có nhiều iteration mà ít VU, k6 có spawn thêm VU runtime không?
+shared-iterations có khái niệm unplanned VUs không?
+```
+
+Trả lời ngắn:
+
+```text
+4 VU được init ở init phase, trước khi Run() chạy
+shared-iterations KHÔNG có unplanned VUs
+k6 KHÔNG spawn thêm VU lúc runtime dù còn nhiều iteration trong kho
+closed model nói chung không có khái niệm unplanned VUs
+```
+
+Đi vào chi tiết core:
+
+- **Init phase init đủ `vus` instance một lần**:
+
+  Trước khi `Run()` chạy, scheduler gọi `GetExecutionRequirements()`.
+  Với `shared-iterations` (`shared_iterations.go:103-124`):
+
+  ```go
+  return []lib.ExecutionStep{
+      {TimeOffset: 0, PlannedVUs: uint64(vus)},
+      {TimeOffset: maxDuration + gracefulStop, PlannedVUs: 0},
+  }
+  ```
+
+  Nghĩa là toàn bộ thời gian scenario có đúng `vus` planned VU (không có
+  bậc thay đổi). Scheduler thấy con số này, init đủ `vus` JS context vào
+  pool ngay từ đầu. Bước này xong **trước** khi scenario bắt đầu chạy.
+
+- **`Run()` lấy đủ `vus` ra khỏi pool và bắn goroutine**:
+
+  Đoạn `shared_iterations.go:264-272`:
+
+  ```go
+  for range numVUs {
+      initVU, err := si.executionState.GetPlannedVU(si.logger, true)
+      if err != nil {
+          cancel()
+          return err
+      }
+      activeVUs.Add(1)
+      go handleVU(initVU)
+  }
+  ```
+
+  Tất cả `vus` được pull ra cùng lúc, mỗi VU một goroutine `handleVU()`.
+  Khác với `ramping-vus` (start/stop theo timeline), `shared-iterations` chỉ
+  có 1 lần activate ở đầu, sau đó VU loop tới khi hết kho hoặc hết duration.
+
+- **Không có scale up giữa runtime**:
+
+  `GetExecutionRequirements()` trả về timeline `vus` cố định, không có step
+  nào tăng VU. `handleVU()` cũng không gọi `GetPlannedVU()` lần nào nữa
+  ngoại trừ vòng lặp `for range numVUs` ở `Run()`.
+
+  Cho dù iteration trong kho nhiều bao nhiêu, nếu `vus=4` thì cả test luôn
+  chỉ có 4 VU đua nhau lấy việc.
+
+- **So sánh nhanh với arrival-rate (open model)**:
+
+  | Khái niệm | Closed model (`shared-iterations`, `per-vu-iterations`, ...) | Open model (`*-arrival-rate`) |
+  | --- | --- | --- |
+  | Init thêm VU trong runtime? | không | có, nếu cần |
+  | Field `preAllocatedVUs` | không có | có |
+  | Field `maxVUs` (scenario) | không có | có |
+  | Khái niệm unplanned VU | không tồn tại | `MaxUnplannedVUs = maxVUs - preAllocatedVUs` |
+  | Vì sao? | iteration mới chỉ start sau khi iter cũ xong → biết trước số VU cần | rate cố định, có thể vượt năng lực preAllocated → cần spawn thêm |
+
+  Grep core:
+
+  ```text
+  unplannedVUs / preAllocatedVUs chỉ xuất hiện ở:
+    constant_arrival_rate.go
+    ramping_arrival_rate.go
+  ```
+
+  Hoàn toàn không có ở `shared_iterations.go`.
+
+Tóm lại:
+
+```text
+shared-iterations là closed model
+4 VU được init đầy đủ ở init phase, không có spawn thêm runtime
+unplanned VUs không tồn tại với executor này
+muốn nhiều worker hơn -> tăng vus trong config, không có cách runtime
+```
+
+### 1.4. Checklist core đã lọc cho `shared-iterations`
 
 | Core | Hành vi thật | Ý nghĩa khi đọc bài |
 | --- | --- | --- |
@@ -495,6 +590,578 @@ VU chậm: ít iteration hơn
 ```
 
 Đây là điểm khác lớn nhất với `per-vu-iterations`.
+
+### 3.6. VU activate xong start iteration ngay, không đợi VU khác
+
+Câu hỏi: với `vus=4, iterations=12`, 4 VU được activate cùng lúc tại t=0
+hay tuần tự? VU đầu tiên có chờ VU thứ 2/3/4 init xong rồi mới chạy không?
+
+Trả lời ngắn:
+
+```text
+4 VU được activate ngay tại t=0, đồng loạt vào iter đầu
+mỗi VU độc lập, không chờ VU khác
+mỗi VU có goroutine handleVU() riêng, loop iteration của nó
+hết kho iteration chung -> VU đó tự dừng
+```
+
+#### 3.6.1. Đọc từ core
+
+`shared_iterations.go:264-272`:
+
+```go
+for range numVUs {
+    initVU, err := si.executionState.GetPlannedVU(si.logger, true)
+    if err != nil {
+        cancel()
+        return err
+    }
+    activeVUs.Add(1)
+    go handleVU(initVU)
+}
+```
+
+`Run()` chạy `for range numVUs` rất nhanh: với `numVUs=4` thì pull đủ 4 VU
+và bắn 4 goroutine `handleVU()` chỉ trong vài microsecond. 4 goroutine này
+chạy song song.
+
+`handleVU()` ở `shared_iterations.go:239-262` có cấu trúc:
+
+```go
+handleVU := func(initVU lib.InitializedVU) {
+    ctx, cancel := context.WithCancel(maxDurationCtx)
+    defer cancel()
+
+    activeVU := initVU.Activate(getVUActivationParams(...))
+
+    for {
+        select {
+        case <-regDurationDone:
+            return                          // hết maxDuration -> dừng
+        default:
+        }
+
+        attemptedIterNumber := atomic.AddUint64(&attemptedIters, 1)
+        if attemptedIterNumber > totalIters {
+            return                          // hết kho -> dừng
+        }
+
+        runIteration(maxDurationCtx, activeVU)
+        atomic.AddUint64(doneIters, 1)
+    }
+}
+```
+
+Mỗi VU tự `Activate()` và vào vòng lặp `for {}` ngay. Không có rendezvous,
+không có barrier, không đồng bộ với VU khác.
+
+#### 3.6.2. Snapshot tại các mốc
+
+Config `vus=4, iterations=12`, code mỗi iter `sleep(0.5)`:
+
+```text
+t=0.000s   Run() bắn 4 goroutine handleVU
+t=0.001s   4 VU activate xong, đồng loạt vào iter đầu
+           VU=1: attemptedIterNumber=1 (kho còn 11)
+           VU=2: attemptedIterNumber=2 (kho còn 10)
+           VU=3: attemptedIterNumber=3 (kho còn 9)
+           VU=4: attemptedIterNumber=4 (kho còn 8)
+t=0.5s    cả 4 VU finish iter đầu, đồng loạt lấy iter mới
+           VU=1: attemptedIterNumber=5
+           VU=2: attemptedIterNumber=6
+           VU=3: attemptedIterNumber=7
+           VU=4: attemptedIterNumber=8
+t=1.0s    4 VU finish, lấy tiếp
+           attemptedIterNumber=9, 10, 11, 12
+t=1.5s    4 VU finish, gọi atomic.AddUint64 -> > 12 -> return
+           tất cả VU dừng
+```
+
+Atomic counter đảm bảo không có 2 VU lấy trùng số. Nếu race ở t=1.0s, 4 VU
+gọi `atomic.AddUint64(&attemptedIters, 1)` đồng thời thì kết quả tuần tự
+9, 10, 11, 12 (chỉ là thứ tự ai trước ai sau không xác định trước).
+
+#### 3.6.3. Throughput peak khi cả `vus` VU cùng active
+
+```text
+peak_iteration_rate ≈ vus / effective_iteration_time
+```
+
+Áp vào ví dụ trên (`vus=4, iter time=0.5s`):
+
+```text
+peak_rate ≈ 4 / 0.5 = 8 iter/s
+```
+
+Nếu code khác:
+
+```text
+sleep(1)               -> peak ≈ 4 / 1   = 4 iter/s
+http 200ms + sleep(0.5) -> peak ≈ 4 / 0.7 ≈ 5.7 iter/s
+```
+
+Vì 4 VU active suốt từ t=0 (trừ phần cuối khi kho cạn), throughput gần như
+phẳng — khác `ramping-vus` (throughput tăng/giảm theo timeline).
+
+#### 3.6.4. Gần cuối kho: số VU active giảm
+
+Khi kho gần cạn, không phải VU nào cũng còn việc. VU lấy được số > totalIters
+sẽ return ngay. Ví dụ `iterations=10, vus=4`:
+
+```text
+t=...     attemptedIters=8 -> VU lấy số 9 còn việc
+          attemptedIters=9 -> VU lấy số 10 còn việc
+          attemptedIters=10 -> VU lấy số 11, > 10 -> return
+          attemptedIters=11 -> VU lấy số 12, > 10 -> return
+
+=> gần cuối có thể chỉ 1-2 VU đang chạy iter cuối
+   các VU khác đã return, nhưng activeVUs.Wait() vẫn chờ
+```
+
+Đây là lý do `vus` Gauge có thể giảm dưới `vus` config ở mốc gần cuối:
+
+```text
+vus: 4 min=2 max=4
+       ^      ^
+       |      |
+       cuối: kho cạn, một số VU đã return
+       max: đầu test, 4 VU đều bận
+```
+
+#### 3.6.5. Điểm dễ nhầm
+
+```text
+SAI : "VU đầu tiên chạy hết iter mới đến VU thứ 2"
+ĐÚNG: "4 VU activate cùng lúc, đồng loạt vào iter đầu"
+
+SAI : "iteration được phân phối tuần tự theo VU index"
+ĐÚNG: "iteration phân phối theo ai đến quầy atomic counter trước"
+
+SAI : "có thể tăng VU lên runtime nếu kho còn nhiều iter"
+ĐÚNG: "vus cố định trong suốt scenario, không có scale up"
+```
+
+### 3.7. Vì sao spawn hết VU ngay từ đầu?
+
+Khác với `ramping-vus` (rải VU theo timeline), `shared-iterations` activate
+hết `vus` VU **ngay tại t=0**. Tại sao thiết kế thế?
+
+#### 3.7.1. Mục tiêu khác nhau
+
+```text
+ramping-vus       : mô phỏng concurrency thay đổi theo thời gian
+                    -> rải VU theo stage để tạo "tăng dần"
+
+shared-iterations : hoàn thành tổng N iteration nhanh nhất với M worker
+                    -> activate hết M worker ngay để max throughput
+                    -> không có khái niệm "ramp" trong executor này
+```
+
+`shared-iterations` không có `stages`, `startVUs`, `gracefulRampDown`. Config
+chỉ có `vus`, `iterations`, `maxDuration`. Nghĩa là không có cách "rải" VU
+theo timeline — toàn bộ VU phải có mặt từ đầu.
+
+#### 3.7.2. Đọc từ core
+
+`GetExecutionRequirements()` (`shared_iterations.go:103-124`) trả về timeline
+chỉ có 2 step:
+
+```go
+return []lib.ExecutionStep{
+    {TimeOffset: 0, PlannedVUs: uint64(vus)},                           // t=0: đủ vus
+    {TimeOffset: maxDuration + gracefulStop, PlannedVUs: 0},            // cuối: 0
+}
+```
+
+Step 1 nói "tại t=0 đã phải có đủ `vus` planned VU". Step 2 nói "tại
+`maxDuration + gracefulStop`, planned VU về 0". Giữa 2 step không có bậc
+trung gian, scheduler không cần phân tích timeline phức tạp.
+
+`Run()` (`shared_iterations.go:264-272`) cũng phản ánh: `for range numVUs`
+chạy đúng `numVUs` lần, mỗi lần `GetPlannedVU()` + `go handleVU()`. Không có
+helper dạng `vuHandle` start/stop như `ramping_vus.go` — không cần state
+machine vì không có scale up/down.
+
+#### 3.7.3. Hệ quả thực tế
+
+```text
+- max throughput đạt được ngay từ giây đầu
+  (không có warm-up từ 1 VU lên N VU như ramping)
+
+- nếu test quá ngắn (vài ms), 4 VU vẫn kịp activate trước khi iter chạy
+  vì init đã xong từ trước Run()
+
+- không có "load shape" — đường biểu diễn vus theo time gần như phẳng
+  4 4 4 4 4 ... rồi giảm gần cuối khi kho cạn
+
+- nếu muốn ramp up VU, phải dùng ramping-vus rồi đếm tổng iter sau
+```
+
+#### 3.7.4. Khi nào không phù hợp
+
+```text
+- muốn xem hệ thống chịu tải tăng dần thế nào
+  -> dùng ramping-vus, không phải shared-iterations
+
+- muốn đảm bảo từng user (account) chạy đủ N vòng
+  -> dùng per-vu-iterations
+
+- muốn ép start iteration theo rate cố định (không phụ thuộc iter time)
+  -> dùng constant-arrival-rate / ramping-arrival-rate
+```
+
+`shared-iterations` chỉ phù hợp khi mục tiêu là "M worker cùng làm xong N
+việc". Nếu mục tiêu khác, chọn executor khác.
+
+### 3.8. `maxDuration` và `gracefulStop` chi tiết
+
+`shared-iterations` có 2 mốc thời gian quan trọng từ config:
+
+```text
+maxDuration  : trần wall-clock của scenario, hết -> không lấy iter mới
+gracefulStop : sau maxDuration, iter đang chạy được phép tiếp tục thêm N giây
+```
+
+Default values (đọc từ `shared_iterations.go:46`, `BaseConfig`):
+
+```text
+maxDuration  = 10m
+gracefulStop = 30s
+```
+
+#### 3.8.1. Hai trục độc lập (giống cách đọc ramping-vus)
+
+Khi đọc timeline ví dụ bên dưới, phải tách rõ 2 trục:
+
+```text
+Trục 1 — SCENARIO timeline (do CONFIG quyết định):
+  t=0           scenario bắt đầu
+  t=maxDuration scenario hết regular phase, vào graceful
+  t=maxDuration+gracefulStop scenario kết thúc hoàn toàn
+
+Trục 2 — VU iteration timeline (do CODE quyết định):
+  iter_duration = thời gian default function chạy (sleep, http, ...)
+  với sleep(2): iter#0 = t=0..2, iter#1 = t=2..4, iter#2 = t=4..6
+  __ITER counter của từng VU đếm độc lập
+```
+
+Hai trục **không đồng bộ**:
+
+```text
+- VU finish iter#0 ở t=2s không liên quan tới scenario timeline
+  VU chỉ cần kiểm regDurationDone (closed channel khi hết maxDuration)
+  và atomic counter (số iter đã lấy)
+
+- maxDuration hết ở t=N -> không cắt iter đang chạy
+  iter đó được phép finish trong gracefulStop
+  VU chỉ không lấy iter mới
+```
+
+#### 3.8.2. Đọc từ core
+
+`getDurationContexts()` (gọi từ `shared_iterations.go:174`) tạo 2 context:
+
+```text
+regDurationCtx : cancel khi t=maxDuration
+maxDurationCtx : cancel khi t=maxDuration+gracefulStop
+```
+
+Trong `handleVU()` (`shared_iterations.go:246-252`):
+
+```go
+for {
+    select {
+    case <-regDurationDone:
+        return                            // hết maxDuration -> không lấy iter mới
+    default:
+    }
+
+    attemptedIterNumber := atomic.AddUint64(&attemptedIters, 1)
+    if attemptedIterNumber > totalIters {
+        return                            // hết kho -> dừng
+    }
+
+    runIteration(maxDurationCtx, activeVU) // iter chạy với maxDurationCtx
+    atomic.AddUint64(doneIters, 1)
+}
+```
+
+Hai cơ chế khác nhau:
+
+```text
+1) Trước khi lấy iter mới: check regDurationDone
+   -> hết maxDuration, không vào atomic.AddUint64 nữa
+
+2) Khi iter đang chạy: dùng maxDurationCtx
+   -> iter chạy được tới maxDuration + gracefulStop
+   -> nếu chưa xong tới mốc đó -> context cancel -> iter bị interrupt
+```
+
+#### 3.8.3. Ví dụ đầy đủ
+
+Config:
+
+```js
+scenarios: {
+  demo_stop: {
+    executor: "shared-iterations",
+    vus: 2,
+    iterations: 10,
+    maxDuration: "5s",
+    gracefulStop: "3s",
+  },
+},
+
+// code: mỗi iter sleep 2s
+export default function () { sleep(2); }
+```
+
+Tách 2 trục:
+
+```text
+Scenario timeline:
+  t=0      scenario start
+  t=5s     maxDuration hết (regDurationCtx done)
+  t=8s     gracefulStop hết (maxDurationCtx done)
+
+VU iter timeline:
+  iter time = 2s
+  VU=1 iter#0 = t=0..2
+  VU=1 iter#1 = t=2..4
+  VU=1 iter#2 = t=4..6 (vắt qua t=5s!)
+  VU=2 iter#0 = t=0..2
+  VU=2 iter#1 = t=2..4
+  VU=2 iter#2 = t=4..6
+```
+
+Timeline đầy đủ:
+
+```text
+t=0.0s   2 VU activate, đồng loạt vào iter
+         VU=1: attemptedIterNumber=1, sleep(2)
+         VU=2: attemptedIterNumber=2, sleep(2)
+
+t=2.0s   2 VU finish, lấy tiếp
+         VU=1: attemptedIterNumber=3
+         VU=2: attemptedIterNumber=4
+
+t=4.0s   2 VU finish, lấy tiếp
+         VU=1: attemptedIterNumber=5 (kho còn 5/10)
+         VU=2: attemptedIterNumber=6 (kho còn 4/10)
+         VU=1, VU=2 vào iter#2 (sẽ đến t=6.0s)
+
+t=5.0s   maxDuration hết, regDurationCtx done
+         VU=1, VU=2 đang ở giữa iter#2 (đã chạy 1s, còn 1s)
+         iter đang chạy KHÔNG bị cắt
+         vào pha grace
+
+t=6.0s   VU=1, VU=2 finish iter#2 (1s qua < grace 3s, finish clean)
+         vòng for tiếp theo: check regDurationDone -> đã done -> return
+         attemptedIterNumber=5,6 đã chạy xong (iter complete)
+
+t=6.0s   defer: activeVUs.Wait() chờ tất cả goroutine return
+         attemptedIters = 6, totalIters = 10
+         emit DroppedIterations = 10 - 6 = 4
+
+scenario summary:
+  iterations          = 6 (complete)
+  dropped_iterations  = 4 (chưa lấy được trước maxDuration)
+  interrupted         = 0 (iter đang chạy đều finish trong grace)
+```
+
+#### 3.8.4. Biến thể 1: `iter_time = 4s` (lâu hơn grace)
+
+```text
+t=0.0s   VU=1, VU=2 vào iter#0 (đến t=4.0s)
+t=4.0s   VU=1, VU=2 finish iter#0
+         attemptedIterNumber=3, 4
+         vào iter#1 (sẽ đến t=8.0s nếu không bị cắt)
+t=5.0s   maxDuration hết, vào grace
+t=8.0s   gracefulStop hết, maxDurationCtx done
+         VU=1, VU=2 vẫn đang ở iter#1 (đã 4s = đúng iter time)
+         tùy race: có thể finish clean hoặc bị interrupt
+
+         worst case: iter#1 chưa kịp emit complete -> +interrupted
+         best case:  iter#1 finish ngay trước context cancel -> +complete
+
+         dropped_iterations = 10 - 4 = 6
+```
+
+#### 3.8.5. Biến thể 2: `iter_time = 6s` (lâu hơn cả grace)
+
+```text
+t=0.0s   VU=1, VU=2 vào iter#0 (sẽ đến t=6.0s)
+t=5.0s   maxDuration hết, vào grace
+         VU=1, VU=2 đang ở iter#0 (đã 5s, còn 1s)
+t=6.0s   VU finish iter#0 (1s qua < grace 3s, finish clean)
+         vòng for tiếp: regDurationDone -> return
+         attemptedIters = 2
+
+dropped_iterations = 10 - 2 = 8
+iterations         = 2
+```
+
+#### 3.8.6. Biến thể 3: `gracefulStop = "0s"`
+
+```text
+t=5.0s   maxDuration hết, gracefulStop=0 -> maxDurationCtx cancel ngay
+         VU=1, VU=2 đang ở iter (đã 1s, còn tùy iter time)
+         iter bị cancel -> +interrupted
+         vòng for tiếp: regDurationDone -> return
+
+         iterations         < expected (mất iter đang chạy)
+         interrupted        = 2 (VU bị cắt giữa iter)
+         dropped_iterations = totalIters - attemptedIters
+```
+
+`gracefulStop=0s` rất hà khắc, dễ tạo interrupted iterations. Default 30s
+là an toàn cho hầu hết case.
+
+#### 3.8.7. Quy tắc thực tế
+
+```text
+- iter_time << gracefulStop  : mọi iter đang chạy đều finish clean
+- iter_time ≈ gracefulStop   : race condition, có thể có interrupted
+- iter_time >> gracefulStop  : iter bị interrupt nhiều, summary ra số nhỏ
+
+- nếu test thường xuyên hit maxDuration -> tăng maxDuration
+- nếu chỉ thỉnh thoảng iter dài -> tăng gracefulStop
+```
+
+### 3.9. Lifecycle VU và `__ITER` counter
+
+Trong `shared-iterations`, lifecycle VU đơn giản hơn `ramping-vus` vì
+không có scale up/down giữa runtime.
+
+#### 3.9.1. Lifecycle đầy đủ
+
+```text
+1) Init phase     : k6 init đủ vus instance vào pool
+                    mỗi instance đã có JS context, sandbox, biến module-scope
+                    chạy file-level code (import, biến module-scope)
+
+2) Run() start    : for range numVUs gọi GetPlannedVU(true) đúng vus lần
+                    pull đủ vus instance ra khỏi pool
+                    mỗi instance: go handleVU(initVU)
+
+3) handleVU loop  : Activate() -> for {...} -> lấy iter -> runIteration -> ...
+                    loop này chạy tới khi:
+                      a) attemptedIterNumber > totalIters (hết kho)
+                      b) regDurationDone (hết maxDuration)
+
+4) handleVU end   : defer cancel() -> ReturnVU(initVU, true)
+                    instance trở lại pool clean
+                    activeVUs.Done() -> WaitGroup giảm
+
+5) Scenario end   : activeVUs.Wait() chờ tất cả goroutine return
+                    nếu attemptedIters < totalIters: emit DroppedIterations
+```
+
+Đọc từ core:
+
+```text
+shared_iterations.go:264-272  Run(): pull đủ vus và bắn goroutine
+shared_iterations.go:239-262  handleVU(): vòng lặp lấy iter
+shared_iterations.go:234-237  returnVU: ReturnVU(initVU, true)
+shared_iterations.go:217-229  defer activeVUs.Wait + emit DroppedIterations
+```
+
+#### 3.9.2. `__ITER` counter
+
+`__ITER` là counter của từng VU, đếm số iter VU đó đã chạy. Trong
+`shared-iterations`:
+
+```text
+- __ITER bắt đầu từ 0 cho mỗi VU
+- mỗi iter VU đó chạy xong -> __ITER += 1
+- KHÔNG đồng bộ với attemptedIterNumber (số iter toàn scenario)
+```
+
+Quan trọng: `__ITER != attemptedIterNumber`. Hai khái niệm khác nhau:
+
+```text
+__ITER (per-VU)              : số iter VU này đã chạy
+attemptedIterNumber (global) : số thứ tự iter trong kho chung
+                              (dùng để biết hết kho hay chưa)
+```
+
+Ví dụ với `vus=2, iterations=4`:
+
+```text
+t=0     VU=1: attempt=1, __ITER=0
+        VU=2: attempt=2, __ITER=0
+
+t=Δ     VU=1 finish, __ITER=0 emit
+        VU=1 next: attempt=3, __ITER=1
+        VU=2 finish, __ITER=0 emit
+        VU=2 next: attempt=4, __ITER=1
+
+t=2Δ    VU=1 finish, __ITER=1 emit
+        VU=1 next: attempt=5, > 4 -> return
+        VU=2 finish, __ITER=1 emit
+        VU=2 next: attempt=6, > 4 -> return
+
+Per VU: VU=1 chạy __ITER=0,1 (2 iter)
+        VU=2 chạy __ITER=0,1 (2 iter)
+Total: 4 iter complete (giống iterations config)
+```
+
+#### 3.9.3. Khi VU nhanh/chậm khác nhau
+
+Nếu VU=1 chạy nhanh (sleep 0.2s), VU=2 chạy chậm (sleep 0.6s):
+
+```text
+vus=2, iterations=8
+
+t=0     VU=1: attempt=1, __ITER=0 (sleep 0.2)
+        VU=2: attempt=2, __ITER=0 (sleep 0.6)
+t=0.2   VU=1 finish, attempt=3, __ITER=1
+t=0.4   VU=1 finish, attempt=4, __ITER=2
+t=0.6   VU=1 finish, attempt=5, __ITER=3
+        VU=2 finish, attempt=6, __ITER=1
+t=0.8   VU=1 finish, attempt=7, __ITER=4
+t=1.0   VU=1 finish, attempt=8, __ITER=5
+t=1.2   VU=1 finish, attempt=9 > 8 -> return
+        VU=2 finish, attempt=10 > 8 -> return
+
+VU=1 chạy 6 iter (__ITER=0..5)
+VU=2 chạy 2 iter (__ITER=0,1)
+Total: 8 (khớp iterations)
+```
+
+VU nhanh chiếm phần lớn iter — đây là đặc trưng "không công bằng" của
+`shared-iterations`.
+
+#### 3.9.4. ReturnVU và pool
+
+`returnVU` ở `shared_iterations.go:234-237`:
+
+```go
+returnVU := func(u lib.InitializedVU) {
+    si.executionState.ReturnVU(u, true)
+    activeVUs.Done()
+}
+```
+
+`ReturnVU(initVU, true)` — flag `true` nghĩa là "decrease counter của full
+iterations". Với `shared-iterations` chỉ có 1 lần activate ở đầu, returnVU
+chỉ chạy đúng 1 lần khi VU goroutine thoát (qua `defer cancel()` trong
+`Activate()`).
+
+VU instance sau khi `ReturnVU` quay về pool. Vì scenario đã kết thúc
+(`handleVU` trả về), không có scenario khác trong cùng test cũng có thể
+lấy VU này ra dùng tiếp (nếu cấu hình đa scenario).
+
+#### 3.9.5. Khác `ramping-vus`
+
+| Tiêu chí | `shared-iterations` | `ramping-vus` |
+| --- | --- | --- |
+| VU activate | 1 lần ở đầu Run() | nhiều lần theo timeline |
+| VU return | 1 lần khi handleVU exit | nhiều lần khi scale-down |
+| state machine vuHandle | không dùng | dùng (start/stop/hardStop) |
+| `__ITER` reset | không (mỗi VU 1 lần activate) | không (qua nhiều activate vẫn giữ) |
+| iter dropped | có (kho không lấy hết) | không |
+| iter interrupted | có (gracefulStop=0 hoặc iter dài) | có (gracefulRampDown=0 hoặc iter dài) |
 
 ## 4. Khác gì với `per-vu-iterations`?
 
@@ -753,7 +1420,426 @@ iterationInScenario là số thứ tự iteration toàn scenario
 log có thể không theo thứ tự 0,1,2,3 vì các VU chạy song song
 ```
 
-## 6. Demo QuickPizza `2 requests / iteration`
+## 6. Edge case của `shared-iterations`
+
+Phần này tổng hợp các tình huống đặc thù riêng của executor này, không gặp
+ở `ramping-vus`/`constant-vus`.
+
+### 6.1. Khi `iterations < vus`?
+
+Validate ở `shared_iterations.go:82-87`:
+
+```go
+if sic.Iterations.Int64 < sic.VUs.Int64 {
+    errors = append(errors, fmt.Errorf(
+        "the number of iterations (%d) can't be less than the number of VUs (%d)",
+        sic.Iterations.Int64, sic.VUs.Int64,
+    ))
+}
+```
+
+Nghĩa là config sau sẽ **fail validate**:
+
+```js
+scenarios: {
+  invalid: {
+    executor: "shared-iterations",
+    vus: 5,
+    iterations: 3,    // < vus -> error
+  },
+}
+```
+
+Output thực tế:
+
+```text
+the number of iterations (3) can't be less than the number of VUs (5)
+```
+
+Vì sao bắt buộc `iterations >= vus`?
+
+```text
+- nếu iterations < vus, một số VU sẽ không có iter nào để chạy
+  -> tốn tài nguyên init VU mà không dùng
+- design intent: mỗi VU ít nhất 1 iter
+- nếu thật sự muốn ít iter hơn vus, giảm vus xuống
+```
+
+#### Nếu `iterations == vus`?
+
+Hợp lệ. Mỗi VU chạy đúng 1 iter:
+
+```js
+vus: 4, iterations: 4
+```
+
+Timeline:
+
+```text
+t=0    4 VU activate, đồng loạt vào iter
+       attemptedIters = 1, 2, 3, 4
+t=Δ    4 VU finish iter
+       attemptedIterNumber = 5, 6, 7, 8 -> đều > 4 -> return
+       4 VU đều dừng
+
+Total: 4 complete, 0 dropped
+```
+
+Trường hợp này tương đương `vus * 1 = 4` total iter, mỗi VU đúng 1 vòng.
+Không nhanh hơn `per-vu-iterations: vus=4, iterations=1` về số iter, nhưng
+vẫn khác về cơ chế lấy iter (atomic counter vs quota cố định).
+
+### 6.2. Khi VU chậm hơn nhiều thì phân phối ra sao?
+
+Đây là đặc trưng "atomic counter" của `shared-iterations`. Nếu các VU có
+tốc độ khác nhau lớn, phân phối iter sẽ không đều.
+
+#### 6.2.1. Mô hình phân phối
+
+Với `vus=N` VU có thời gian iter `t_1, t_2, ..., t_N`:
+
+```text
+ratio_i = (1/t_i) / sum(1/t_j)
+        = tốc độ VU i / tổng tốc độ
+
+iterations_per_vu_i ≈ ratio_i * total_iterations
+```
+
+Ví dụ:
+
+```text
+vus=4, iterations=16
+t_1=0.2s, t_2=0.4s, t_3=0.8s, t_4=0.8s
+
+rate_1 = 5,    rate_2 = 2.5,  rate_3 = 1.25, rate_4 = 1.25
+total_rate = 10
+
+ratio_1 = 0.5,  ratio_2 = 0.25, ratio_3 = 0.125, ratio_4 = 0.125
+
+iter_1 ≈ 0.5  * 16 = 8
+iter_2 ≈ 0.25 * 16 = 4
+iter_3 ≈ 0.125 * 16 = 2
+iter_4 ≈ 0.125 * 16 = 2
+
+total = 8 + 4 + 2 + 2 = 16 ✓
+```
+
+Khớp với output thực tế trong [demo 5.1](#51-demo-đếm-từng-vu-nhanhchậm).
+
+#### 6.2.2. Khi 1 VU rất chậm (outlier)
+
+Nếu 1 VU bị "stuck" (network slow, timeout, deadlock JS), VU đó vẫn được
+phép chạy. VU khác lấy thêm iter bù.
+
+Ví dụ:
+
+```text
+vus=4, iterations=20
+t_1 = t_2 = t_3 = 0.1s
+t_4 = 5s (rất chậm, outlier)
+
+rate_1 = rate_2 = rate_3 = 10
+rate_4 = 0.2
+total_rate = 30.2
+
+iter_1 ≈ iter_2 ≈ iter_3 ≈ 6.62
+iter_4 ≈ 0.13
+
+iter_1, iter_2, iter_3 dồn lại = ~19.86
+iter_4 ≈ 0 (gần như không lấy được)
+
+actual: iter_1=7, iter_2=7, iter_3=6, iter_4=0  (tổng 20)
+```
+
+VU=4 có thể chỉ chạy 0-1 iter vì các VU nhanh đã "ăn" hết kho. Đây không
+phải bug, mà là consequence của design "first come first served" qua atomic
+counter.
+
+#### 6.2.3. Khi muốn fairness?
+
+`shared-iterations` không có cơ chế fairness. Nếu cần:
+
+```text
+- per-vu-iterations: mỗi VU đúng N iter, không phụ thuộc tốc độ
+- ramping-arrival-rate: scheduler ép tốc độ, VU chia đều iter theo time
+```
+
+### 6.3. Hành vi khi iteration count nhỏ hơn maxDuration cho phép
+
+Hai trường hợp ngược nhau cần phân biệt:
+
+```text
+Case A: iter time * iter count << maxDuration
+        -> scenario kết thúc sớm trước maxDuration
+        -> không có dropped, không có interrupted
+
+Case B: iter time * iter count >> maxDuration
+        -> scenario hit maxDuration trước khi xong kho
+        -> có dropped, có thể có interrupted
+```
+
+#### 6.3.1. Case A: kho cạn trước `maxDuration`
+
+Config:
+
+```js
+vus: 4,
+iterations: 12,
+maxDuration: "10m",     // rất rộng
+gracefulStop: "30s",
+
+// code: sleep(0.5)
+```
+
+Timeline:
+
+```text
+t=0       4 VU activate, lấy iter
+t=0.5s    4 VU finish, lấy tiếp (kho còn 4)
+t=1.0s    4 VU finish, lấy tiếp (kho còn 0)
+          attemptedIterNumber = 9,10,11,12
+t=1.5s    4 VU finish, lấy tiếp (đã có atomic.AddUint64)
+          attemptedIterNumber = 13,14,15,16 đều > 12 -> return
+
+t=1.5s    activeVUs.Wait() trả về ngay (4 goroutine đã return)
+          attemptedIters = 16, totalIters = 12
+          attemptedIters > totalIters -> không emit DroppedIterations
+          (defer block check `attemptedIters < totalIters`, không thỏa)
+
+scenario summary:
+  iterations          = 12 (complete)
+  dropped_iterations  = 0
+  interrupted         = 0
+  duration            ≈ 1.5s (nhỏ hơn maxDuration nhiều)
+```
+
+Header in:
+
+```text
+* demo: 12 iterations shared among 4 VUs (maxDuration: 10m)
+```
+
+Nghĩa là `maxDuration` là **trần**, không phải target. Nếu xong sớm thì
+scenario kết thúc ngay, không chờ tới `maxDuration`.
+
+#### 6.3.2. Case B: hit `maxDuration` trước khi cạn kho
+
+Config:
+
+```js
+vus: 4,
+iterations: 1000,        // rất nhiều
+maxDuration: "5s",
+gracefulStop: "2s",
+
+// code: sleep(0.5)
+```
+
+Tính:
+
+```text
+peak_rate = vus / iter_time = 4 / 0.5 = 8 iter/s
+expected_iter_at_maxDuration = 8 * 5 = 40 iter
+expected_iter_in_grace = 8 * 2 = 16 iter (nhưng chỉ tính iter đã start trước maxDuration)
+```
+
+Timeline:
+
+```text
+t=0..5s   4 VU loop iter, mỗi iter 0.5s
+          tổng ~ 40 iter complete
+t=5s      regDurationCtx done -> không lấy iter mới
+          các iter đang chạy (đã started ngay trước t=5s) tiếp tục
+t=5..5.5s iter cuối finish, vòng for tiếp: regDurationDone -> return
+t=5.5s    handleVU exit, ReturnVU
+
+scenario summary:
+  iterations          ≈ 40-44 (complete)
+  attemptedIters      ≈ 40-44 (số iter đã lấy trước hết)
+  dropped_iterations  = 1000 - attemptedIters ≈ 956-960
+  interrupted         = 0
+  duration            ≈ 5-5.5s
+```
+
+Vì `iter_time` (0.5s) << `gracefulStop` (2s), iter đang chạy đều finish
+clean trong grace, không có interrupted.
+
+#### 6.3.3. Case C: iter dài, hit `maxDuration` rất chát
+
+Config:
+
+```js
+vus: 4,
+iterations: 1000,
+maxDuration: "5s",
+gracefulStop: "1s",
+
+// code: sleep(3)    iter rất dài
+```
+
+Timeline:
+
+```text
+t=0       4 VU vào iter (đến t=3s)
+t=3s      4 VU finish, lấy tiếp iter (sẽ đến t=6s)
+          attemptedIterNumber = 5, 6, 7, 8
+t=5s      regDurationCtx done
+          4 VU đang ở iter (đã 2s, còn 1s)
+          gracefulStop = 1s -> grace tới t=6s
+t=6s      grace hết, maxDurationCtx cancel
+          4 VU đang chạy: tùy race, có thể finish ngay (nếu iter đã 3s đúng) hoặc bị interrupt
+
+worst case:
+  iterations         = 4 (chỉ vòng đầu finish)
+  interrupted        = 4 (iter#1 bị cắt giữa)
+  attemptedIters     = 8
+  dropped_iterations = 1000 - 8 = 992
+```
+
+`shared-iterations` cho phép scenario kết thúc theo 1 trong 4 cách:
+
+```text
+1) Kho cạn trước maxDuration (case A)
+   -> iterations = config iterations
+   -> dropped = 0
+
+2) Hit maxDuration, iter time ngắn (case B)
+   -> iterations < config iterations
+   -> dropped = config iterations - attemptedIters
+   -> interrupted = 0
+
+3) Hit maxDuration, iter time vừa grace (case B với edge race)
+   -> iterations vẫn < config
+   -> dropped = config - attemptedIters
+   -> interrupted có thể = 0 hoặc > 0 tùy race
+
+4) Hit maxDuration, iter time > grace (case C)
+   -> iterations rất nhỏ
+   -> dropped lớn
+   -> interrupted = số VU đang ở iter dở
+```
+
+### 6.4. Khi nào `dropped_iterations` thật sự xảy ra?
+
+Đọc `shared_iterations.go:217-229`:
+
+```go
+defer func() {
+    activeVUs.Wait()
+    if attemptedIters < totalIters {
+        metrics.PushIfNotDone(parentCtx, out, metrics.Sample{
+            ...
+            Value: float64(totalIters - attemptedIters),
+            ...
+        })
+    }
+}()
+```
+
+Quan trọng:
+
+```text
+DroppedIterations = totalIters - attemptedIters
+
+điều kiện: attemptedIters < totalIters
+```
+
+Nghĩa là drop chỉ xảy ra khi:
+
+```text
+- atomic counter chưa từng lấy đủ totalIters lần
+- = số iter trong kho chưa được "claim" hết
+```
+
+Note tinh tế:
+
+```text
+attemptedIters tăng KHI atomic.AddUint64 trả số > totalIters
+nhưng vòng for return ngay sau đó, không gọi runIteration
+
+ví dụ: totalIters=10, vus=4
+  4 VU lấy đến số 11, 12, 13, 14 thì các số đó vẫn được tăng
+  nhưng > totalIters nên return
+  attemptedIters cuối có thể là 14, không phải 10
+  -> attemptedIters > totalIters -> không emit DroppedIterations
+```
+
+Vì vậy `dropped_iterations` chỉ là **số iter còn trong kho chưa được VU lấy
+đến**, không phải "số iter VU bỏ sót khi return".
+
+#### Khi nào KHÔNG có drop?
+
+```text
+- kho cạn trước maxDuration                    -> attemptedIters >= totalIters
+- iterations == vus, mọi VU finish iter đầu    -> attemptedIters = vus + 1 (cho lần > totalIters)
+                                                  > totalIters -> không drop
+```
+
+#### Khi nào CÓ drop?
+
+```text
+- hit maxDuration trước khi VU lấy hết kho
+- VU chạy rất chậm so với maxDuration
+- gracefulStop quá ngắn so với iter time, một số VU bị interrupt
+  (nhưng interrupted iter vẫn đếm vào attemptedIters,
+   nên drop chỉ là phần kho chưa lấy)
+```
+
+### 6.5. `interrupted` vs `dropped` — phân biệt
+
+Hai metric khác nhau, đừng nhầm:
+
+| Metric | Khi nào tăng | Đếm cái gì |
+| --- | --- | --- |
+| `iterations` (full) | iter chạy xong và emit `AddFullIterations(1)` | iter complete |
+| `interrupted_iterations` | iter đã start nhưng context cancel trước khi finish | iter đang chạy bị cắt |
+| `dropped_iterations` | scenario kết thúc, kho còn iter chưa lấy | iter chưa từng start |
+
+Quan hệ:
+
+```text
+attemptedIters     = iterations + interrupted_iterations + (iter quá totalIters do race)
+dropped_iterations = totalIters - attemptedIters (nếu < 0 thì = 0, không emit)
+```
+
+Trong demo `shared_iterations_dropped_demo.js`:
+
+```text
+config: vus=2, iterations=5, maxDuration=3s, gracefulStop=2s, sleep(2)
+
+t=0       VU=1 attempt=1, VU=2 attempt=2 (vào iter)
+t=2s      cả 2 finish, attempt=3,4 (vào iter, sẽ đến t=4s)
+t=3s      maxDuration hết, không lấy iter mới
+          2 VU đang ở iter (đã 1s, còn 1s)
+t=4s      2 VU finish iter (1s qua < grace 2s, finish clean)
+          vòng for: regDurationDone -> return
+
+iterations        = 4 (complete)
+interrupted       = 0
+attemptedIters    = 4
+dropped           = 5 - 4 = 1
+```
+
+Output thực tế khớp với phân tích.
+
+### 6.6. Tổng hợp công thức
+
+```text
+peak_rate     ≈ vus / effective_iteration_time
+
+iter_per_vu_i ≈ (1/t_i) / sum(1/t_j) * totalIters
+              (khi sum đủ thời gian cho cạn kho)
+
+scenario_runtime ≈ totalIters / peak_rate
+                  (clean run, không hit maxDuration)
+
+scenario_runtime ≤ maxDuration + gracefulStop  (luôn đúng)
+
+dropped = max(0, totalIters - attemptedIters)
+        ≈ max(0, totalIters - peak_rate * maxDuration)  (khi hit maxDuration)
+```
+
+## 7. Demo QuickPizza `2 requests / iteration`
 
 File:
 
@@ -844,7 +1930,7 @@ nhưng mỗi VU thực tế chạy bao nhiêu iteration thì không cố định
 muốn biết phải log theo __VU / __ITER / iterInScenario
 ```
 
-## 7. Cheat sheet
+## 8. Cheat sheet
 
 ```text
 executor = "shared-iterations"

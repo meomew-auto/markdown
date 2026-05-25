@@ -239,6 +239,58 @@ VU đã init xong nhưng đang rảnh chờ slot mới thì chưa tính vào `vu
 Nếu có `minIterationDuration`, phần sleep bù không nằm trong `iteration_duration`
 nhưng vẫn giữ VU bận.
 
+### 1.3. Open model gặp ramping rate: khác gì closed model `ramping-vus`?
+
+`ramping-arrival-rate` là cú lai giữa hai đặc tính:
+
+```text
+- open model:    rate điều khiển nhịp start, không phải VU active
+- stages curve:  rate đó thay đổi theo timeline thay vì giữ một con số
+```
+
+Cách dễ hiểu:
+
+```text
+constant-arrival-rate = open model + 1 rate cố định
+ramping-vus           = closed model + stages curve VU
+ramping-arrival-rate  = open model + stages curve RATE
+```
+
+Tách ý so sánh `ramping-arrival-rate` với `ramping-vus`:
+
+| Điểm so sánh | `ramping-vus` (closed) | `ramping-arrival-rate` (open) |
+| --- | --- | --- |
+| Ý nghĩa stages | thay đổi số VU active theo thời gian | thay đổi nhịp start iteration theo thời gian |
+| `stage.target` | số VU active ở cuối stage | rate (iter/timeUnit) ở cuối stage |
+| Số VU runtime | bằng đúng `stage.target` đang nội suy | thay đổi theo nhu cầu, trần là `maxVUs` |
+| Tổng iter biết trước? | không | không, nhưng `scheduled_iterations_total` biết trước |
+| `dropped_iterations` | không có path emit bình thường | có, đếm khi không có VU rảnh đúng giờ |
+| Unplanned VU | không có khái niệm | có, sinh khi rate vượt năng lực `preAllocatedVUs` |
+
+Đặc thù khi rate ramp lên cao mà VU bận:
+
+```text
+1) preAllocatedVUs đủ -> tất cả slot start đúng giờ
+2) preAllocatedVUs thiếu nhưng còn quota unplanned (maxVUs > preAllocatedVUs)
+   -> slot hiện tại có thể bị drop
+   -> background tạo VU mới, các slot SAU đó được dùng VU mới
+3) preAllocatedVUs thiếu và hết quota unplanned (maxVUs = preAllocatedVUs)
+   -> slot quá tải bị drop, không có cứu cánh
+   -> log warning "Insufficient VUs, reached N active VUs and cannot initialize more"
+```
+
+Đọc rất ngắn nhưng dễ nhớ:
+
+```text
+ramping-arrival-rate hỏi: "rate có giữ được không?"
+ramping-vus           hỏi: "concurrency thay đổi thế nào?"
+```
+
+Khi rate ramp lên rất cao trong thời gian rất ngắn (ví dụ ramp 0 -> 1000 trong 1s),
+unplanned spawn không kịp catch up vì init VU mới tốn thời gian (parse module, tạo
+JS sandbox). Nếu quan tâm tới tail latency của hệ thống, phải set `preAllocatedVUs`
+đủ cao từ đầu để pool sẵn sàng trước peak.
+
 ## 2. Bảng tham số tiếng Việt
 
 | Ký hiệu | Nghĩa | Đơn vị | Đọc từ đâu | Ghi chú |
@@ -613,6 +665,236 @@ estimated_http_reqs_rate_if_no_branch = N * actual_summary_iterations_rate
 
 Chỉ dùng khi code path sạch và không có interrupt/branch làm thiếu request.
 
+### 3.6. Tổng thời gian timeline = `sum(stage.duration)`
+
+```text
+total_regular_duration = sum(stage.duration)
+```
+
+Đọc từ core: `helpers.go:19-24`:
+
+```go
+func sumStagesDuration(stages []Stage) (result time.Duration) {
+    for _, s := range stages {
+        result += s.Duration.TimeDuration()
+    }
+    return result
+}
+```
+
+`Run()` trong `ramping_arrival_rate.go:317` gọi đúng `sumStagesDuration(varr.config.Stages)`
+để lấy `regular_duration`. Không có chỗ nào trong executor cộng thêm offset cho stages.
+
+Ví dụ:
+
+```text
+stages:
+  duration=2s, target=4
+  duration=2s, target=1
+  duration=2s, target=3
+
+total_regular_duration = 2+2+2 = 6s
+```
+
+Header k6 in:
+
+```text
+* demo: Up to 4.00 iterations/s for 6s over 3 stages (...)
+```
+
+Trong đó:
+
+```text
+"Up to 4.00 iterations/s" = peak rate (max startRate hoặc max stage.target / timeUnit)
+"6s"                      = total_regular_duration = sum(stage.duration)
+"3 stages"                = số phần tử trong array stages
+```
+
+Nhớ: `total_regular_duration` chỉ tính phần config stages, **chưa cộng** `gracefulStop`.
+Nó cũng chưa cộng `startTime` của scenario. Mục 3.7 dưới đây nói rõ hơn về trần wall-clock.
+
+### 3.7. Trần wall-clock = `regular_duration + gracefulStop`
+
+```text
+executor_wall_time_after_start_max = regular_duration + gracefulStop
+```
+
+Đọc từ `ramping_arrival_rate.go:121-134`:
+
+```go
+func (varc RampingArrivalRateConfig) GetExecutionRequirements(
+    et *lib.ExecutionTuple,
+) []lib.ExecutionStep {
+    return []lib.ExecutionStep{
+        { TimeOffset: 0, PlannedVUs: ..., MaxUnplannedVUs: ... },
+        {
+            TimeOffset: sumStagesDuration(varc.Stages) + varc.GracefulStop.TimeDuration(),
+            PlannedVUs: 0, MaxUnplannedVUs: 0,
+        },
+    }
+}
+```
+
+`Run()` (`ramping_arrival_rate.go:338`) gọi `getDurationContexts(parentCtx, duration, gracefulStop)`,
+trong đó `helpers.go:141-153`:
+
+```go
+maxEndTime := startTime.Add(regularDuration + gracefulStop)
+maxDurationCtx, ... = context.WithDeadline(parentCtx, maxEndTime)
+regDurationCtx, _ = context.WithDeadline(maxDurationCtx, startTime.Add(regularDuration))
+```
+
+Nghĩa là:
+
+```text
+regDurationCtx hết -> không còn slot start mới
+maxDurationCtx hết -> hard-stop iteration đang dở (cancel context)
+```
+
+Trong khoảng `[regular_duration, regular_duration + gracefulStop]`:
+
+```text
+- cal() đã sinh xong các slot trong stages, không còn slot mới
+- iteration nào đã start từ trước được phép finish
+- TryRunIteration() vẫn trả true nếu có VU rảnh, NHƯNG ch của cal() đã đóng
+  -> không có slot nào để fire nữa, hiệu quả là chỉ chờ iteration đang chạy
+```
+
+Ví dụ:
+
+```text
+total_regular_duration = 6s
+gracefulStop = 2s
+
+executor_wall_time_after_start_max = 8s
+```
+
+Header k6 in:
+
+```text
+1 scenario, 6 max VUs, 8s max duration (incl. graceful stop)
+```
+
+Khác `ramping-vus`:
+
+```text
+ramping-vus có thêm gracefulRampDown cho mỗi lần giảm VU giữa timeline
+ramping-arrival-rate KHÔNG có gracefulRampDown
+  vì rate giảm không yêu cầu "trả VU" - VU đã active vẫn ngồi đợi slot kế tiếp
+```
+
+Tức là cả `regular_duration` và `gracefulStop` ở đây dùng đúng theo `BaseConfig`:
+
+```text
+gracefulStop = default 30s nếu không set
+```
+
+### 3.8. `stage.target` = rate target tại CUỐI stage
+
+Đây là điểm dễ nhầm nhất khi mới đọc. Quy tắc:
+
+```text
+stage.target NGHĨA là rate (iterations/timeUnit) MUỐN ĐẠT tại CUỐI stage đó
+không phải rate trung bình của stage
+không phải rate cộng thêm
+không phải số iteration của stage
+```
+
+Đọc từ `cal()` (`ramping_arrival_rate.go:253-282`):
+
+```go
+for _, stage := range varc.Stages {
+    to = float64(stage.Target.ValueOrZero()) / timeUnit
+    dur = float64(stage.Duration.Duration)
+    if from != to { // ramp up/down
+        endCount += dur * ((to-from)/2 + from)  // diện tích hình thang
+        ...
+    } else {
+        endCount += dur * to                     // diện tích chữ nhật
+        ...
+    }
+    doneSoFar = endCount
+    from = to                                     // QUAN TRỌNG: from kế tiếp = to hiện tại
+    stageStart += stage.Duration.TimeDuration()
+}
+```
+
+Ý nghĩa của `from`:
+
+```text
+stage 1: from = startRate / timeUnit_seconds   (rate lúc t=0)
+stage 2: from = stage[0].target / timeUnit     (rate lúc cuối stage 1 = đầu stage 2)
+stage 3: from = stage[1].target / timeUnit     (rate lúc cuối stage 2 = đầu stage 3)
+...
+```
+
+Dòng `from = to` ở cuối loop là chìa khóa: rate đầu stage i+1 chính là `to` của stage i,
+tức là `stage[i].target / timeUnit`.
+
+Rate được rải đều tuyến tính giữa các stage giống `ramping-vus` rải VU đều giữa các stage:
+
+```text
+ramping-vus     : VU rải đều giữa fromVUs -> stage.target trong stage.duration
+ramping-arrival : rate rải đều giữa fromRate -> stage.target/timeUnit trong stage.duration
+```
+
+Ví dụ:
+
+```js
+startRate: 2,
+timeUnit: "1s",
+stages: [
+  { duration: "2s", target: 4 },  // stage 1
+  { duration: "2s", target: 1 },  // stage 2
+  { duration: "2s", target: 3 },  // stage 3
+]
+```
+
+Đường rate(t):
+
+```text
+t=0s : rate = 2/s         (= startRate)
+t=2s : rate = 4/s         (= stage[0].target, cuối stage 1)
+t=4s : rate = 1/s         (= stage[1].target, cuối stage 2)
+t=6s : rate = 3/s         (= stage[2].target, cuối stage 3)
+
+trong stage 1 (t=0..2): rate đi tuyến tính 2 -> 4
+trong stage 2 (t=2..4): rate đi tuyến tính 4 -> 1
+trong stage 3 (t=4..6): rate đi tuyến tính 1 -> 3
+```
+
+Hình mô tả nhanh:
+
+```text
+rate
+4 |     x
+3 |    / \           x
+2 | x    \         /
+1 |       x       /
+0 +-------+-------+-------+----> t
+  0       2       4       6
+       stage1  stage2  stage3
+```
+
+Đừng đọc nhầm:
+
+```text
+SAI : "stage.target = 4 nghĩa là stage chạy ở rate 4/s từ đầu"
+ĐÚNG: "stage.target = 4 nghĩa là rate đạt 4/s ở CUỐI stage, đi từ rate trước đó"
+
+SAI : "startRate là rate trung bình ban đầu"
+ĐÚNG: "startRate là rate tại đúng t=0"
+```
+
+Edge case `from == to` (rate giữ nguyên):
+
+```text
+nhánh else trong cal(): endCount += dur * to (không phải hình thang)
+=> stage giữ rate cố định trong toàn bộ stage.duration
+```
+
+Đây là cách hợp lệ để tạo "plateau" trong giữa timeline ramping.
+
 ## 3.9. Checklist core đã lọc cho `ramping-arrival-rate`
 
 Phần này là phụ lục đối chiếu code thật. Nếu mới học, đọc cột `Hành vi thật` trước; cột `Core`
@@ -781,6 +1063,973 @@ estimated_checks_total_rate_if_no_branch = 2 * actual_summary_iterations_rate
 
 Nếu peak rate cao hơn `ceil(lambda_peak * W_effective)`, test sẽ cần nhiều VU hơn.
 Nếu preAllocatedVUs thấp hơn peak demand, có thể xuất hiện unplanned VU hoặc drop.
+
+### 3.14. Bước nhảy của rate trong 1 stage
+
+Câu hỏi: trong 1 stage `ramp 2/s -> 4/s trong 2s`, các slot start xuất hiện ở đâu?
+Có phải đều cách nhau 0.25s như `constant-arrival-rate` không?
+
+Trả lời ngắn:
+
+```text
+KHÔNG. Khoảng cách giữa các slot thay đổi theo curve của rate(t):
+  - rate cao  -> slot dày hơn (gap nhỏ)
+  - rate thấp -> slot thưa hơn (gap lớn)
+
+Slot KHÔNG được tính bằng "rate trung bình rồi chia đều"
+Slot được tính bằng "lúc nào diện tích tích lũy = i"
+```
+
+#### 3.14.1. Công thức từ core
+
+Đọc `cal()` (`ramping_arrival_rate.go:253-282`):
+
+```go
+if from != to {  // ramp up/down
+    endCount += dur * ((to-from)/2 + from)
+    for ; i <= endCount; i += float64(next()) {
+        x := (from*dur - noNegativeSqrt(dur*(from*from*dur+2*(i-doneSoFar)*(to-from)))) / (from - to)
+        ...
+        ch <- time.Duration(x) + stageStart
+    }
+} else {
+    endCount += dur * to
+    for ; i <= endCount; i += float64(next()) {
+        ch <- time.Duration((i-doneSoFar)/to) + stageStart
+    }
+}
+```
+
+Hai nhánh:
+
+**Nhánh `from == to` (rate cố định trong stage):**
+
+```text
+x = (i - doneSoFar) / to
+slot thứ k cách t=stageStart đúng (k - doneSoFar) / to giây
+gap đều: 1 / to giây giữa hai slot liên tiếp
+```
+
+Đây giống `constant-arrival-rate`: rate đều thì gap đều.
+
+**Nhánh `from != to` (rate ramp tuyến tính):**
+
+```text
+diện tích từ stageStart đến điểm x bằng:
+  area(x) = from * x + (to - from) / (2 * dur) * x^2
+
+slot thứ k xảy ra khi area(x_k) = k - doneSoFar (chuẩn hóa lại từ đầu stage):
+  từ phương trình bậc 2 -> giải được x_k
+
+công thức code:
+  x = (from*dur - sqrt(dur*(from^2*dur + 2*(i - doneSoFar)*(to - from)))) / (from - to)
+```
+
+Cách hiểu: gap giữa hai slot liên tiếp tỉ lệ nghịch với rate(t) tại đúng thời điểm đó.
+
+```text
+gap_k ~= 1 / rate(t_k)
+
+rate(t) = from + (to - from) * (t / dur) trong stage
+=> nếu rate cao gấp đôi tại t này, gap chỉ còn nửa
+```
+
+#### 3.14.2. Ví dụ: stage `ramp 2 -> 4 trong 2s`
+
+```text
+from = 2/s, to = 4/s, dur = 2s
+endCount = 2 * ((4-2)/2 + 2) = 2 * 3 = 6 slots trong stage này
+
+doneSoFar = 0 (giả sử stage 1)
+
+slot 1 (i=1): x = (2*2 - sqrt(2*(2*2*2 + 2*1*2))) / (2-4)
+            = (4 - sqrt(2*12)) / -2
+            = (4 - sqrt(24)) / -2
+            ≈ (4 - 4.899) / -2
+            ≈ 0.449s    (gap_0_1 ≈ 0.449)
+
+slot 2 (i=2): x ≈ 0.828s   (gap_1_2 ≈ 0.379)
+slot 3 (i=3): x ≈ 1.162s   (gap_2_3 ≈ 0.334)
+slot 4 (i=4): x ≈ 1.464s   (gap_3_4 ≈ 0.302)
+slot 5 (i=5): x ≈ 1.742s   (gap_4_5 ≈ 0.278)
+slot 6 (i=6): x = 2.000s   (gap_5_6 ≈ 0.258)
+```
+
+So với "đều trung bình":
+
+```text
+nếu chia đều 6 slot trong 2s -> mỗi slot 0.333s
+NHƯNG cal() rải theo curve:
+  đầu stage rate=2/s -> gap đầu ~0.5s
+  cuối stage rate=4/s -> gap cuối ~0.25s
+```
+
+Verify đơn vị:
+
+```text
+rate(0) = 2/s -> gap ~ 1/2 = 0.5s ✓ (slot 1 ở 0.449s)
+rate(2) = 4/s -> gap ~ 1/4 = 0.25s ✓ (gap cuối ≈ 0.258s)
+```
+
+#### 3.14.3. Hai trường hợp đặc biệt
+
+```text
+1) rate giảm về 0 trong stage (to = 0)
+   nhánh from != to vẫn áp dụng
+   slot ngày càng thưa, vì rate giảm
+   nếu endCount < i, stage này không tạo slot nào nữa
+
+2) rate ramp lên TỪ 0 (from = 0)
+   tại t=0 rate=0 -> không có slot ở t=0
+   slot đầu tiên xuất hiện khi diện tích đủ >= 1
+
+3) rate hold (from = to)
+   nhánh else, gap đều = 1/rate
+```
+
+#### 3.14.4. So sánh nhịp `cal()` của 3 executor
+
+| Executor | Cách tạo slot | Gap |
+| --- | --- | --- |
+| `constant-arrival-rate` | rate cố định toàn run | đều: `1/rate` |
+| `ramping-arrival-rate` (stage hold) | rate = stage.target, `from == to` | đều: `1/rate` |
+| `ramping-arrival-rate` (stage ramp) | rate(t) tuyến tính | thay đổi theo `1/rate(t)` |
+
+#### 3.14.5. Hệ quả khi sizing
+
+Vì gap không đều, nhìn `lambda_peak` mới đúng cho sizing:
+
+```text
+required_vus_min_peak = ceil(lambda_peak * W_effective)
+```
+
+Không nên lấy `average_target_rate` để sizing. Lấy nhịp đỉnh.
+
+### 3.15. Hai trục độc lập: stage timeline và VU iteration timeline
+
+Đây là đặc thù của open model: phải tách rất rõ 2 trục thời gian khác nhau.
+Trong `ramping-vus` (closed) đã có 2 trục `stage timeline` và `VU iteration timeline`.
+`ramping-arrival-rate` cũng có 2 trục đó, nhưng vai trò của VU khác hẳn.
+
+#### 3.15.1. Định nghĩa 2 trục
+
+```text
+Trục 1 — STAGE timeline (do CONFIG quyết định):
+  rate(t) thay đổi theo stages
+  stage 1: t=0..2s, rate ramp 2 -> 4
+  stage 2: t=2..4s, rate ramp 4 -> 1
+  stage 3: t=4..6s, rate ramp 1 -> 3
+  cal() sinh ra danh sách slot dựa trên rate(t)
+
+Trục 2 — VU iter timeline (do CODE và POOL quyết định):
+  mỗi VU có dòng đời riêng:
+    - rảnh -> nhận slot từ pool -> chạy iter -> rảnh lại
+  iter_duration = thời gian default function chạy
+  số VU active = số VU đang bận xử lý iter (từ activeVUPool)
+```
+
+Trong `ramping-vus`:
+
+```text
+VU = active VU theo plannedVUs từ stages (trùng với "đang loop iter")
+1 VU loop iter của RIÊNG nó
+=> stage.target trực tiếp quyết định bao nhiêu VU đang chạy iter
+```
+
+Trong `ramping-arrival-rate`:
+
+```text
+VU = worker được activate, đang chờ slot hoặc đang chạy iter
+Slot từ cal() được "giao" cho VU rảnh qua kênh p.iterations
+1 VU không loop iter của riêng nó - nó chỉ chờ slot mới
+=> stage.target quyết định nhịp slot, không quyết định số VU active
+=> số VU active = số iter đang chạy đồng thời tại thời điểm sample
+```
+
+#### 3.15.2. Slot fire trên trục 1, VU bận trên trục 2
+
+Đọc `ramping_arrival_rate.go:455-503` (vòng `for nextTime := range ch`):
+
+```go
+for nextTime := range ch {                  // trục 1: nhận slot từ cal()
+    ...
+    if vusPool.TryRunIteration() {          // gửi slot vào kênh -> VU rảnh nhận
+        continue
+    }
+    // không có VU rảnh -> drop
+    metrics.PushIfNotDone(parentCtx, out, metrics.Sample{
+        TimeSeries: ... DroppedIterations ...,
+        Value: 1,
+    })
+    ...
+}
+```
+
+`activeVUPool.TryRunIteration()` (`ramping_arrival_rate.go:527-534`):
+
+```go
+func (p *activeVUPool) TryRunIteration() bool {
+    select {
+    case p.iterations <- struct{}{}:        // có VU rảnh nhận -> true
+        return true
+    default:                                  // không có VU rảnh -> false
+        return false
+    }
+}
+```
+
+`activeVUPool.AddVU()` (`ramping_arrival_rate.go:545-561`) là worker loop của 1 VU:
+
+```go
+go func() {
+    ...
+    for range p.iterations {
+        atomic.AddUint64(&p.running, uint64(1))
+        p.execState.ModCurrentlyActiveVUsCount(+1)
+        runfn(ctx, avu)                      // chạy 1 iter
+        p.execState.ModCurrentlyActiveVUsCount(-1)
+        atomic.AddUint64(&p.running, ^uint64(0))
+    }
+}()
+```
+
+Tách vai trò:
+
+```text
+- Slot đến giờ trên trục 1 -> bằng cách push vào p.iterations
+- VU rảnh trên trục 2 đang chờ ở `for range p.iterations`
+- Match được -> VU chạy iter
+- Không match -> drop_iterations += 1
+```
+
+Đây giống một mô hình producer-consumer:
+
+```text
+Producer: cal() + Run() loop    -> sinh slot tại đúng giờ
+Consumer: pool worker per VU    -> tiêu thụ slot khi rảnh
+```
+
+#### 3.15.3. Khi rate cao mà VU bận
+
+Đây là tình huống tiêu biểu. Giả sử:
+
+```text
+stage: rate ramp 2 -> 10 trong 5s
+preAllocatedVUs = 4
+maxVUs = 4 (không có quota unplanned)
+W_effective = 0.6s
+
+required_vus_min_peak = ceil(10 * 0.6) = 6 VUs
+```
+
+Tại đỉnh stage, rate = 10/s nhưng pool chỉ có 4 VU:
+
+```text
+Trục 1 (slots) : đang fire ~10 slot/s (gap ~0.1s)
+Trục 2 (VUs)   : 4 VU đều bận chạy iter (mỗi iter ~0.6s)
+
+mỗi 0.1s có 1 slot -> push vào kênh
+mỗi 0.6s có 1 VU rảnh
+
+=> trong 0.6s, fire 6 slot, chỉ 1 VU rảnh nhận -> 5 slot drop
+=> 1 - 4/(10*0.6) = 1 - 0.667 = 33% drop ngay tại pool
+```
+
+`drop_rate` ước lượng:
+
+```text
+drop_rate(t) = max(0, lambda_current - capacity_with_M_vus)
+             = max(0, 10 - 4/0.6)
+             = max(0, 10 - 6.67)
+             ≈ 3.33 drops/s
+```
+
+#### 3.15.4. Khi rate thấp xen rate cao
+
+`ramping-arrival-rate` có thể có cả đoạn nhanh và đoạn chậm trong 1 run:
+
+```text
+stage 1: rate ramp 2 -> 10 trong 5s     (peak)
+stage 2: rate hold 2 trong 5s            (rest)
+stage 3: rate ramp 2 -> 10 trong 5s     (peak lần 2)
+```
+
+Trên trục 1, slots fire dày hơn ở stage 1 và 3, thưa hơn ở stage 2:
+
+```text
+slots/s trung bình:
+  stage 1 ramp:  6/s    (avg)
+  stage 2 hold:  2/s
+  stage 3 ramp:  6/s    (avg)
+```
+
+Trên trục 2, VU active sẽ:
+
+```text
+- spike lên gần maxVUs ở các đỉnh stage 1 và 3
+- xuống còn 1-2 VU bận ở stage 2
+- nhưng pool VẪN giữ đủ preAllocatedVUs sẵn sàng
+  (không "trả về pool" theo timeline, vì closed model logic không áp dụng)
+```
+
+Đây là khác biệt căn bản với `ramping-vus`:
+
+```text
+ramping-vus           : VU active đi xuống đúng theo stage.target (closed model)
+ramping-arrival-rate  : VU active đi theo nhu cầu rate, vẫn giữ ≥ preAllocated trong pool
+```
+
+#### 3.15.5. Hệ quả thực tế
+
+```text
+1) Đừng đo "số VU sample" của arrival-rate như đo concurrency cố định
+   nó dao động theo rate(t) và iter_duration
+
+2) Sizing phải nhìn lambda_peak, không phải average_target_rate
+   peak có thể ngắn nhưng đủ để bùng dropped_iterations
+
+3) Đừng kỳ vọng "rate xuống thì VU active xuống ngay"
+   VU đang chạy iter còn lâu mới xong, vẫn được tính active đến lúc finish
+
+4) preAllocatedVUs đủ ở t=0 không có nghĩa là đủ ở peak
+   nếu peak ở giữa scenario, phải tính dùng W_effective của lúc đó
+```
+
+### 3.16. Spawn timing của unplanned VU và `dropped_iterations`
+
+Mục 3.15 đã giới thiệu pool VU. Mục này nói chi tiết hơn về timing:
+khi nào core spawn unplanned VU, dropped_iterations đếm vào lúc nào,
+và tại sao 1 slot đến giờ có thể vừa drop vừa kích hoạt spawn.
+
+#### 3.16.1. Đọc rất chậm đoạn `Run()` xử lý slot
+
+Đọc `ramping_arrival_rate.go:455-503`:
+
+```go
+for nextTime := range ch {                       // (A) nhận slot từ cal()
+    select {
+    case <-regDurationDone:
+        return nil                                // hết regular_duration -> stop
+    default:
+    }
+    atomic.StoreInt64(&tickerPeriod, int64(nextTime-prevTime))
+    prevTime = nextTime
+    b := time.Until(start.Add(nextTime))
+    if b > 0 {                                    // (B) chờ đến mốc nextTime
+        timer.Reset(b)
+        select {
+        case <-timer.C:
+        case <-regDurationDone:
+            return nil
+        }
+    }
+
+    if vusPool.TryRunIteration() {               // (C) thử match VU rảnh
+        continue                                   // có VU -> chạy iter, qua slot kế
+    }
+
+    // (D) không có VU rảnh
+    metrics.PushIfNotDone(parentCtx, out, metrics.Sample{
+        TimeSeries: metrics.TimeSeries{
+            Metric: varr.executionState.Test.BuiltinMetrics.DroppedIterations,
+            Tags:   metricTags,
+        },
+        Time:  time.Now(),
+        Value: 1,                                  // dropped_iterations += 1
+    })
+
+    // (E) thử trigger background spawn unplanned VU
+    if remainingUnplannedVUs == 0 {
+        if !shownWarning {
+            varr.logger.Warningf("Insufficient VUs, reached %d active VUs and cannot initialize more", maxVUs)
+            shownWarning = true
+        }
+        continue
+    }
+
+    select {
+    case makeUnplannedVUCh <- struct{}{}:
+        remainingUnplannedVUs--
+    default:                                       // đã có signal trong queue rồi
+    }
+}
+```
+
+5 bước:
+
+```text
+A. nhận slot kế tiếp từ kênh do cal() đẩy vào
+B. chờ wall-clock đến mốc của slot
+C. thử push vào pool: có VU rảnh không?
+D. nếu không có -> emit dropped_iterations metric
+E. nếu còn quota unplanned -> báo background goroutine init thêm VU
+```
+
+#### 3.16.2. Background spawner
+
+Đọc `ramping_arrival_rate.go:419-436`:
+
+```go
+remainingUnplannedVUs := maxVUs - preAllocatedVUs
+makeUnplannedVUCh := make(chan struct{})
+defer close(makeUnplannedVUCh)
+go func() {
+    defer close(returnedVUs)
+
+    for range makeUnplannedVUCh {
+        varr.logger.Debug("Starting initialization of an unplanned VU...")
+        initVU, err := varr.executionState.GetUnplannedVU(maxDurationCtx, varr.logger)
+        if err != nil {
+            varr.logger.WithError(err).Error("Error while allocating unplanned VU")
+        } else {
+            varr.logger.Debug("The unplanned VU finished initializing successfully!")
+            activateVU(initVU)                     // VU mới active, vào pool
+        }
+    }
+}()
+```
+
+Spawner là goroutine riêng. Timing thực tế:
+
+```text
+1) Slot fire ở t1, pool đầy   -> drop_iterations++ và signal background
+2) Background goroutine bắt signal, gọi GetUnplannedVU()
+3) GetUnplannedVU() init JS context: parse module, tạo runtime, tạo VU instance
+   thời gian này tốn vài ms tới vài chục ms tùy kích thước module
+4) activateVU() đẩy VU vào pool, kèm worker loop riêng
+5) Slot fire ở t2 > t1 -> pool có thêm VU mới -> không drop (nếu chưa quá tải)
+```
+
+Tóm gọn:
+
+```text
+unplanned VU chỉ giúp các slot SAU nó sẵn sàng
+slot lúc trigger spawn vẫn bị drop
+```
+
+#### 3.16.3. Quota unplanned
+
+Quota tính một lần khi `Run()` start:
+
+```text
+remainingUnplannedVUs = maxVUs - preAllocatedVUs (tại t=0 của scenario)
+```
+
+Mỗi lần fire signal vào `makeUnplannedVUCh`:
+
+```text
+remainingUnplannedVUs--
+```
+
+Khi cạn:
+
+```text
+remainingUnplannedVUs == 0
+=> không signal nữa, log "Insufficient VUs, reached N active VUs and cannot initialize more" 1 lần
+=> các slot drop tiếp theo chỉ tăng dropped_iterations, không trigger gì
+```
+
+Quota KHÔNG hồi phục:
+
+```text
+- VU đã unplanned spawn không "trả lại quota" khi finish iter
+- VU đó tiếp tục là worker trong pool đến hết scenario
+- pool max size = preAllocatedVUs + (số đã spawn) <= maxVUs
+```
+
+#### 3.16.4. Race condition của signal
+
+Đọc lại bước (E):
+
+```go
+select {
+case makeUnplannedVUCh <- struct{}{}:
+    remainingUnplannedVUs--
+default:                                  // already a pending signal
+}
+```
+
+`makeUnplannedVUCh` là unbuffered channel. Nếu background goroutine
+đang init VU mới, signal kế tiếp sẽ rơi vào nhánh `default` và bỏ qua:
+
+```text
+- không tăng counter remainingUnplannedVUs (vẫn đếm như cũ)
+- không trigger spawn thêm (vì đã có 1 spawn đang in-flight)
+- mục đích: tránh spam spawn 100 VU cùng lúc khi 100 slot drop liên tiếp
+```
+
+Hệ quả thực tế:
+
+```text
+nếu rate đột ngột spike và pool thiếu nhiều VU:
+  - slot 1 drop, signal spawn VU#1 (background goroutine bắt đầu init)
+  - slot 2 drop, signal vào nhánh default (đã có spawn pending)
+  - slot 3 drop, signal vào nhánh default
+  - ...
+  - sau khi VU#1 init xong và vào pool, vòng lặp sẵn sàng nhận signal mới
+  - slot N drop tiếp theo signal vào kênh, spawn VU#2
+
+=> spawn rate giới hạn bởi tốc độ init JS context, không phải tốc độ drop
+=> đây là lý do khi peak quá đột ngột, drop vẫn xảy ra dù còn quota unplanned
+```
+
+#### 3.16.5. Đếm `dropped_iterations`
+
+Metric đếm:
+
+```text
+- mỗi slot không match được VU rảnh tại thời điểm nó fire = +1
+- không retry slot cũ
+- không đếm lùi
+```
+
+Đọc summary:
+
+```text
+dropped_iterations....: N  X/s
+```
+
+`X/s` là tốc độ drop trung bình tính trên `summary_runtime_base`.
+Nó là **rate trung bình của cả run**, không phải tại 1 thời điểm cụ thể.
+
+Để biết drop tập trung ở đoạn nào, cần dùng:
+
+```text
+- output xuất ra time series (csv, prometheus, ...)
+- xem dropped_iterations tích lũy theo thời gian
+- so với rate(t) của stages để định vị đoạn quá tải
+```
+
+#### 3.16.6. Tổng hợp 4 case khi 1 slot fire
+
+| Case | Pool có VU rảnh? | Còn quota unplanned? | Kết quả |
+| --- | --- | --- | --- |
+| 1 | có | (không quan trọng) | iter chạy, không drop |
+| 2 | không | có | drop +1, signal spawn unplanned (nếu chưa pending) |
+| 3 | không | không | drop +1, log warning 1 lần |
+| 4 | không | có, nhưng spawn pending | drop +1, không signal mới |
+
+### 3.17. `preAllocatedVUs` vs `maxVUs`: rate đạt đỉnh ở đâu?
+
+`constant-arrival-rate` chỉ có 1 con số rate. Còn `ramping-arrival-rate`
+có rate(t) thay đổi, nên câu hỏi sizing phức tạp hơn.
+
+#### 3.17.1. Quy tắc nhanh
+
+```text
+preAllocatedVUs >= ceil(lambda_peak * W_effective)
+  => mọi slot ở peak đều có VU rảnh (no drop)
+
+preAllocatedVUs < ceil(lambda_peak * W_effective)
+  nhưng maxVUs >= ceil(lambda_peak * W_effective)
+  => slot ban đầu ở peak có thể drop, sau đó unplanned VU spawn dần
+  => có drop tạm thời, ổn định lại sau
+
+maxVUs < ceil(lambda_peak * W_effective)
+  => peak luôn drop, không cứu được
+```
+
+Trong đó:
+
+```text
+lambda_peak = max(startRate, mọi stage.target) / timeUnit_seconds
+W_effective ~= iteration_duration của 1 iter điển hình
+```
+
+#### 3.17.2. Rate đạt đỉnh ở đâu trong stages?
+
+Vì rate ramp tuyến tính giữa các stage (mục 3.8), rate cao nhất chỉ có thể
+xuất hiện tại các "khớp nối" giữa stage:
+
+```text
+lambda_peak = max(
+  startRate,                  (đầu stage 1)
+  stage[0].target,            (cuối stage 1 = đầu stage 2)
+  stage[1].target,            (cuối stage 2 = đầu stage 3)
+  ...
+  stage[N-1].target           (cuối stage N)
+) / timeUnit_seconds
+```
+
+Đọc từ `ramping_arrival_rate.go:76-79`:
+
+```go
+maxUnscaledRate := getStagesUnscaledMaxTarget(varc.StartRate.Int64, varc.Stages)
+maxArrRatePerSec, _ := getArrivalRatePerSec(
+    getScaledArrivalRate(et.Segment, maxUnscaledRate, varc.TimeUnit.TimeDuration()),
+).Float64()
+```
+
+Và `helpers.go:26-34`:
+
+```go
+func getStagesUnscaledMaxTarget(unscaledStartValue int64, stages []Stage) int64 {
+    result := unscaledStartValue
+    for _, s := range stages {
+        if s.Target.Int64 > result {
+            result = s.Target.Int64
+        }
+    }
+    return result
+}
+```
+
+Function này lấy `max(startRate, mọi stage.target)`. Đây chính là `lambda_peak`
+(trước khi chia cho `timeUnit`).
+
+#### 3.17.3. Ví dụ sizing
+
+Config 1: peak ở giữa, đủ VU
+
+```js
+startRate: 2,
+timeUnit: "1s",
+stages: [
+  { duration: "2s", target: 8 },   // peak = 8/s ở t=2s
+  { duration: "2s", target: 8 },   // hold 8/s
+  { duration: "2s", target: 0 },   // ramp xuống
+],
+preAllocatedVUs: 6,
+maxVUs: 6,
+```
+
+Với `W_effective = 0.5s`:
+
+```text
+required_vus_min_peak = ceil(8 * 0.5) = 4 VUs
+preAllocatedVUs = 6 >= 4 -> đủ, không drop
+```
+
+Config 2: peak ngắn, dùng unplanned
+
+```js
+startRate: 2,
+timeUnit: "1s",
+stages: [
+  { duration: "1s", target: 20 },  // peak ngắn 20/s ở t=1s
+  { duration: "5s", target: 4 },   // ramp xuống ổn định 4/s
+],
+preAllocatedVUs: 4,
+maxVUs: 12,
+```
+
+Với `W_effective = 0.5s`:
+
+```text
+required_vus_min_peak = ceil(20 * 0.5) = 10 VUs
+preAllocatedVUs = 4 < 10 -> drop ban đầu
+maxVUs = 12 >= 10 -> sau khi spawn 6+ VU sẽ ổn
+
+NHƯNG: spike 1s là rất ngắn, init unplanned VU mất ~50ms-200ms
+=> drop rate ban đầu cao, đến khi pool đủ VU thì spike đã qua
+=> dropped_iterations sẽ thấy số đáng kể
+```
+
+Config 3: maxVUs không đủ
+
+```js
+startRate: 2,
+timeUnit: "1s",
+stages: [
+  { duration: "5s", target: 50 },  // peak 50/s
+],
+preAllocatedVUs: 4,
+maxVUs: 8,
+```
+
+Với `W_effective = 0.5s`:
+
+```text
+required_vus_min_peak = ceil(50 * 0.5) = 25 VUs
+maxVUs = 8 << 25 -> peak luôn drop nhiều
+log: "Insufficient VUs, reached 8 active VUs and cannot initialize more"
+```
+
+#### 3.17.4. Khi nào dùng unplanned an toàn?
+
+```text
+- peak duration đủ DÀI để spawner kịp tạo VU mới
+  ví dụ peak hold > 1s và rate ramp lên dần dần
+- W_effective không quá ngắn
+  iter rất ngắn -> rate cần rất nhiều VU -> spawner không kịp
+- không cần baseline drop = 0
+  chấp nhận một ít drop ban đầu, ổn định sau
+```
+
+Khi nào nên ép `preAllocatedVUs = maxVUs` từ đầu:
+
+```text
+- peak ngắn (vài giây trở xuống)
+- không chịu được drop tại peak
+- W_effective biến động lớn (DB chậm bất chợt) -> sizing tail không spawner
+```
+
+#### 3.17.5. Hệ quả cho test report
+
+```text
+- maxVUs trong header = "trần planned + unplanned" của executor
+  k6 init đủ maxVUs instance ngay từ init phase (giống ramping-vus)
+- vus_max trong summary = số VU đã initialized lúc sample
+  ban đầu = preAllocatedVUs, có thể tăng lên đến maxVUs khi unplanned spawn
+- vus trong summary = số VU đang chạy iter (active)
+  dao động theo rate(t) và iter_duration
+```
+
+Đừng đọc nhầm `vus_max` thành `maxVUs`. Chúng có thể trùng lúc kết thúc nếu
+đã spawn hết quota, nhưng `vus_max` là Gauge sample, có thể nhỏ hơn nếu chưa
+spawn hết.
+
+### 3.18. `gracefulStop` ở cuối scenario `ramping-arrival-rate`
+
+`ramping-arrival-rate` có `gracefulStop` (default 30s) nhưng KHÔNG có
+`gracefulRampDown` như `ramping-vus`. Lý do là rate giảm không yêu cầu
+"trả VU" trong runtime - VU đang active vẫn ngồi đợi slot kế tiếp.
+
+#### 3.18.1. Đọc rất chậm 2 context
+
+`Run()` (`ramping_arrival_rate.go:338`):
+
+```go
+startTime, maxDurationCtx, regDurationCtx, cancel := getDurationContexts(
+    parentCtx, duration, gracefulStop,
+)
+```
+
+Trong đó `duration = sumStagesDuration(varr.config.Stages)` (`ramping_arrival_rate.go:317`).
+
+Đọc `helpers.go:141-153`:
+
+```text
+maxEndTime = startTime + regular_duration + gracefulStop
+maxDurationCtx hết tại maxEndTime          (cancel mọi iter đang chạy)
+regDurationCtx hết tại startTime + regular_duration  (chặn slot mới)
+```
+
+Hai context này dùng ở các nơi khác nhau:
+
+```text
+regDurationCtx -> chặn loop trong Run() đẩy slot mới vào pool
+                 (ramping_arrival_rate.go:447, 456-460, 468-470)
+maxDurationCtx -> truyền cho activate VU làm context của iter
+                 (ramping_arrival_rate.go:411)
+                 hết -> iter đang chạy bị cancel -> interrupted
+```
+
+#### 3.18.2. Chuỗi sự kiện cuối scenario
+
+Giả sử:
+
+```text
+total_regular_duration = 6s
+gracefulStop = 2s
+W_effective = 0.5s
+
+stages cuối: duration=2s, target=0 (ramp xuống 0/s)
+```
+
+Timeline:
+
+```text
+t=4s    stage cuối bắt đầu, rate ramp từ X xuống 0
+t=5s    rate đang ở giữa giai đoạn ramp, slot vẫn fire
+t=5.9s  slot cuối có thể fire (rate gần 0 nhưng diện tích vẫn tích lũy)
+t=6.0s  regular_duration hết
+        -> regDurationCtx cancel
+        -> Run() loop "for nextTime := range ch" thoát qua case <-regDurationDone
+        -> không nhận slot mới
+        -> không emit dropped_iterations cho slot bị bỏ qua
+t=6.0s  trackProgress() phát hiện regDurationCtx done
+        -> log "Regular duration is done, waiting for iterations to gracefully finish"
+        -> progress bar status = pb.Stopping
+t=6.0s..t=8.0s
+        iter đang chạy được phép finish
+        VU rảnh sau khi finish vẫn còn chờ, nhưng kênh p.iterations
+        không có ai push vào nữa (Run() loop đã thoát)
+t=8.0s  maxDurationCtx hết
+        cancel iter đang dở -> +1 interrupted iteration cho mỗi iter chưa xong
+        defer trong Run() chạy:
+          1) <-returnedVUs   (background spawner đã đóng channel)
+          2) vusPool.Close() (đóng kênh p.iterations, worker thoát loop)
+          3) cancel()
+          4) activeVUsWg.Wait()
+```
+
+#### 3.18.3. So với `ramping-vus`
+
+`ramping-vus` có 2 grace:
+
+```text
+gracefulRampDown : grace giữa timeline khi giảm VU
+                   (mỗi lần stage giảm số VU active)
+gracefulStop     : grace cuối scenario
+```
+
+`ramping-arrival-rate` chỉ có 1 grace:
+
+```text
+gracefulStop     : grace cuối scenario
+                   không có gracefulRampDown vì rate ramp xuống không tạo
+                   "scale-down VU active" theo timeline
+```
+
+Điều này hợp lý vì:
+
+```text
+- rate xuống 0 không có nghĩa là VU phải được scale down
+- VU đã active vẫn đang chạy iter cuối, sẽ tự rảnh khi xong
+- pool không "trả về quota" trong runtime
+- chỉ end-of-scenario grace mới tồn tại
+```
+
+#### 3.18.4. Tác động của `gracefulStop` lên header
+
+Header k6 in:
+
+```text
+1 scenario, M max VUs, X max duration (incl. graceful stop)
+```
+
+Trong đó `X = total_regular_duration + gracefulStop`. Nếu set `gracefulStop=0`:
+
+```text
+X = total_regular_duration
+=> mọi iter đang dở tại t=regular_duration sẽ bị cancel ngay
+=> interrupted iterations có thể tăng đột biến
+```
+
+Default `30s` thường thừa so với 1 iter điển hình, nên trong môi trường demo:
+
+```text
+- iter ngắn (vài trăm ms): không bao giờ bind grace, scenario kết thúc đúng giờ
+- iter dài (>30s): cần tăng gracefulStop hoặc chấp nhận interrupted
+```
+
+### 3.19. Vì sao không spawn hết `maxVUs` ngay từ đầu?
+
+Tương tự câu hỏi trong `ramping-vus`: init phase đã init đủ `maxVUs` instance
+vào pool rồi. Vậy sao không activate hết tại t=0 cho gọn?
+
+Trả lời ngắn:
+
+```text
+init phase init đủ maxVUs instance VÀO POOL
+nhưng "sẵn sàng dùng" không có nghĩa là "phải dùng ngay"
+
+ramping-arrival-rate là open model: rate(t) điều khiển nhịp start
+không phải concurrency cố định
+=> chỉ activate đúng số VU = preAllocatedVUs ở t=0
+=> phần còn lại ngồi sẵn trong pool, được kéo ra khi unplanned cần
+```
+
+#### 3.19.1. Đọc từ core
+
+`Run()` chỉ activate `preAllocatedVUs` ở t=0 (`ramping_arrival_rate.go:438-445`):
+
+```go
+// Get the pre-allocated VUs in the local buffer
+for range preAllocatedVUs {
+    initVU, err := varr.executionState.GetPlannedVU(varr.logger, false)
+    if err != nil {
+        return err
+    }
+    activateVU(initVU)
+}
+```
+
+Background spawner activate thêm khi cần (`ramping_arrival_rate.go:422-436`):
+
+```go
+go func() {
+    defer close(returnedVUs)
+
+    for range makeUnplannedVUCh {
+        ...
+        initVU, err := varr.executionState.GetUnplannedVU(maxDurationCtx, varr.logger)
+        ...
+        activateVU(initVU)
+    }
+}()
+```
+
+Tức là core có 2 đường activate:
+
+```text
+1) Đường preallocated: activate đủ preAllocatedVUs ngay t=0
+2) Đường unplanned   : activate thêm khi slot drop và còn quota
+```
+
+#### 3.19.2. Vì sao tách 2 đường?
+
+Lý do tương tự `ramping-vus`:
+
+```text
+- init JS context tốn (parse module, tạo runtime, sandbox, biến module-scope)
+- nếu activate hết maxVUs ngay từ t=0, mọi VU đều có context runtime,
+  tốn RAM mà không dùng (rate thấp ban đầu chỉ cần ít VU)
+- preAllocatedVUs là số VU "chắc chắn cần" -> activate ngay để không lỡ slot
+- unplanned = "chỉ activate khi thiếu" -> tiết kiệm RAM khi rate thấp
+```
+
+So với `constant-arrival-rate`:
+
+```text
+constant-arrival-rate cũng cùng pattern này:
+  - activate đúng preAllocatedVUs ở t=0
+  - unplanned khi cần
+```
+
+Nên không phải đặc thù riêng của `ramping-arrival-rate`. Đặc thù của
+`ramping-arrival-rate` chỉ là rate(t) thay đổi, dẫn đến nhu cầu VU active
+cũng thay đổi theo:
+
+```text
+- đoạn rate thấp: ít VU active đang chạy iter
+- đoạn rate cao: nhiều VU active đang chạy iter
+- pool vẫn giữ ≥ preAllocatedVUs sẵn sàng, không trả về
+```
+
+#### 3.19.3. Khác `ramping-vus` về timing
+
+`ramping-vus` activate VU theo `step_interval = stageDuration / |target - fromVUs|`:
+
+```text
+ramp 1 -> 4 trong 4s -> step_interval = 4/3 ≈ 1.33s
+=> VU thứ 2 activate ở t=1.33s, VU thứ 3 ở t=2.67s, VU thứ 4 ở t=4s
+```
+
+`ramping-arrival-rate` không activate theo timeline. Activate xảy ra:
+
+```text
+- preAllocatedVUs: tất cả tại t=0
+- unplanned: chỉ khi slot drop và còn quota
+  -> timing không đoán trước được, phụ thuộc vào sự kiện thực tế
+```
+
+Hệ quả:
+
+```text
+- với ramping-vus, biết chính xác lúc nào VU thứ N được activate
+- với ramping-arrival-rate, không biết, vì phụ thuộc vào W_effective thực tế
+  và rate(t) tại lúc đó
+```
+
+#### 3.19.4. Kết luận
+
+```text
+"đã có sẵn VU trong pool" != "phải activate hết ngay"
+
+init phase   -> chuẩn bị instance JS context
+preAllocated -> activate ngay từ t=0 (số VU "chắc chắn cần")
+unplanned    -> activate theo nhu cầu thực tế (số VU "có thể cần")
+```
+
+Nếu muốn ép tất cả VU active từ đầu:
+
+```text
+- set preAllocatedVUs = maxVUs
+- không có unplanned, mọi slot drop = "thật sự không đủ VU"
+- dùng cho test cần baseline ổn định, không spike RAM
+```
 
 ## 4. So sánh với constant-arrival-rate
 

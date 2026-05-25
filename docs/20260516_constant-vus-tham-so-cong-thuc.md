@@ -329,6 +329,144 @@ iteration đã start nhưng chưa finish trước duration + gracefulStop
 => interrupted iteration
 ```
 
+### 1.3. VU init phase và closed model
+
+Câu hỏi hay gặp:
+
+```text
+constant-vus có vus = N
+N VU đó được init ở phase nào?
+có khái niệm unplanned VUs như arrival-rate không?
+```
+
+Trả lời ngắn:
+
+```text
+N VU được init ở init phase, không phải runtime
+constant-vus không có khái niệm unplanned VUs
+closed model nói chung không có unplanned VUs
+N VU đó được activate đồng loạt tại t=0 (khác ramping-vus)
+```
+
+Đi vào chi tiết core:
+
+- **Init phase init đủ `vus` instance một lần**:
+
+  Trước khi `Run()` chạy, k6 gọi `GetExecutionRequirements()` để biết tổng số VU
+  lớn nhất mà execution plan có thể cần. Với `constant-vus` (`constant_vus.go:87-98`):
+
+  ```go
+  func (clvc ConstantVUsConfig) GetExecutionRequirements(et *lib.ExecutionTuple) []lib.ExecutionStep {
+      return []lib.ExecutionStep{
+          {
+              TimeOffset: 0,
+              PlannedVUs: uint64(clvc.GetVUs(et)),
+          },
+          {
+              TimeOffset: clvc.Duration.TimeDuration() + clvc.GracefulStop.TimeDuration(),
+              PlannedVUs: 0,
+          },
+      }
+  }
+  ```
+
+  Đây là execution plan đơn giản nhất trong các executor:
+
+  ```text
+  t = 0                       PlannedVUs = vus
+  t = duration + gracefulStop PlannedVUs = 0
+  ```
+
+  Không có step trung gian, không có ramp. k6 init đúng `vus` VU instance ở init
+  phase: chạy file-level code (import, biến module-scope, `export const options`),
+  tạo JS context cho từng VU, đẩy hết vào pool của `ExecutionState`. Bước này
+  xong **trước** khi scenario bắt đầu chạy.
+
+- **`Run()` lấy đúng `numVUs` instance ra khỏi pool tại t=0**:
+
+  Khác `ramping-vus` (tạo `vuHandle` ở state `stopped` rồi bật/tắt theo timeline),
+  `constant-vus` lấy đủ VU ngay (`constant_vus.go:195-203`):
+
+  ```go
+  for range numVUs {
+      initVU, err := clv.executionState.GetPlannedVU(clv.logger, true)
+      if err != nil {
+          cancel()
+          return err
+      }
+      activeVUs.Add(1)
+      go handleVU(initVU)
+  }
+  ```
+
+  `GetPlannedVU(..., true)` lấy 1 instance đã được init từ pool, đồng thời tăng
+  `activeVUs` counter (metric `vus`). `handleVU` `Activate()` VU rồi vào loop.
+
+- **Không có scale-down giữa duration**:
+
+  Khác `ramping-vus` có 2 timeline (`rawSteps`/`gracefulSteps`) và state machine
+  `vuHandle` (start/gracefulStop/hardStop), `constant-vus` không cần `vuHandle`.
+  `constant_vus.go` không import `vu_handle.go`, không có chuyển state runtime.
+
+  N VU active xuyên suốt từ `t=0` đến `t=duration`. Hết duration thì cả N VU
+  cùng nhận tín hiệu `regDurationDone` qua `regDurationCtx` đóng, dừng start
+  iteration mới.
+
+- **So sánh nhanh với các executor khác**:
+
+  | Khái niệm | `constant-vus` | `ramping-vus` | `*-arrival-rate` (open) |
+  | --- | --- | --- | --- |
+  | Số VU init ở init phase | đúng `vus` | đúng `maxVUs` (= max planned) | `preAllocatedVUs` |
+  | Có thể init thêm runtime? | không | không | có, tới `maxVUs - preAllocatedVUs` |
+  | Khái niệm unplanned VU | không có | không có | có |
+  | VU goroutine model | direct goroutine cho từng VU | `vuHandle` + state machine | `vuHandle` + state machine |
+  | Có scale up/down không? | không | có (qua stages) | không (về số VU active runtime) |
+
+  Grep core để tự kiểm tra:
+
+  ```text
+  unplannedVUs / preAllocatedVUs chỉ xuất hiện ở:
+    constant_arrival_rate.go
+    ramping_arrival_rate.go
+
+  Hoàn toàn không có ở:
+    constant_vus.go
+    ramping_vus.go
+    per_vu_iterations.go
+    shared_iterations.go
+  ```
+
+- **Đặc trưng của `constant-vus`: số VU pin cố định suốt scenario**:
+
+  Đây là điểm phân biệt rõ nhất:
+
+  ```text
+  constant-vus     : N VU active từ t=0 tới t=duration, không đổi
+  ramping-vus      : số VU thay đổi theo stages
+  per-vu-iterations: N VU active đến khi mỗi VU chạy đủ iterations
+  shared-iterations: N VU active đến khi pool tổng hết iteration
+  ```
+
+  Vì pin cố định, metric `vus` của `constant-vus` thường thấy:
+
+  ```text
+  vus..................: N   min=N      max=N
+  vus_max..............: N   min=N      max=N
+  ```
+
+  Nếu thấy `min < N` ở giữa run, tức là có VU đã ReturnVU sớm (do test bị abort,
+  iteration bị interrupt từ ngoài, hoặc bug). Trong run sạch, `min = max = N`
+  trong toàn bộ regular phase.
+
+Tóm lại:
+
+```text
+constant-vus VU init = pre-init đủ N instance ở init phase
+runtime chỉ activate, không bao giờ init thêm
+không có unplanned VUs, không có scale up/down
+N VU active xuyên suốt duration
+```
+
 ## 2. Bảng tham số tiếng Việt
 
 | Tên trong k6 / ký hiệu | Dịch tiếng Việt | Lấy ở đâu | Cách tính / quy đổi | Ý nghĩa |
@@ -893,13 +1031,983 @@ top-level shortcut:
   iterations + duration -> shared-iterations, duration thành maxDuration
 ```
 
-## 4. Demo loop theo duration
+## 3.11. Vì sao không có ramp trong `constant-vus`
 
-File:
+`constant-vus` không có concept "stage" hay "ramp". Khi bạn khai báo:
+
+```js
+{
+  executor: "constant-vus",
+  vus: 4,
+  duration: "10s",
+}
+```
+
+`constant-vus` hiểu là:
 
 ```text
-examples/constant_vus_loop_demo.js
+N VU active liên tục từ t=0 tới t=duration
+không có giai đoạn warm-up
+không có giai đoạn cool-down
+không có thay đổi concurrency
 ```
+
+### 3.11.1. Đọc từ core: chỉ có 2 step
+
+`GetExecutionRequirements()` (`constant_vus.go:87-98`):
+
+```go
+return []lib.ExecutionStep{
+    {TimeOffset: 0, PlannedVUs: uint64(clvc.GetVUs(et))},
+    {TimeOffset: clvc.Duration.TimeDuration() + clvc.GracefulStop.TimeDuration(), PlannedVUs: 0},
+}
+```
+
+Đây là 1 trong những execution plan đơn giản nhất trong toàn bộ k6:
+
+```text
+step 0: t=0,                  plannedVUs = vus
+step 1: t=duration+grace,    plannedVUs = 0
+```
+
+Không có step ramp up, không có step ramp down. Số VU "nhảy" từ 0 lên `vus`
+ngay tại `t=0`, rồi giữ nguyên đến `t=duration`, rồi `t=duration+gracefulStop`
+mới về 0.
+
+So sánh với `ramping-vus` (cùng config kích thước):
+
+```js
+// ramping-vus tương đương về tổng số VU đỉnh
+{
+  executor: "ramping-vus",
+  startVUs: 0,
+  stages: [
+    { duration: "0s", target: 4 },   // jump 0 -> 4 ngay
+    { duration: "10s", target: 4 },  // hold 4 VU
+  ],
+}
+```
+
+`ramping-vus` ở config trên có timeline phẳng tương tự constant-vus, nhưng vẫn
+là `ramping-vus` (có vuHandle, có state machine, có gracefulSteps). Nói chung,
+nếu shape là "N VU phẳng suốt X giây", `constant-vus` là cách gọn nhất.
+
+### 3.11.2. Khi nào bạn KHÔNG nên ép constant-vus thành "ramping"
+
+Nếu thấy mình đang viết:
+
+```js
+// hold 4 VU trong 10s
+{
+  executor: "constant-vus",
+  vus: 4,
+  duration: "10s",
+}
+
+// rồi trong code dùng global state để "fake ramp"
+let activeFlag = false;
+export default function () {
+  if (Date.now() - startedAt < 5000 && __VU > 2) {
+    return;  // VU 3, 4 không làm gì trong 5s đầu
+  }
+  // ...
+}
+```
+
+Thì đây là dấu hiệu sai executor. `constant-vus` không phù hợp khi muốn thay đổi
+concurrency. Đổi sang `ramping-vus`:
+
+```js
+{
+  executor: "ramping-vus",
+  startVUs: 2,
+  stages: [
+    { duration: "5s", target: 2 },  // hold 2 VU
+    { duration: "0s", target: 4 },  // jump lên 4
+    { duration: "5s", target: 4 },  // hold 4 VU
+  ],
+}
+```
+
+Tổng quát:
+
+```text
+muốn fixed N VU             -> constant-vus
+muốn N VU thay đổi theo time -> ramping-vus
+muốn fixed iter rate         -> constant-arrival-rate
+muốn iter rate thay đổi      -> ramping-arrival-rate
+muốn quota iter mỗi VU       -> per-vu-iterations
+muốn quota tổng iter         -> shared-iterations
+```
+
+## 3.12. VU activate xong start iteration ngay, không đợi VU khác
+
+Câu hỏi: với `vus = 4`, `duration = 10s`, 4 VU đó start iteration đồng loạt
+hay tuần tự?
+
+Trả lời ngắn:
+
+```text
+4 VU start iteration song song NGAY tại t=0
+không VU nào đợi VU khác
+mỗi VU một dòng đời độc lập (đặc trưng của closed model)
+```
+
+### 3.12.1. Đọc từ core
+
+`Run()` (`constant_vus.go:195-203`):
+
+```go
+for range numVUs {
+    initVU, err := clv.executionState.GetPlannedVU(clv.logger, true)
+    if err != nil {
+        cancel()
+        return err
+    }
+    activeVUs.Add(1)
+    go handleVU(initVU)
+}
+```
+
+Vòng `for range numVUs` chạy đồng bộ trong goroutine của `Run()`, nhưng mỗi
+iteration chỉ:
+
+1. `GetPlannedVU()` — lấy 1 instance từ pool (đã init sẵn) — O(1).
+2. `go handleVU(initVU)` — fire-and-forget goroutine cho VU đó.
+
+Cả 2 thao tác này gần như tức thì. Khoảng cách thời gian giữa VU 1 và VU N
+chỉ vài microsecond cho channel signal + goroutine scheduling.
+
+`handleVU` (`constant_vus.go:178-193`) làm:
+
+```go
+handleVU := func(initVU lib.InitializedVU) {
+    ctx, cancel := context.WithCancel(maxDurationCtx)
+    defer cancel()
+
+    activeVU := initVU.Activate(
+        getVUActivationParams(ctx, clv.config.BaseConfig, returnVU, clv.nextIterationCounters))
+
+    for {
+        select {
+        case <-regDurationDone:
+            return // don't make more iterations
+        default: // continue looping
+        }
+        runIteration(maxDurationCtx, activeVU)
+    }
+}
+```
+
+Sau khi `Activate()` xong, VU vào ngay `for { ... runIteration(...) }`.
+Không có rendez-vous nào cho VU khác, không có barrier sync.
+
+### 3.12.2. Khác gì với `ramping-vus`?
+
+`ramping-vus` dùng `vuHandle` với state machine (`vu_handle.go:14-22`):
+
+```go
+const (
+    stopped stateType = iota
+    starting
+    running
+    toGracefulStop
+    toHardStop
+)
+```
+
+VU `ramping-vus` chỉ chạy iteration sau khi `start()` chuyển state qua
+`starting` rồi `running` theo timeline `rawSteps`.
+
+`constant-vus` đơn giản hơn: không có `vuHandle`, không có state machine.
+Goroutine `handleVU` chạy thẳng từ `Activate()` vào `runIteration()`, không
+qua trung gian.
+
+Khác biệt cụ thể:
+
+```text
+ramping-vus:
+  init phase: tạo maxVUs vuHandle ở state stopped
+  runtime:    timeline gọi vuHandle.start() -> chuyển state -> goroutine runLoopsIfPossible
+              chờ canStartIter, mới vào runIter
+
+constant-vus:
+  init phase: chỉ init VU instance vào pool
+  runtime:    Run() lấy đúng numVUs ra khỏi pool, mỗi VU 1 goroutine, vào loop ngay
+```
+
+Vì không qua state machine, `constant-vus` có overhead thấp hơn `ramping-vus`
+ở mặt activation.
+
+### 3.12.3. Verify từ log thật
+
+Demo `constant_vus_loop_demo.js` (`vus=2`, `duration=3s`, `sleep(0.7)`),
+log từ summary:
+
+```text
+t=0.0s  VU1 iter 0 start, VU2 iter 0 start
+t=0.7s  VU1 iter 1 start, VU2 iter 1 start
+t=1.4s  VU1 iter 2 start, VU2 iter 2 start
+```
+
+VU 1 và VU 2 đều có `__ITER=0` cùng tại `t=0`. Hoàn toàn song song. Nếu phải
+"đợi đủ N VU rồi mới đồng loạt start" hoặc "VU 2 đợi VU 1 xong iter#0 mới start"
+thì pattern log sẽ khác — không phải vậy.
+
+### 3.12.4. Throughput từ giây đầu tiên
+
+Vì VU không đợi nhau:
+
+```text
+peak_iteration_rate (từ t=0) ~= vus / effective_iteration_time
+```
+
+Iteration được sinh đều ngay từ giây đầu, không có giai đoạn warm-up
+"throughput tăng dần". Đây là điểm khác `ramping-vus`:
+
+```text
+ramping-vus với startVUs=1, ramp 1->4 trong 4s:
+  t=0s  rate ~= 1/iter_time
+  t=1s  rate ~= 2/iter_time
+  t=2s  rate ~= 3/iter_time
+  t=3s  rate ~= 4/iter_time
+  -> rate tăng dần
+
+constant-vus với vus=4:
+  t=0s  rate ~= 4/iter_time
+  t=1s  rate ~= 4/iter_time
+  t=10s rate ~= 4/iter_time
+  -> rate phẳng
+```
+
+### 3.12.5. Điểm dễ nhầm
+
+```text
+SAI : "constant-vus warm-up từ 0 lên N rồi mới start"
+ĐÚNG: "constant-vus pin N VU active ngay từ t=0"
+
+SAI : "iteration đồng bộ giữa các VU"
+ĐÚNG: "mỗi VU loop riêng, __ITER mỗi VU đếm độc lập"
+
+SAI : "phải đợi VU 1 xong rồi VU 2 mới chạy"
+ĐÚNG: "N VU chạy song song, độc lập"
+```
+
+## 3.13. Bước nhảy của iteration trong 1 VU
+
+Câu hỏi: trong 1 VU, iteration kế tiếp bắt đầu khi nào?
+
+Trả lời ngắn:
+
+```text
+iter#(k+1) bắt đầu ngay khi iter#k kết thúc
+khoảng cách giữa 2 iteration kế tiếp = effective_iteration_time
+                                     = max(JS_function_time, minIterationDuration)
+```
+
+### 3.13.1. Đọc từ core
+
+`handleVU` (`constant_vus.go:185-192`):
+
+```go
+for {
+    select {
+    case <-regDurationDone:
+        return // don't make more iterations
+    default: // continue looping
+    }
+    runIteration(maxDurationCtx, activeVU)
+}
+```
+
+Vòng `for` không có `sleep`, không có `time.Sleep`. Sau khi `runIteration()`
+trả về, vòng lặp check `regDurationDone` (1 channel select) rồi vào `runIteration()`
+tiếp. Khoảng nghỉ giữa 2 iteration thực tế = chi phí channel select + 1 hàm
+gọi, gần như 0.
+
+Cho nên thời gian giữa start của iter#k và iter#(k+1) chính là thời gian
+`runIteration()` mất, mà cái đó chính là `effective_iteration_time`.
+
+### 3.13.2. Công thức
+
+Trong 1 VU:
+
+```text
+t_start[k] = thời điểm bắt đầu iter#k
+t_start[k+1] = t_start[k] + t[k]
+
+trong đó:
+  t[k] = thời gian chiếm VU của iter#k
+       = max(JS_function_time[k], minIterationDuration)
+```
+
+Nếu các iteration đều nhau (`t[k] = t` cho mọi k):
+
+```text
+iteration_count_per_vu = floor(duration / t) hoặc ceil(duration / t)
+                       (xem 3.2 và đặc biệt 3.13.3)
+per_vu_rate = 1 / t
+```
+
+### 3.13.3. Vì sao `ceil` không phải `floor`?
+
+Vì VU có thể start iteration cuối ngay trước khi `duration` hết, rồi finish
+trong `gracefulStop`:
+
+```text
+duration = 3s, t = 0.7s
+
+iter starts in 1 VU:
+  iter#0: t=0.0s, end=0.7s
+  iter#1: t=0.7s, end=1.4s
+  iter#2: t=1.4s, end=2.1s
+  iter#3: t=2.1s, end=2.8s
+  iter#4: t=2.8s, end=3.5s   <- start trước duration=3s, finish trong grace
+
+iter started before duration: 5 = ceil(3 / 0.7) = ceil(4.28)
+iter would finish strictly within duration: 4 = floor(3 / 0.7)
+```
+
+Cho nên `ceil(D / t)` đúng khi `gracefulStop` đủ dài để iteration cuối finish.
+
+### 3.13.4. Verify từ demo
+
+Demo `constant_vus_loop_demo.js`:
+
+```text
+vus = 2
+duration = 3s
+gracefulStop = 2s
+sleep mỗi iter = 0.7s
+```
+
+Log:
+
+```text
+t=0.0s  VU1 iter 0 start, VU2 iter 0 start
+t=0.7s  VU1 iter 1 start, VU2 iter 1 start
+t=1.4s  VU1 iter 2 start, VU2 iter 2 start
+t=2.1s  VU1 iter 3 start, VU2 iter 3 start
+t=2.8s  VU1 iter 4 start, VU2 iter 4 start
+t=3.5s  iter 4 finish trong gracefulStop
+```
+
+Khoảng cách giữa các start trong 1 VU đều đúng `0.7s`:
+
+```text
+iter#0 -> iter#1: 0.7s
+iter#1 -> iter#2: 0.7s
+iter#2 -> iter#3: 0.7s
+iter#3 -> iter#4: 0.7s
+```
+
+Tổng iteration trong 1 VU: 5 = `ceil(3 / 0.7) = ceil(4.28) = 5`.
+Tổng cả 2 VU: 10. Khớp summary `iterations: 10`.
+
+### 3.13.5. Tác động của `minIterationDuration`
+
+Nếu code:
+
+```js
+export const options = {
+  minIterationDuration: "2s",
+  scenarios: {
+    c: { executor: "constant-vus", vus: 2, duration: "10s" },
+  },
+};
+
+export default function () {
+  // function chạy 0.5s
+  http.get("https://example.com");  // ~250ms
+  sleep(0.25);
+}
+```
+
+thì:
+
+```text
+JS function time = 0.5s
+minIterationDuration = 2s
+effective_iteration_time = max(0.5, 2.0) = 2.0s
+
+iteration count per VU = ceil(10 / 2) = 5
+iterations_per_vu = 5
+total = 2 * 5 = 10
+```
+
+Lưu ý: `iteration_duration` summary metric vẫn báo `~0.5s` (chỉ tính JS function).
+Phần sleep bù 1.5s không nằm trong metric, nhưng vẫn chiếm VU. Cho nên capacity
+sizing phải dùng `effective_iteration_time = 2s`, không phải `iteration_duration = 0.5s`.
+
+## 3.14. `gracefulStop` chi tiết với hai trục độc lập
+
+`constant-vus` không có `gracefulRampDown` (vì không có ramp), chỉ có
+`gracefulStop` áp ở cuối scenario.
+
+Tóm tắt 1 dòng:
+
+```text
+gracefulStop : "khi duration hết, iteration đang chạy được phép tiếp tục
+                thêm tối đa N giây trước khi bị cancel"
+```
+
+Default value:
+
+```text
+gracefulStop = 30s (lấy từ BaseConfig)
+```
+
+Đọc từ `base_config.go:40-46`. Là `null.Duration`, có thể set 0s
+(no grace, hard-stop ngay) hoặc tăng lên tùy ý.
+
+### 3.14.1. Trước khi đọc tiếp: hai trục độc lập
+
+Khi đọc các timeline ví dụ bên dưới, phải tách rõ 2 trục thời gian khác nhau:
+
+```text
+Trục 1 — SCENARIO timeline (do CONFIG quyết định):
+  duration kéo dài liên tục từ t=0 tới t=D
+  gracefulStop kéo từ t=D tới t=D+G
+  sau t=D+G mọi iteration đều bị hard-stop
+
+Trục 2 — VU iteration timeline (do CODE quyết định):
+  iter_duration = thời gian default function chạy xong (sleep, http, ...)
+  với sleep(0.7): iter#0 = t=0..0.7, iter#1 = t=0.7..1.4, ...
+
+iter#N của VU = iteration thứ N của VU đó (counter __ITER riêng từng VU)
+iter#0 = iteration đầu tiên ngay khi VU activate
+```
+
+Hai trục **không đồng bộ** với nhau:
+
+```text
+- VU finish iter#k ở t=k*0.7 -> KHÔNG phải scenario hết
+  (duration vẫn đang chạy, mới hết k*0.7/D)
+  VU chỉ đơn giản vào iter#(k+1) ngay lập tức
+
+- duration hết ở t=D -> KHÔNG cắt iter đang chạy
+  (lúc này VU có thể đang ở giữa iter#k, mới chạy 1 phần)
+  VU tiếp tục iter#k cho tới khi xong, hoặc grace hết
+
+- duration chỉ điều khiển "có start iter mới được không"
+  không can thiệp vào iter đang chạy của VU
+```
+
+Hình dung 2 trục song song (`vus=2, duration=3s, sleep(0.7)`):
+
+```text
+trục scenario : [-- regular duration (3s) --|-- grace (2s) --]
+                0                            3                5
+
+trục VU=1     : [iter#0|iter#1|iter#2|iter#3|iter#4|]
+                0      0.7    1.4    2.1    2.8    3.5
+
+trục VU=2     : [iter#0|iter#1|iter#2|iter#3|iter#4|]
+                0      0.7    1.4    2.1    2.8    3.5
+```
+
+### 3.14.2. Đọc từ core
+
+`Run()` (`constant_vus.go:131`):
+
+```go
+startTime, maxDurationCtx, regDurationCtx, cancel := getDurationContexts(parentCtx, duration, gracefulStop)
+```
+
+`getDurationContexts()` (`helpers.go:141-153`):
+
+```go
+startTime = time.Now()
+maxEndTime := startTime.Add(regularDuration + gracefulStop)
+
+maxDurationCtx, maxDurationCancel = context.WithDeadline(parentCtx, maxEndTime)
+if gracefulStop == 0 {
+    return startTime, maxDurationCtx, maxDurationCtx, maxDurationCancel
+}
+regDurationCtx, _ = context.WithDeadline(maxDurationCtx, startTime.Add(regularDuration))
+return startTime, maxDurationCtx, regDurationCtx, maxDurationCancel
+```
+
+Hai context được tạo:
+
+```text
+regDurationCtx : deadline = startTime + duration
+                 -> dùng làm trigger "không start iter mới"
+maxDurationCtx : deadline = startTime + duration + gracefulStop
+                 -> dùng làm trigger "cancel iter đang chạy"
+```
+
+Trong `handleVU` (`constant_vus.go:185-192`):
+
+```go
+for {
+    select {
+    case <-regDurationDone:
+        return // don't make more iterations
+    default: // continue looping
+    }
+    runIteration(maxDurationCtx, activeVU)
+}
+```
+
+Logic:
+
+```text
+1) Trước mỗi vòng for, check regDurationDone (= regDurationCtx.Done())
+   - đóng -> return, kết thúc goroutine (VU không start iter mới)
+   - chưa đóng -> vào runIteration
+
+2) runIteration(maxDurationCtx, activeVU) chạy iter
+   - activeVU đã được Activate với context = maxDurationCtx (qua handleVU)
+   - khi maxDurationCtx hết deadline (= start + duration + grace),
+     context bị cancel, iter bị interrupt
+```
+
+Cho nên:
+
+```text
+t = duration         : VU không start iter mới (regDurationCtx done)
+t = duration + grace : iter đang chạy bị cancel (maxDurationCtx done)
+```
+
+### 3.14.3. Ví dụ đầy đủ
+
+Config:
+
+```js
+scenarios: {
+  demo_grace: {
+    executor: "constant-vus",
+    vus: 2,
+    duration: "5s",
+    gracefulStop: "3s",
+  },
+},
+
+// code: mỗi iter sleep 4s
+export default function () { sleep(4); }
+```
+
+Tách 2 trục:
+
+```text
+Trục scenario:
+  regular phase: t=0..5s
+  grace phase:   t=5..8s
+  hard end:      t=8s
+
+Trục VU iter (sleep 4s):
+  iter#0 = t=0..4s
+  iter#1 = t=4..8s (nếu được start)
+  iter#2 = t=8..12s (nếu được start)
+```
+
+Timeline đầy đủ:
+
+```text
+t=0.0s   2 VU activate (đồng loạt từ t=0, không ramp)
+         VU=1, VU=2 vào iter#0 (sẽ đến t=4.0s)
+
+t=4.0s   VU=1, VU=2 finish iter#0
+         check regDurationDone -> CHƯA đóng (5s mới đóng)
+         lập tức vào iter#1 (sẽ đến t=8.0s nếu không bị cắt)
+
+t=5.0s   regDurationDone đóng -> regular phase hết
+         progress bar 100%
+         VU đang ở giữa iter#1 (đã chạy 1s, còn 3s)
+         -> tiếp tục chạy, vì context iter chưa cancel
+         vào pha grace: gracefulStop = 3s
+         maxDurationCtx deadline = 5+3 = 8s
+
+t=8.0s   maxDurationCtx hết deadline (đúng lúc iter#1 vừa xong, race)
+         3 case xảy ra tùy timing:
+         a) iter#1 finish trước cancel -> AddFullIterations(1), clean
+         b) cancel trước finish        -> AddInterruptedIterations(1)
+         c) đúng lúc trùng             -> tùy race condition
+
+t=8.0s+  goroutine handleVU return
+         ReturnVU đã được gọi qua deactivateCallback
+         scenario thật sự kết thúc
+```
+
+Header in:
+
+```text
+* demo_grace: 2 looping VUs for 5s (gracefulStop: 3s)
+8s max duration (incl. graceful stop)
+```
+
+### 3.14.4. Biến thể 1: iter_duration ngắn hơn duration
+
+Code `sleep(0.7)`, `duration=3s`, `gracefulStop=2s` (giống demo loop):
+
+```text
+trục VU: iter#0=0..0.7, iter#1=0.7..1.4, ..., iter#4=2.8..3.5
+
+t=2.8s   VU vào iter#4 (chưa hết duration)
+         check regDurationDone -> CHƯA đóng (3s mới đóng)
+         lập tức vào iter#4
+
+t=3.0s   regDurationDone đóng
+         VU đang ở iter#4 (đã 0.2s, còn 0.5s)
+         tiếp tục iter#4 trong grace
+
+t=3.5s   iter#4 finish (0.5s qua < grace 2s, finish clean)
+         goroutine return
+         tổng: 5 iter/VU * 2 VU = 10 complete, 0 interrupted
+```
+
+Đây là case bình thường, không có interrupted iteration.
+
+### 3.14.5. Biến thể 2: iter_duration dài hơn grace
+
+Code `sleep(10)`, `duration=3s`, `gracefulStop=1s`:
+
+```text
+trục VU: iter#0 = t=0..10s
+
+t=0.0s   VU vào iter#0 (sẽ đến t=10s nếu không bị cắt)
+t=3.0s   regDurationDone đóng
+         VU đang ở iter#0 (đã 3s, còn 7s)
+         tiếp tục iter#0 trong grace
+t=4.0s   maxDurationCtx hết deadline (3+1=4s)
+         VU vẫn còn 6s iter chưa xong
+         -> hard cancel context iter
+         -> AddInterruptedIterations(1)
+         tổng: 0 complete, 1 interrupted (per VU)
+```
+
+Đây chính là case demo `constant_vus_interrupt_demo.js`.
+
+### 3.14.6. Biến thể 3: `gracefulStop = 0s`
+
+Code `sleep(2)`, `duration=3s`, `gracefulStop=0s`:
+
+```text
+trục VU: iter#0=0..2, iter#1=2..4
+
+t=2.0s   VU finish iter#0, vào iter#1 (sẽ đến t=4s)
+t=3.0s   duration hết, gracefulStop=0s
+         -> regDurationCtx và maxDurationCtx có cùng deadline
+         -> cả 2 cùng done tại t=3s
+         -> VU đang ở iter#1 (đã 1s, còn 1s)
+         -> hard cancel ngay, không có grace
+         -> AddInterruptedIterations(1)
+         tổng: 1 complete, 1 interrupted (per VU)
+```
+
+Đọc từ `helpers.go:148-150`:
+
+```go
+if gracefulStop == 0 {
+    return startTime, maxDurationCtx, maxDurationCtx, maxDurationCancel
+}
+```
+
+Khi `gracefulStop = 0s`, `regDurationCtx` và `maxDurationCtx` là **cùng 1 context**.
+Cả 2 timeline trùng nhau, không có pha grace.
+
+## 3.15. Lifecycle VU sau khi hết duration
+
+Câu hỏi: hết `duration`, VU đi đâu? Có bị destroy không? `__ITER` có reset không?
+
+Trả lời ngắn:
+
+```text
+VU sau khi hết duration -> ReturnVU() về pool
+KHÔNG bị destroy
+__ITER counter tiếp tục tăng monotonic, KHÔNG reset
+nhưng vì không có scenario sau dùng VU này nữa, __ITER coi như "đóng băng"
+```
+
+### 3.15.1. Đọc từ core
+
+`Run()` (`constant_vus.go:173-176`):
+
+```go
+returnVU := func(u lib.InitializedVU) {
+    clv.executionState.ReturnVU(u, true)
+    activeVUs.Done()
+}
+```
+
+`returnVU` được truyền vào `getVUActivationParams()` làm `DeactivateCallback`.
+Khi VU goroutine kết thúc (qua `defer cancel()` trong `handleVU`), context cancel
+gây `RunOnce()` trả về, sau đó VU framework gọi `DeactivateCallback` =
+`returnVU`.
+
+`returnVU` làm 2 việc:
+
+```text
+1) ExecutionState.ReturnVU(u, true)
+   - đẩy VU instance về pool
+   - giảm active VU counter (metric `vus`)
+   - VU instance KHÔNG bị destroy
+
+2) activeVUs.Done()
+   - counter sync.WaitGroup giảm 1
+   - khi tất cả VU done, Run() return
+```
+
+Xem `execution.go:462-481, 544-550`:
+
+```text
+GetPlannedVU(..., true): tăng activeVU count
+ReturnVU(..., true)    : giảm activeVU count, đẩy instance về pool
+```
+
+VU instance ở trong pool có thể được tái sử dụng nếu có scenario sau cần. Trong
+`constant-vus`, vì chỉ có 1 scenario (đa số case), VU không được dùng lại. Test
+process kết thúc, JS runtime cleanup.
+
+### 3.15.2. `__ITER` qua các iteration
+
+Trong 1 VU, `__ITER` (= `iterationInScenario`) tăng monotonic theo mỗi
+iteration thành công:
+
+```text
+iter#0: __ITER = 0
+iter#1: __ITER = 1
+iter#2: __ITER = 2
+...
+```
+
+Counter này không reset khi:
+
+- VU finish iter rồi vào iter mới (cùng VU, cùng scenario)
+- iter bị interrupt rồi VU vào iter mới (nếu iter#k bị interrupt, iter#(k+1)
+  vẫn `__ITER = k+1`)
+
+Counter này do `nextIterationCounters` (`constant_vus.go:183`) cấp:
+
+```go
+activeVU := initVU.Activate(
+    getVUActivationParams(ctx, clv.config.BaseConfig, returnVU, clv.nextIterationCounters))
+```
+
+`clv.nextIterationCounters` là method trên `BaseExecutor` (chung cho mọi
+executor), không reset trong scope `constant-vus`.
+
+### 3.15.3. So sánh với `ramping-vus`
+
+Khác biệt rõ với `ramping-vus`:
+
+```text
+ramping-vus với VU bị scale-down rồi scale-up lại:
+  stage 1: VU=4 chạy iter#0, iter#1
+  stage 2: VU=4 bị gracefulStop -> ReturnVU
+  stage 3: VU=4 (hoặc instance khác từ pool) start lại
+            __ITER tiếp tục từ chỗ cũ (= 2)
+
+constant-vus:
+  VU không bị scale-down giữa duration
+  __ITER chỉ "đóng băng" khi duration hết
+  không có chuyện activate-deactivate-activate
+```
+
+Hệ quả thực tế:
+
+```text
+- ramping-vus có thể có cùng 1 VU instance chạy trên nhiều stage,
+  __ITER có thể nhảy bậc qua các lần activate
+- constant-vus mỗi VU 1 dòng đời thẳng, __ITER tăng đều từ 0..K rồi dừng
+```
+
+### 3.15.4. Pool VU trong test multi-scenario
+
+Nếu có nhiều scenario chạy cùng test (qua `options.scenarios`):
+
+```text
+- mỗi scenario có thể "claim" VU pool riêng tùy executor
+- ExecutionState pool là shared
+- 1 VU instance có thể được dùng bởi nhiều scenario nối tiếp nhau
+- exec.scenario.name giúp code phân biệt đang chạy scenario nào
+```
+
+Với `constant-vus`, k6 dùng `GetPlannedVU(..., true)` ở `Run()` đầu mới activate
+VU. Nếu scenario `constant-vus` chạy sau 1 scenario khác đã ReturnVU, VU
+instance được tái sử dụng — JS context có sẵn, không init lại.
+
+`exec.vu.idInTest` (= `__VU`) pin với 1 instance, không đổi qua các lần activate.
+Còn `__ITER` (= `iterationInScenario`) reset về 0 khi vào scenario mới, vì
+nó scope theo scenario.
+
+## 3.16. Vì sao `constant-vus` spawn đủ VU ngay tại t=0?
+
+Câu hỏi quan trọng để hiểu rõ khác biệt với `ramping-vus`:
+
+```text
+ramping-vus với startVUs=0, target=4 trong 4s thì rải đều 1 VU/s
+sao constant-vus với vus=4 không rải, mà spawn cả 4 ngay tại t=0?
+```
+
+Trả lời ngắn:
+
+```text
+constant-vus = "fixed VUs over time"
+mục đích: giữ N VU active CỐ ĐỊNH trong toàn bộ duration
+nếu rải dần thì sẽ là ramp, không phải constant
+```
+
+### 3.16.1. Đọc từ core: chỉ có 1 step ở t=0
+
+`GetExecutionRequirements()` (`constant_vus.go:87-98`) trả về đúng 2 step:
+
+```go
+return []lib.ExecutionStep{
+    {TimeOffset: 0, PlannedVUs: uint64(clvc.GetVUs(et))},
+    {TimeOffset: clvc.Duration.TimeDuration() + clvc.GracefulStop.TimeDuration(), PlannedVUs: 0},
+}
+```
+
+Step đầu tại `t=0` đã là `PlannedVUs = vus`. Không có cơ chế nào để rải VU
+giữa `t=0` và `t=duration`.
+
+`Run()` (`constant_vus.go:195-203`) dùng vòng `for range numVUs` để spawn
+goroutine, vòng này chạy trong block goroutine của `Run()`, hoàn tất gần như
+tức thì:
+
+```go
+for range numVUs {
+    initVU, err := clv.executionState.GetPlannedVU(clv.logger, true)
+    if err != nil {
+        cancel()
+        return err
+    }
+    activeVUs.Add(1)
+    go handleVU(initVU)
+}
+```
+
+So với `ramping-vus.scheduledVUsHandlerStrategy()` chờ timeOffset của từng
+step rồi mới `start()` từng VU theo timeline, `constant-vus` không có vòng
+chờ nào — tất cả N VU đều được spawn liên tiếp ngay tại `t=0`.
+
+### 3.16.2. Khác biệt nghiệp vụ với `ramping-vus`
+
+`ramping-vus` rải VU theo timeline để **mô phỏng concurrency tăng dần**:
+
+```text
+ramping 0 -> 100 trong 10s
+=> tại t=5s, hệ thống chịu khoảng 50 user
+=> tại t=10s, đạt 100 user
+=> mô phỏng đúng quá trình tăng dần
+```
+
+`constant-vus` không có concept "tăng dần". Mục đích là:
+
+```text
+N user ảo hoạt động liên tục trong X giây
+=> tại MỌI thời điểm trong [0, duration), số user = N
+=> không có giai đoạn warm-up
+```
+
+Cho nên hành vi đúng là spawn cả N VU ngay tại `t=0`. Nếu muốn warm-up, dùng
+executor khác (`ramping-vus`).
+
+### 3.16.3. Có race condition không?
+
+Câu hỏi: vòng `for range numVUs` vẫn cần thời gian (dù rất ngắn). Có rủi ro
+VU 1 chạy iter#0 trong khi VU N còn chưa được activate?
+
+Trả lời: trên lý thuyết có. Trong thực tế:
+
+```text
+- vòng for chạy trên main goroutine của Run(), không yield
+- mỗi vòng làm 2 việc: GetPlannedVU (O(1)) + go handleVU (fire-and-forget)
+- chi phí < 1ms cho hàng trăm VU
+
+- VU goroutine bắt đầu execution tùy Go scheduler
+- với GOMAXPROCS > 1, nhiều VU chạy thật sự song song
+- với 1 CPU, các VU goroutine xen kẽ nhau theo Go scheduler
+```
+
+Trong demo `constant_vus_loop_demo.js` (`vus=2`):
+
+```text
+t=0.0s  VU1 iter 0 start, VU2 iter 0 start
+```
+
+Cả 2 VU đều được log với `t=0.0s` (precision của log là 0.1s, đủ để 2 VU
+"khớp" tại t=0). Nếu zoom vào microsecond, có thể VU 1 start trước VU 2 vài
+microsecond, nhưng không có ý nghĩa với load test.
+
+Với `vus = 1000`:
+
+```text
+spawn time = 1000 * (~10us per goroutine) = ~10ms
+tức là VU 1000 vào iter#0 chậm hơn VU 1 khoảng 10ms
+```
+
+Nếu `iteration_duration` ~ 1s thì 10ms là 1% — không đáng kể. Nếu iteration
+quá ngắn (< 100ms) thì 10ms có thể thấy được, nhưng đó là dấu hiệu bạn cần
+dùng `*-arrival-rate` thay vì `*-vus`.
+
+### 3.16.4. So sánh trực tiếp constant-vus vs ramping-vus
+
+| Khía cạnh | `constant-vus` | `ramping-vus` |
+| --- | --- | --- |
+| VU spawn tại t=0 | đủ N | chỉ `startVUs` (có thể = 0) |
+| Số VU active theo thời gian | constant N | thay đổi theo stages |
+| Có timeline phức tạp không | không, chỉ 2 step | có rawSteps + gracefulSteps |
+| Có vuHandle state machine | không | có |
+| Có gracefulRampDown | không | có |
+| Init phase init bao nhiêu VU | đúng `vus` | đúng `maxVUs` (= max planned) |
+| Mục đích | giữ tải đều | mô phỏng tải biến đổi |
+
+### 3.16.5. Thử thay constant-vus bằng ramping-vus
+
+Nếu bạn muốn shape "N VU phẳng X giây" mà cứ phải dùng `ramping-vus`:
+
+```js
+// constant-vus form (gọn nhất)
+{
+  executor: "constant-vus",
+  vus: 4,
+  duration: "10s",
+}
+
+// ramping-vus form tương đương (verbose hơn)
+{
+  executor: "ramping-vus",
+  startVUs: 4,
+  stages: [
+    { duration: "10s", target: 4 },
+  ],
+}
+```
+
+Behavior:
+
+```text
+- cả 2 đều spawn 4 VU ngay tại t=0 (ramping-vus với startVUs=4 cũng vậy)
+- cả 2 đều giữ 4 VU active trong 10s
+- cả 2 đều có gracefulStop ở cuối
+
+khác biệt nhỏ:
+- constant-vus đơn giản hơn (không có vuHandle overhead)
+- ramping-vus reserve gracefulRampDown cho stage cuối nếu có ramp-down
+- header in khác: "Up to 4 looping VUs ..." vs "4 looping VUs ..."
+```
+
+Nếu shape là "N VU phẳng", `constant-vus` là form gọn nhất và rõ ràng nhất.
+Dùng `ramping-vus` chỉ khi shape thay đổi theo timeline.
+
+### 3.16.6. Kết luận
+
+```text
+constant-vus spawn đủ N VU ngay tại t=0
+   = ý nghĩa nghiệp vụ "fixed users over time"
+
+ramping-vus rải VU theo step_interval = stageDuration / |target - fromVUs|
+   = ý nghĩa nghiệp vụ "variable users over time"
+
+cả 2 đều là closed model
+cả 2 đều pre-init VU ở init phase, không có unplanned VUs
+khác biệt ở chỗ "khi nào activate" — constant: ngay; ramping: theo timeline
+```
+
+## 4. Demo loop theo duration
 
 Command:
 
@@ -1095,7 +2203,9 @@ shared-iterations có tổng pool cố định
 constant-vus không có pool tổng, chỉ loop tới hết duration
 ```
 
-## 6. Demo interrupt
+## 6. Demo interrupt và edge case
+
+### 6.1. Demo interrupt cơ bản
 
 File:
 

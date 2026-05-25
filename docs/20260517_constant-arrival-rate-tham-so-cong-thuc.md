@@ -480,6 +480,162 @@ k6 không chạy muộn để đuổi target
 dropped_iterations tăng
 ```
 
+### 1.3. Open model vs closed model: vì sao arrival-rate khác hẳn VU-based
+
+Đây là phần nhiều người dùng k6 đọc cảm tính dễ sai, nên cần tách thật rõ.
+
+`constant-vus`, `ramping-vus`, `per-vu-iterations`, `shared-iterations` đều thuộc nhóm
+**closed model**. Trong closed model:
+
+```text
+mỗi VU là một chiếc vòng lặp tự đóng
+VU loop:
+  1. start iteration
+  2. chạy function default
+  3. finish iteration
+  4. quay lại bước 1 ngay (nếu chưa hết duration / chưa hết quota)
+```
+
+Tốc độ start iteration sinh ra một cách thụ động:
+
+```text
+start_rate_closed ~= active_vus / iteration_duration
+```
+
+Nghĩa là server trả lời chậm thì start_rate tự động giảm. Không có khái niệm "drop slot": nếu VU
+chưa rảnh, đơn giản là chưa có iteration mới được start.
+
+`constant-arrival-rate` và `ramping-arrival-rate` thuộc nhóm **open model**. Trong open model:
+
+```text
+arrival timeline là độc lập với VU
+arrival timeline:
+  cứ tickerPeriod giây thì có 1 mốc fire
+  fire xảy ra dù VU có rảnh hay không
+VU pool là một worker pool tách biệt:
+  worker rảnh thì nhận mốc fire
+  worker bận thì mốc fire bị drop
+```
+
+Tốc độ start iteration được driven chủ động bởi config `rate/timeUnit`:
+
+```text
+start_rate_open = rate / timeUnit_seconds (cố định)
+```
+
+Khác biệt then chốt:
+
+| Câu hỏi | Closed model | Open model |
+| --- | --- | --- |
+| Ai control start rate? | iteration_duration của VU | config `rate/timeUnit` |
+| Server chậm thì sao? | start_rate tự giảm theo | start_rate giữ nguyên, dồn áp lực |
+| Có khái niệm drop iteration? | Không | Có (`dropped_iterations`) |
+| Có khái niệm unplanned VU runtime? | Không | Có (preAllocated -> max) |
+| Cần khai báo `vus` trực tiếp? | Có | Không, khai báo capacity bằng `preAllocatedVUs/maxVUs` |
+| Field chính | `vus`, `iterations` | `rate`, `timeUnit`, `preAllocatedVUs`, `maxVUs` |
+| Kết quả khi quá tải | latency tăng, throughput cap | dropped_iterations tăng |
+
+Vì sao arrival-rate cần cả `preAllocatedVUs` lẫn `maxVUs`?
+
+```text
+preAllocatedVUs = chuẩn bị sẵn worker để giữ start rate ngay từ giây đầu
+maxVUs = trần an toàn nếu pool không đủ và k6 phải tạo thêm worker giữa lúc đo
+```
+
+Với closed model thì chỉ cần một biến `vus`: số worker cũng là số iteration đồng thời, vì worker đã
+quy định start rate. Với open model, số worker không quy định start rate. Số worker chỉ quyết định
+năng lực hấp thụ start rate. Nên cần 2 biến: một biến cho worker đã sẵn (`preAllocatedVUs`), một
+biến cho trần (`maxVUs`).
+
+Hệ quả tư duy quan trọng:
+
+```text
+arrival-rate = "một sự kiện bên ngoài đang gọi vào hệ thống"
+closed model = "một số người dùng cố định đang vận hành tại chỗ"
+```
+
+Real world map:
+
+| Use case | Mô hình hợp | Lý do |
+| --- | --- | --- |
+| Mô phỏng traffic người dùng đổ vào hệ thống | open / arrival-rate | flow request đến từ Internet, không bị giới hạn bởi việc server đang chậm |
+| Mô phỏng N nhân viên đang dùng nội bộ | closed / VU-based | nhân viên chậm thì hành vi tiếp theo cũng chậm, không "fire mốc mới" |
+| Đo throughput max của API | open / arrival-rate | giữ start rate, đo xem server tự sập ở mức nào |
+| Đo trải nghiệm khi 100 người ngồi cùng dùng app | closed / constant-vus | quan tâm tới latency của từng "người" |
+
+Trong arrival-rate, một câu hay đọc nhầm là:
+
+```text
+preAllocatedVUs là số người dùng mục tiêu của bài test
+```
+
+Đây là sai. `preAllocatedVUs` không phải là payload, mà là vốn của máy bắn tải. Tăng nó không làm
+load tăng. Chỉ tăng `rate` mới làm load tăng.
+
+Sai đối xứng phía closed model:
+
+```text
+constant-vus với vus=100 nghĩa là tải target 100 RPS
+```
+
+Cũng sai. `vus=100` chỉ là 100 worker. RPS phụ thuộc vào `iteration_duration` của script. Nếu
+function chạy 200ms thì đó là khoảng `100 * (1/0.2) = 500` iter/s (với 1 request/iter là 500 RPS).
+Nếu function chậm còn 2s thì còn `50 RPS`. Closed model không cho phép pin throughput.
+
+Một cách kiểm tra nhanh xem mình đang ở mô hình nào: tự hỏi
+
+```text
+nếu server phía sau bị chậm gấp 2 lần, thì k6 có giảm tốc độ start iteration không?
+- Có   -> closed model (constant-vus, ramping-vus, per-vu-iterations, shared-iterations)
+- Không -> open model (constant-arrival-rate, ramping-arrival-rate) -> sẽ thấy dropped_iterations
+```
+
+Bảng đối chiếu nhanh giữa hai họ:
+
+| Tình huống | constant-vus (closed) | constant-arrival-rate (open) |
+| --- | --- | --- |
+| Server chậm gấp đôi | iteration_duration tăng, throughput giảm, không drop | start rate giữ nguyên, VU pool bão hòa, drop tăng |
+| Server crash | request fail, VU vẫn loop, iteration vẫn đếm | request fail, VU vẫn nhận mốc fire mới |
+| Cần cấp 1000 RPS đều | không đảm bảo | đảm bảo bằng rate=1000, timeUnit=1s |
+| Cần test trải nghiệm 50 user | đặt vus=50, đảm bảo | không đảm bảo concurrency |
+
+Vì hai trục đo khác nhau, output của hai họ executor cũng khác nhau:
+
+```text
+closed model:
+  - vus, vus_max là core metric
+  - dropped_iterations không có ý nghĩa trong closed model
+  - throughput đọc từ iterations/s
+
+open model:
+  - rate là core metric (input)
+  - dropped_iterations là core metric (output)
+  - vus, vus_max chỉ là worker pool size (tham khảo capacity), không phải tải
+```
+
+Khi đọc tài liệu Grafana về `vus` và `vus_max`, hãy nhớ chúng là sample từ scheduler, không liên
+quan tới `rate`. Trong open model, `vus_max` thấp hơn `maxVUs` của config khi run không cần
+spawn unplanned, đó là điều bình thường, không phải bug.
+
+Cuối cùng, một điểm dễ nhầm khi mix scenarios:
+
+```text
+options.scenarios = {
+  peak: { executor: "constant-arrival-rate", rate: 100, ... preAllocatedVUs: 50, maxVUs: 100 },
+  background: { executor: "constant-vus", vus: 10, duration: "5m" },
+}
+```
+
+k6 chạy đồng thời được cả hai. Số VU tổng max của process là cộng:
+
+```text
+total_max_vus = 100 (peak.maxVUs) + 10 (background.vus) = 110
+```
+
+Mỗi scenario tự lấy phần VU từ pool chung của ExecutionState, không lẫn phạm vi với nhau. Nên đừng
+nghĩ "constant-vus 10 đã đủ rồi, không cần preAllocatedVUs cho peak". Hai pool tách biệt, không
+share worker.
+
 ## 2. Bảng tham số tiếng Việt
 
 | Tham số | Ý nghĩa | Bắt buộc | Ví dụ | Ghi chú |
@@ -1454,6 +1610,861 @@ shared-iterations dùng vus + iterations
 ramping-vus dùng startVUs + stages
 constant-arrival-rate dùng rate + timeUnit + duration + preAllocatedVUs/maxVUs
 ```
+
+### 3.11. Hai trục độc lập: arrival timeline vs VU iter timeline
+
+Phần này là phần quan trọng nhất khi giải thích arrival-rate. Người mới rất hay vẽ một timeline duy
+nhất rồi gắn cả "mốc start theo lịch" và "VU đang chạy iteration" vào đó. Cách đó dẫn tới các bài
+toán kiểu "VU số 1 chạy mốc 0.25s rồi 0.50s thì vô lý vì nó vẫn đang bận". Thực tế core có hai trục
+hoạt động độc lập, và mọi câu chuyện drop / unplanned VU đều nằm ở chỗ hai trục này gặp nhau.
+
+#### 3.11.1. Trục 1 — arrival timeline (chỉ phụ thuộc rate/timeUnit)
+
+```text
+arrival timeline tự nhịp theo notScaledTickerPeriod
+nó không quan tâm VU rảnh hay không
+mỗi nhịp = 1 mốc fire scheduled
+```
+
+Trong core (`lib/executor/constant_arrival_rate.go:316-330`):
+
+```go
+timer := time.NewTimer(time.Hour * 24)
+notScaledTickerPeriod := getTickerPeriod(
+    big.NewRat(
+        car.config.Rate.Int64,
+        int64(car.config.TimeUnit.TimeDuration()),
+    )).TimeDuration()
+
+for li, gi := 0, start; ; li, gi = li+1, gi+offsets[li%len(offsets)] {
+    t := notScaledTickerPeriod*time.Duration(gi) - time.Since(startTime)
+    timer.Reset(t)
+    select {
+    case <-timer.C:
+        if vusPool.TryRunIteration() { continue }
+        // ... drop logic
+    case <-regDurationCtx.Done():
+        return nil
+    }
+}
+```
+
+Đặc điểm trục arrival timeline:
+
+```text
+mốc 0: t = 0
+mốc 1: t = 1 * tickerPeriod
+mốc 2: t = 2 * tickerPeriod
+...
+mốc k: t = k * tickerPeriod
+```
+
+Đây là lịch tuyệt đối neo theo `startTime` của executor. Lịch không bị shift khi:
+
+```text
+VU pool kẹt
+một mốc trước đó bị drop
+unplanned VU đang được init ở background
+```
+
+Khi `regDurationCtx.Done()` đóng (tức `t >= duration`), trục arrival timeline kết thúc, không fire
+thêm mốc mới.
+
+#### 3.11.2. Trục 2 — VU iter timeline (mỗi VU một trục riêng)
+
+Mỗi VU active có timeline iteration riêng:
+
+```text
+VU #1: idle -> [iter A: 0.4s] -> idle -> [iter B: 0.4s] -> ...
+VU #2: idle -> [iter C: 0.4s] -> idle -> [iter D: 0.4s] -> ...
+VU #N: ...
+```
+
+Một VU ở trạng thái `idle` thì sẵn sàng nhận tín hiệu từ `activeVUPool.iterations` channel
+(`lib/executor/ramping_arrival_rate.go:545-561`):
+
+```go
+func (p *activeVUPool) AddVU(ctx context.Context, avu lib.ActiveVU,
+    runfn func(context.Context, lib.ActiveVU) bool) {
+    p.wg.Add(1)
+    ch := make(chan struct{})
+    go func() {
+        defer p.wg.Done()
+        close(ch)
+        for range p.iterations {
+            atomic.AddUint64(&p.running, uint64(1))
+            p.execState.ModCurrentlyActiveVUsCount(+1)
+            runfn(ctx, avu)
+            p.execState.ModCurrentlyActiveVUsCount(-1)
+            atomic.AddUint64(&p.running, ^uint64(0))
+        }
+    }()
+    <-ch
+}
+```
+
+Cơ chế nhận việc:
+
+```text
+worker goroutine của VU đang `range p.iterations`
+=> nó block tại đó nếu chưa có việc
+=> ngay khi có ai đó push struct{}{} vào channel, worker pick lên
+=> chạy runfn (full iteration), trong suốt thời gian này worker không listen channel
+=> chạy xong worker quay lại `range p.iterations` để chờ việc mới
+```
+
+Đặc điểm:
+
+```text
+khi VU đang chạy runfn, nó tuyệt đối không nhận thêm mốc fire
+khi VU finish, nó vào idle ngay, không có concept "lập lịch sẵn"
+nhiều VU cùng select trên cùng channel: ai rảnh trước thì nhận
+```
+
+#### 3.11.3. Hai trục gặp nhau: TryRunIteration
+
+Khi arrival timeline fire một mốc, executor gọi
+`vusPool.TryRunIteration()` (`lib/executor/ramping_arrival_rate.go:527-534`):
+
+```go
+func (p *activeVUPool) TryRunIteration() bool {
+    select {
+    case p.iterations <- struct{}{}:
+        return true
+    default:
+        return false
+    }
+}
+```
+
+Đây là `select` non-blocking. Nó hoạt động chính xác như sau:
+
+```text
+Có VU idle  -> push struct{}{} vào channel thành công, return true
+Mọi VU đều bận -> default branch chạy ngay, return false (không chờ)
+```
+
+Hệ quả: khi arrival fire, bài toán quy về
+
+```text
+có ít nhất 1 VU idle tại đúng thời điểm này không?
+```
+
+Nếu có: mốc được nhận. Nếu không: mốc bị drop.
+
+#### 3.11.4. Sơ đồ minh họa
+
+Ví dụ: `rate=4, timeUnit=1s, preAllocatedVUs=2, maxVUs=2`,
+mỗi iteration mất `0.6s`.
+
+Arrival timeline (trục 1):
+
+```text
+t = 0.00s   fire #0
+t = 0.25s   fire #1
+t = 0.50s   fire #2
+t = 0.75s   fire #3
+t = 1.00s   fire #4
+t = 1.25s   fire #5
+t = 1.50s   fire #6
+t = 1.75s   fire #7
+```
+
+VU iter timeline (trục 2, hai VU độc lập):
+
+```text
+VU #1: [iter 0: 0.00 -> 0.60] [iter 2: 0.60 -> 1.20] [iter 4: 1.20 -> 1.80] [iter 6: 1.80 -> 2.40]
+VU #2: [iter 1: 0.25 -> 0.85] [iter 3: 0.85 -> 1.45] [iter 5: 1.45 -> 2.05] [iter 7: 2.05 -> 2.65]
+```
+
+Hợp hai trục:
+
+```text
+fire #0 (t=0.00) -> VU#1 idle -> nhận, start iter 0
+fire #1 (t=0.25) -> VU#1 bận, VU#2 idle -> VU#2 nhận, start iter 1
+fire #2 (t=0.50) -> VU#1 bận, VU#2 bận -> DROP (không VU idle)
+fire #3 (t=0.75) -> VU#1 bận tới 0.60, sau đó idle; nhưng tại đúng t=0.75 VU#1 bắt đầu iter mới
+                    -> chính xác: tại 0.60 VU#1 idle, tại 0.75 lại fire -> chạy iter mới
+                    -> tới t=0.75: VU#1 đã rảnh từ 0.60, vào nhận. VU#2 còn bận tới 0.85.
+                    -> fire #3 được nhận bởi VU#1 (giả sử timing chuẩn)
+```
+
+Quan sát quan trọng:
+
+```text
+trục 1 không "biết" VU#2 đang bận
+trục 1 fire đúng theo đồng hồ
+TryRunIteration là điểm kiểm tra duy nhất
+```
+
+Nếu vẽ một timeline duy nhất, sẽ rất khó nhìn. Tách hai trục là cách dễ nhất để giải thích cho học
+viên.
+
+#### 3.11.5. Thuật ngữ tóm tắt
+
+| Thuật ngữ | Trục nào | Sinh ra bởi |
+| --- | --- | --- |
+| `tickerPeriod` | trục 1 | `getTickerPeriod(arrivalRate)` trong `Run()` |
+| `fire mốc start` | trục 1 | timer trigger trong vòng `for li, gi := ...` |
+| `iteration_duration` | trục 2 | từng VU đo thời gian function chạy xong |
+| `VU idle/busy` | trục 2 | trạng thái nội tại của worker goroutine |
+| `TryRunIteration()` | giao điểm | điểm hai trục gặp nhau |
+| `dropped_iterations` | giao điểm | mốc fire không kết nối được với VU idle |
+| `unplanned VU spawn` | trục 2 | hệ quả khi giao điểm fail |
+
+### 3.12. Spawn timing của unplanned VU theo core
+
+Đây là phần đặc thù chỉ có ở open model. Closed model không bao giờ "tạo VU thêm trong runtime";
+toàn bộ VU đều được scheduler init từ đầu. Open model thì có khái niệm `preAllocatedVUs` (init
+trước) và `maxVUs - preAllocatedVUs` (room runtime). Phần này đọc trực tiếp từ
+`lib/executor/constant_arrival_rate.go:288-313` và `lib/execution.go:500-520`.
+
+#### 3.12.1. Hai pha của VU pool: init phase vs runtime phase
+
+```text
+init phase (trước khi executor.Run() được gọi):
+  scheduler đọc GetExecutionRequirements()
+  thấy PlannedVUs = preAllocatedVUs
+  thấy MaxUnplannedVUs = maxVUs - preAllocatedVUs
+  scheduler chuẩn bị preAllocatedVUs VU thật vào buffer chung
+  cũng đặt counter es.uninitializedUnplannedVUs = MaxUnplannedVUs
+
+runtime phase (trong executor.Run()):
+  activate hết preAllocatedVUs (vào activeVUPool ngay)
+  rồi vào loop fire mốc start
+```
+
+Đoạn code activate `preAllocatedVUs` (`constant_arrival_rate.go:307-313`):
+
+```go
+// Get the pre-allocated VUs in the local buffer
+for range preAllocatedVUs {
+    initVU, err := car.executionState.GetPlannedVU(car.logger, false)
+    if err != nil {
+        return err
+    }
+    activateVU(initVU)
+}
+```
+
+Quan sát: tất cả `preAllocatedVUs` được activate **đồng loạt ngay đầu** `Run()`. Không có khái niệm
+"ramp up" như `ramping-vus`. Ngay khi executor bắt đầu, có đủ `preAllocatedVUs` worker idle sẵn.
+
+#### 3.12.2. Trigger spawn unplanned VU
+
+`remainingUnplannedVUs` được khởi tạo (`constant_arrival_rate.go:288`):
+
+```go
+remainingUnplannedVUs := maxVUs - preAllocatedVUs
+makeUnplannedVUCh := make(chan struct{})
+defer close(makeUnplannedVUCh)
+```
+
+Trigger nằm trong nhánh fail của `TryRunIteration()`
+(`constant_arrival_rate.go:332-362`):
+
+```go
+case <-timer.C:
+    if vusPool.TryRunIteration() {
+        continue
+    }
+
+    // Since there aren't any free VUs available, consider this iteration
+    // dropped - we aren't going to try to recover it, but
+    metrics.PushIfNotDone(parentCtx, out, metrics.Sample{
+        TimeSeries: metrics.TimeSeries{
+            Metric: droppedIterationMetric,
+            Tags:   metricTags,
+        },
+        Time:  time.Now(),
+        Value: 1,
+    })
+
+    // We'll try to start allocating another VU in the background,
+    // non-blockingly, if we have remainingUnplannedVUs...
+    if remainingUnplannedVUs == 0 {
+        if !shownWarning {
+            car.logger.Warningf("Insufficient VUs, reached %d active VUs and cannot initialize more", maxVUs)
+            shownWarning = true
+        }
+        continue
+    }
+
+    select {
+    case makeUnplannedVUCh <- struct{}{}: // great!
+        remainingUnplannedVUs--
+    default: // we're already allocating a new VU
+    }
+```
+
+Đọc kỹ thứ tự:
+
+```text
+1. timer fire (mốc fire đến hạn)
+2. gọi TryRunIteration()
+   - nếu có VU idle: continue (không trigger spawn)
+   - nếu không có VU idle: tiếp tục bước 3
+3. push DroppedIterations = 1 (drop trước, vô điều kiện)
+4. kiểm tra remainingUnplannedVUs:
+   - nếu == 0: log warning (chỉ 1 lần) rồi continue
+   - nếu > 0: tiếp tục bước 5
+5. select non-blocking trên makeUnplannedVUCh:
+   - nếu push được: remainingUnplannedVUs--
+   - nếu default: đã có request spawn đang pending rồi, không gửi thêm
+```
+
+Hệ quả tinh tế ở bước 5: **chỉ 1 unplanned VU đang init tại một thời điểm**. Channel
+`makeUnplannedVUCh` không có buffer, và goroutine consumer chỉ đọc từ channel khi nó vừa init xong
+VU trước. Vì vậy nếu nhiều mốc liên tiếp đều fail và đều cố push request:
+
+```text
+mốc 1 fail -> push thành công -> remainingUnplannedVUs--, goroutine bắt đầu init VU
+mốc 2 fail -> push fail (default) -> không decrement, không tạo thêm
+mốc 3 fail -> push fail (default) -> ...
+... cho tới khi VU init xong, goroutine quay lại đọc từ channel
+mốc N fail -> push thành công lần nữa -> bắt đầu init VU thứ 2
+```
+
+Đây là cơ chế tự throttle: k6 không spawn ồ ạt N VU cùng lúc, mà spawn từ từ khi cần.
+
+#### 3.12.3. Goroutine init unplanned VU
+
+`constant_arrival_rate.go:289-304`:
+
+```go
+makeUnplannedVUCh := make(chan struct{})
+defer close(makeUnplannedVUCh)
+go func() {
+    defer close(returnedVUs)
+    for range makeUnplannedVUCh {
+        car.logger.Debug("Starting initialization of an unplanned VU...")
+        initVU, err := car.executionState.GetUnplannedVU(maxDurationCtx, car.logger)
+        if err != nil {
+            car.logger.WithError(err).Error("Error while allocating unplanned VU")
+        } else {
+            car.logger.Debug("The unplanned VU finished initializing successfully!")
+            activateVU(initVU)
+        }
+    }
+}()
+```
+
+Quy trình của goroutine này:
+
+```text
+ngồi range trên makeUnplannedVUCh
+mỗi khi nhận được struct{}{}:
+  1. gọi executionState.GetUnplannedVU()
+     - nếu còn quota uninitializedUnplannedVUs: init VU thật (chạy code init.js)
+     - nếu hết quota: lấy VU đã init từ buffer (rare path, debug log)
+  2. activateVU(initVU):
+     - Activate() VU vào maxDurationCtx
+     - tăng atomic activeVUsCount
+     - thêm vào vusPool qua AddVU()
+   3. quay lại range để chờ request kế tiếp
+```
+
+`GetUnplannedVU` (`lib/execution.go:510-520`):
+
+```go
+func (es *ExecutionState) GetUnplannedVU(ctx context.Context, logger *logrus.Entry) (InitializedVU, error) {
+    remVUs := atomic.AddInt64(es.uninitializedUnplannedVUs, -1)
+    if remVUs < 0 {
+        logger.Debug("Reusing a previously initialized unplanned VU")
+        atomic.AddInt64(es.uninitializedUnplannedVUs, 1)
+        return es.GetPlannedVU(logger, false)
+    }
+
+    logger.Debug("Initializing an unplanned VU, this may affect test results")
+    return es.InitializeNewVU(ctx, logger)
+}
+```
+
+Lưu ý dòng debug:
+
+```text
+"Initializing an unplanned VU, this may affect test results"
+```
+
+k6 chủ động cảnh báo: init VU runtime tốn thời gian (chạy lại init script), có thể ảnh hưởng kết
+quả. Vì vậy best practice là sizing `preAllocatedVUs` đủ để tránh trigger spawn unplanned trong lúc
+đo.
+
+#### 3.12.4. Khoảng thời gian từ trigger tới sẵn sàng
+
+Đây là phần không có công thức cứng, vì phụ thuộc:
+
+```text
+T_init = thời gian chạy phần init script (top-level JS, import, open() file, ...)
+T_activate = thời gian activate VU vào pool (rất nhỏ, microseconds)
+T_total ~= T_init + T_activate
+```
+
+Trong các test thực tế, `T_init` có thể từ vài chục `ms` (script trống) tới hàng giây (nếu init mở
+file lớn, parse JSON, gọi shared object). Trong toàn bộ `T_total` này:
+
+```text
+arrival timeline vẫn fire đều
+mọi mốc fire trong khoảng này vẫn drop nếu pool cũ vẫn bận
+unplanned VU mới chưa join pool
+```
+
+Khi VU mới join pool, nó vào idle ngay và sẵn sàng nhận mốc fire kế tiếp. Không có concept "chạy bù
+mốc đã drop".
+
+Sơ đồ thời gian:
+
+```text
+t=0.00s   VU#1 idle, start iter A (kéo dài 0.6s)
+t=0.25s   fire #1 -> VU#1 bận -> drop, request spawn VU#2 (giả định T_init=0.4s)
+t=0.50s   fire #2 -> VU#1 vẫn bận, VU#2 đang init -> drop, push fail (default)
+t=0.60s   VU#1 finish iter A -> idle
+t=0.65s   VU#2 init xong -> activate, idle
+t=0.75s   fire #3 -> VU#1 idle (hoặc VU#2 idle) -> nhận
+t=1.00s   fire #4 -> ... pool có 2 VU sẵn sàng
+```
+
+Quan sát: drop tại 0.25, 0.50 không "tự được trả lại" sau khi VU#2 sẵn sàng. Mốc đã trôi qua.
+
+#### 3.12.5. Đọc verify từ output
+
+Trong `constant_arrival_rate_unplanned_vus_demo.js`, output điển hình:
+
+```text
+constant_arrival_unplanned_vus: 4.00 iterations/s for 4s (maxVUs: 1-4, gracefulStop: 2s)
+
+dropped_iterations...: 2   0.434755/s
+iteration_duration...: avg=600.32ms
+iterations...........: 15  3.26066/s
+vus..................: 3   min=2      max=3
+vus_max..............: 3   min=2      max=3
+```
+
+Đọc theo trục:
+
+```text
+preAllocatedVUs = 1 -> trục 2 ban đầu chỉ có VU#1
+maxVUs = 4 -> remainingUnplannedVUs = 3
+trục 1 fire 4 mốc/giây * 4 giây = 16 mốc target
+
+dropped_iterations=2 -> 2 mốc đầu (hoặc đầu/cuối) bị drop trong khi pool spawn
+iterations=15 -> 15 mốc nhận được VU và chạy xong
+vus_max=3 -> tổng init phase + 2 lần spawn unplanned đã xong (1 + 2 = 3)
+```
+
+vus_max max=3 nghĩa là k6 đã spawn 2 unplanned VU (lên tới 3 VU initialized), không hết hạn mức 4
+vì pool đủ rồi. Nếu iteration nhanh và đều, k6 không cần thêm worker thứ 4.
+
+#### 3.12.6. Tại sao không spawn ngay lúc bắt đầu test?
+
+Câu hỏi tự nhiên: tại sao k6 không gọi `InitializeNewVU` cho cả `maxVUs` ngay từ init phase, để
+tránh drop?
+
+Lý do thiết kế:
+
+```text
+1. init phase chạy thật code init.js của user, tốn RAM/CPU
+2. "max" là trần an toàn, không phải target
+3. nhiều test set maxVUs >> preAllocatedVUs làm safety margin
+4. nếu init hết max, lãng phí tài nguyên cho VU không bao giờ dùng
+```
+
+Vì vậy k6 chọn lazy init. Hệ quả: nếu set `preAllocatedVUs` quá thấp, k6 sẽ trigger spawn lúc đang
+đo, ảnh hưởng kết quả.
+
+### 3.13. Lifecycle của unplanned VU
+
+Phần này trả lời chi tiết: một unplanned VU sống vòng đời như thế nào, từ lúc được trigger spawn cho
+tới khi scenario kết thúc. Hiểu lifecycle giúp lý giải `vus`/`vus_max` ở cuối summary và giải thích
+được vì sao có hành vi "VU vẫn còn idle khi gracefulStop".
+
+#### 3.13.1. Năm pha của một unplanned VU
+
+```text
+[Pha 0] uninitialized:
+  scheduler đặt counter es.uninitializedUnplannedVUs = MaxUnplannedVUs (= maxVUs - preAllocatedVUs)
+  chưa có VU nào được tạo
+  chỉ là quota numeric
+
+[Pha 1] requested (chưa init):
+  trong runtime, executor push request vào makeUnplannedVUCh
+  goroutine consumer lấy quota: atomic decrement uninitializedUnplannedVUs
+  bắt đầu chạy initVUFunc (init script)
+
+[Pha 2] initialized (chưa active):
+  initVUFunc xong, trả về InitializedVU
+  được thêm vào es buffer
+  ModInitializedVUsCount(+1) -> vus_max metric tăng
+
+[Pha 3] active (idle hoặc busy):
+  activateVU(initVU): gọi initVU.Activate()
+  ModCurrentlyActiveVUsCount(+1) -> vus metric tăng (sample tiếp theo)
+  thêm vào activeVUPool qua AddVU()
+  worker goroutine bắt đầu range channel iterations
+  trạng thái idle, sẵn sàng nhận mốc fire
+
+[Pha 4] retired (cuối scenario):
+  channel iterations đóng (vusPool.Close())
+  worker goroutine thoát khỏi range loop
+  returnVU được trigger qua deferred path
+  ReturnVU(u, false) trả VU về buffer chung
+  ModInitializedVUsCount(-1) ở scheduler khi cleanup
+```
+
+#### 3.13.2. Đối chiếu với code
+
+Pha 1->2 ở `lib/execution.go:510-520`:
+
+```go
+func (es *ExecutionState) GetUnplannedVU(...) (InitializedVU, error) {
+    remVUs := atomic.AddInt64(es.uninitializedUnplannedVUs, -1)
+    if remVUs < 0 {
+        atomic.AddInt64(es.uninitializedUnplannedVUs, 1)
+        return es.GetPlannedVU(logger, false)
+    }
+    return es.InitializeNewVU(ctx, logger)
+}
+
+func (es *ExecutionState) InitializeNewVU(...) (InitializedVU, error) {
+    newVU, err := es.initVUFunc(ctx, logger)
+    if err != nil { return nil, err }
+    es.ModInitializedVUsCount(+1)
+    return newVU, err
+}
+```
+
+Pha 2->3 ở `constant_arrival_rate.go:277-286`:
+
+```go
+activateVU := func(initVU lib.InitializedVU) lib.ActiveVU {
+    activeVUsWg.Add(1)
+    activeVU := initVU.Activate(getVUActivationParams(
+        maxDurationCtx, car.config.BaseConfig, returnVU,
+        car.nextIterationCounters,
+    ))
+    atomic.AddUint64(&activeVUsCount, 1)
+    vusPool.AddVU(maxDurationCtx, activeVU, runIterationBasic)
+    return activeVU
+}
+```
+
+Pha 3->4 ở `constant_arrival_rate.go:267-274`:
+
+```go
+returnVU := func(u lib.InitializedVU) {
+    car.executionState.ReturnVU(u, false)
+    activeVUsWg.Done()
+}
+```
+
+`returnVU` được gọi khi `initVU.Activate()`'s context bị cancel (trong defer cleanup của
+maxDurationCtx). Tức là: khi `duration + gracefulStop` hết, `cancel()` được gọi, mọi VU đang active
+nhận tín hiệu cancel, run xong (hoặc bị cancel iteration), rồi đóng goroutine và trả về.
+
+#### 3.13.3. Khác biệt với planned VU
+
+```text
+planned VU:
+  init ở init phase, trước khi executor.Run() được gọi
+  scheduler đã đếm vào InitializedVUsCount từ trước
+  Run() lấy từ buffer chung qua GetPlannedVU()
+  activate đồng loạt ở đầu Run()
+
+unplanned VU:
+  init lazy, runtime, sau khi đã có drop xảy ra
+  init xong mới đếm vào InitializedVUsCount
+  được lấy qua GetUnplannedVU(), không qua GetPlannedVU()
+  activate ngay sau khi init xong (1 VU/lần)
+```
+
+Một sự thật quan trọng: cả planned và unplanned VU đều dùng chung buffer cuối cùng. Khi scenario
+xong, `ReturnVU()` đẩy VU về `es.vus` channel (buffer chung), không phân biệt nguồn gốc. Vì vậy nếu
+có scenario kế tiếp (sequence) hoặc test có nhiều scenario, các VU này có thể được tái sử dụng.
+
+#### 3.13.4. Idle vs busy trong activeVUPool
+
+Worker goroutine của VU active rất đơn giản (`ramping_arrival_rate.go:545-561`):
+
+```go
+go func() {
+    defer p.wg.Done()
+    close(ch)
+    for range p.iterations {
+        atomic.AddUint64(&p.running, uint64(1))
+        p.execState.ModCurrentlyActiveVUsCount(+1)
+        runfn(ctx, avu)
+        p.execState.ModCurrentlyActiveVUsCount(-1)
+        atomic.AddUint64(&p.running, ^uint64(0))
+    }
+}()
+```
+
+Trạng thái VU:
+
+```text
+idle: đang ngồi block trong `range p.iterations`, chưa pick được job
+busy: đã pick job, đang chạy runfn
+```
+
+Quan trọng: `ModCurrentlyActiveVUsCount(+1)` chỉ tăng khi VU **bắt đầu chạy** runfn. Nó **không**
+tăng khi VU vào idle. Đó là lý do `vus` metric ở summary phản ánh số VU đang **busy**, không phải
+số VU đã active. Số VU đã active (và idle) là `vus_max`.
+
+Hệ quả khi đọc summary:
+
+```text
+vus min=2 max=4 nghĩa là:
+  - tại sample khi ít nhất 2 VU đang busy
+  - tại sample khi nhiều nhất 4 VU đang busy
+  
+vus_max min=6 max=6 nghĩa là:
+  - đã init 6 VU, không spawn unplanned thêm
+  - 6 VU này đang ở mix idle/busy tại các thời điểm sample
+```
+
+#### 3.13.5. Khi nào unplanned VU "biến mất"
+
+Một câu hỏi nâng cao: unplanned VU có bị "destroy" giữa scenario không?
+
+Trả lời: không. Một khi đã init, VU sống suốt scenario. Lý do:
+
+```text
+1. init script chỉ chạy 1 lần (top-level JS)
+2. destroy/recreate VU rất tốn kém
+3. closed/open model đều giữ VU sống tới khi maxDurationCtx kết thúc
+```
+
+Vì vậy `vus_max` là monotonic non-decreasing trong một scenario: chỉ tăng khi spawn unplanned, không
+giảm. Cuối scenario nó về 0 do scheduler cleanup, không phải do mid-run shrink.
+
+Trong `ramping-arrival-rate`, nhiều người tưởng "khi rate giảm, VU thừa sẽ bị release". Sai. Tương
+tự `ramping-vus`, VU pool không tự co lại trong runtime. Chỉ khi scenario kết thúc thì cleanup mới
+chạy.
+
+#### 3.13.6. Bảng tóm tắt lifecycle
+
+| Pha | Counter `Initialized` | Counter `Active` | Có thể nhận mốc fire? |
+| --- | --- | --- | --- |
+| 0 - uninitialized | chưa | chưa | không |
+| 1 - requested | chưa | chưa | không (đang init) |
+| 2 - initialized | +1 | chưa | không (chưa activate) |
+| 3a - active idle | +1 | (sample khi busy thì +1, idle thì 0) | có |
+| 3b - active busy | +1 | +1 | không (đang chạy iter) |
+| 4 - retired | -1 (cleanup) | -1 (cleanup) | không |
+
+### 3.14. Dropped iterations: công thức và khi nào emit
+
+`dropped_iterations` là metric đặc thù của open model. Closed model không có metric này. Hiểu cơ
+chế emit chính xác giúp đọc summary đúng và biết khi nào cần tăng `preAllocatedVUs`.
+
+#### 3.14.1. Định nghĩa core
+
+`dropped_iterations` được emit ở `lib/executor/constant_arrival_rate.go:339-346`:
+
+```go
+metrics.PushIfNotDone(parentCtx, out, metrics.Sample{
+    TimeSeries: metrics.TimeSeries{
+        Metric: droppedIterationMetric,
+        Tags:   metricTags,
+    },
+    Time:  time.Now(),
+    Value: 1,
+})
+```
+
+Giá trị `1` mỗi lần emit. Tổng lại bằng số mốc fire bị bỏ. Time stamp là `time.Now()` tại thời điểm
+drop, không phải thời điểm fire (chênh lệch nhỏ vì select case xảy ra ngay sau timer).
+
+Điều kiện emit (`constant_arrival_rate.go:330-346`):
+
+```text
+1. timer.C fire (mốc fire đến hạn)
+2. vusPool.TryRunIteration() trả về false
+3. emit DroppedIterations = 1
+```
+
+Tức `dropped_iterations` chỉ emit khi:
+
+```text
+- arrival timeline đã fire một mốc cụ thể
+- pool không có VU idle tại đúng thời điểm đó
+- chưa qua regDurationCtx.Done() (sau duration thì không fire mốc mới)
+```
+
+#### 3.14.2. Khi nào KHÔNG emit dropped_iterations
+
+Để tránh đọc nhầm, liệt kê các trường hợp **không** emit dropped_iterations dù trông như thiếu VU:
+
+```text
+1. iteration đã start nhưng bị cancel cuối scenario
+   -> đó là interrupted_iterations, KHÔNG phải dropped
+   -> hiển thị ở dòng "running ... X complete and Y interrupted iterations"
+
+2. test bị Ctrl+C (parentCtx cancel)
+   -> PushIfNotDone không push vì context đã done
+   -> các mốc đáng ra fire mà bị skip do test stop -> không tính
+
+3. mốc fire sau regDurationCtx.Done()
+   -> select case `<-regDurationCtx.Done()` thắng
+   -> Run() return luôn, không vào nhánh drop
+   -> các mốc trong gracefulStop window không tồn tại
+
+4. iteration chạy nhưng check fail / HTTP 500
+   -> đó là check failure, không phải drop
+   -> iteration vẫn được tính là complete iteration
+
+5. preAllocatedVUs = maxVUs và tất cả VU bận
+   -> emit dropped_iterations bình thường
+   -> log warning "Insufficient VUs..." 1 lần duy nhất
+```
+
+#### 3.14.3. Công thức ước lượng dropped_iterations
+
+Khi capacity của pool nhỏ hơn target rate:
+
+```text
+lambda = rate / timeUnit_seconds
+W_effective = thời gian VU bận / iteration
+M = số VU active tối đa = preAllocatedVUs (hoặc maxVUs nếu spawn được hết)
+
+capacity = M / W_effective                  (iter/s)
+drop_rate ~= max(0, lambda - capacity)      (drop/s)
+
+expected_dropped ~= drop_rate * effective_window_seconds
+                  ~= drop_rate * duration_seconds  (gần đúng nếu pool bão hòa toàn bộ duration)
+```
+
+Nếu pool bão hòa **không** suốt duration (ví dụ pool spawn unplanned dần):
+
+```text
+expected_dropped phụ thuộc cả timeline spawn
+= sum over each interval (drop_rate_in_interval * interval_seconds)
+```
+
+Nên trong các test thực, công thức trên chỉ là cận trên. Cận dưới khi spawn xong nhanh là 0.
+
+Ví dụ verify với demo `not_enough_vus`:
+
+```text
+rate=10, timeUnit=1s, duration=3s
+preAllocatedVUs=2, maxVUs=2 (pool bão hòa, không spawn được unplanned)
+W_effective ~= 1s
+
+lambda = 10
+capacity = 2 / 1 = 2
+drop_rate = 10 - 2 = 8
+expected_dropped = 8 * 3 = 24
+
+actual: dropped_iterations = 24
+```
+
+Khớp. Lý do khớp đẹp: pool đầy ngay từ đầu (W_effective ~= 1s, fire mốc đầu xong là kẹt liên tục).
+
+Ví dụ với spawn unplanned (demo `unplanned_vus`):
+
+```text
+rate=4, timeUnit=1s, duration=4s
+preAllocatedVUs=1, maxVUs=4
+W_effective ~= 0.6s
+
+ban đầu pool chỉ có 1 VU:
+  capacity = 1/0.6 ~= 1.67 iter/s
+  drop_rate = 4 - 1.67 = 2.33 drop/s
+  
+sau khi spawn 1 unplanned (~T_init~= 0.4s):
+  capacity = 2/0.6 ~= 3.33 iter/s
+  drop_rate = 4 - 3.33 = 0.67 drop/s
+  
+sau khi spawn unplanned thứ 2:
+  capacity = 3/0.6 = 5 iter/s
+  drop_rate = 0
+  
+expected_dropped (rough): chỉ những mốc trong window spawn còn dở
+~= 1-3 drops
+
+actual: dropped_iterations = 2
+```
+
+Nằm trong dải hợp lý. Vì rate spawn phụ thuộc T_init và scheduling chính xác của Go runtime, không
+có cách viết công thức chính xác cho case này; chỉ cần biết drop sẽ tập trung trong window spawn.
+
+#### 3.14.4. Verify dropped_iterations từ summary
+
+Cách đọc nhanh:
+
+```text
+nếu dropped_iterations = 0:
+  pool đủ trong toàn bộ run, không cần action
+  
+nếu dropped_iterations > 0 nhưng nhỏ:
+  có thể pool đã spawn unplanned, drop nằm ở window spawn
+  cân nhắc tăng preAllocatedVUs để tránh trigger spawn
+
+nếu dropped_iterations >> 0 và có warning "Insufficient VUs":
+  pool đã đạt maxVUs vẫn không đủ
+  bắt buộc phải tăng maxVUs (và preAllocatedVUs)
+  hoặc giảm rate
+```
+
+Tỉ số drop/total cũng quan trọng:
+
+```text
+drop_ratio = dropped_iterations / (dropped_iterations + iterations + interrupted_iterations)
+           = drop / total_scheduled
+
+nếu drop_ratio > 0.1 (10%): nghi ngờ test không đáng tin
+nếu drop_ratio > 0.5: bài test gần như không phản ánh đúng tải
+```
+
+Trong CI hoặc threshold setup, thường dùng:
+
+```js
+thresholds: {
+  dropped_iterations: ["count<10"],         // tổng drop dưới 10
+  // hoặc tỉ lệ:
+  dropped_iterations: ["rate<0.01"],         // dùng kết hợp với metric counter rate
+}
+```
+
+Lưu ý: `dropped_iterations` là Counter, threshold dùng `count`, `rate`. Không có `avg`/`p95` cho
+metric Counter.
+
+#### 3.14.5. Phân biệt với interrupted_iterations
+
+Đây là điểm rất hay nhầm:
+
+```text
+dropped_iterations  = mốc fire không kết nối được với VU idle
+                    = iteration CHƯA TỪNG start
+                    = không có entry trong iteration_duration metric
+
+interrupted_iterations = iteration đã start nhưng VU bị cancel context trước khi finish
+                       = đã có entry runfn() được gọi nhưng abort
+                       = không có entry trong iterations metric (vì runfn return false)
+                       = chỉ hiện ở dòng "running (X), Y/Z VUs, A complete and B interrupted iterations"
+```
+
+Cùng một run có thể có cả hai:
+
+```text
+trong duration: pool kẹt -> dropped tăng
+cuối duration -> sang gracefulStop: iteration đang chạy còn time
+sau gracefulStop: iteration chưa xong bị cancel -> interrupted tăng
+```
+
+Demo `constant_arrival_rate_interrupt_demo.js` minh họa rõ tình huống này.
+
+#### 3.14.6. Bảng cơ chế emit
+
+| Trạng thái fire | Trạng thái pool | Action core | Metric/counter ảnh hưởng |
+| --- | --- | --- | --- |
+| Fire trong duration | Có VU idle | TryRunIteration thành công | iterations++ (sau khi finish) |
+| Fire trong duration | Mọi VU bận, có quota unplanned | drop, push spawn request | dropped_iterations++, spawn lazy |
+| Fire trong duration | Mọi VU bận, hết quota unplanned | drop, log warning lần 1 | dropped_iterations++, warning lần đầu |
+| Fire trong duration | Mọi VU bận, đang chờ spawn | drop (default branch select) | dropped_iterations++, không trigger spawn thêm |
+| Sau duration (gracefulStop) | bất kỳ | regDurationCtx done -> Run() return | không emit metric mới |
+| Iteration đang chạy bị cancel | (cuối gracefulStop) | maxDurationCtx cancel | interrupted_iterations++ |
+
 
 ## 4. Demo fixed start schedule đủ VU
 
