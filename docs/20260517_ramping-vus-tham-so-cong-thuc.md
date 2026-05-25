@@ -1056,6 +1056,49 @@ stage trùng duration -> không sao, chỉ là độ dài giống nhau
 stage duration=0s   -> instant jump tới target ngay tại mốc đó
 ```
 
+Core minh chứng "1 thời điểm chỉ có đúng 1 stage chạy":
+
+**1) Stages tuần tự, không song song**
+
+`getRawExecutionSteps()` (`ramping_vus.go:177-240`) duyệt `for _, stage := range vlvc.Stages`
+và cộng dồn:
+
+```go
+timeTillEnd += stageDuration
+```
+
+`timeTillEnd` là biến tích lũy, mỗi stage chỉ ghi `ExecutionStep` vào khoảng
+`[timeTillEnd_trước, timeTillEnd_sau]`. Không có code nào cho 2 stage ghi step cùng
+một khoảng thời gian → không thể chạy song song.
+
+**2) Runtime chỉ đọc 1 step tại 1 thời điểm**
+
+`iterateSteps()` (`ramping_vus.go:625-647`) là vòng lặp `for` đọc từng step theo thứ tự
+`TimeOffset` tăng dần:
+
+```go
+wait(r.TimeOffset)        // chờ tới mốc thời gian của step
+handleNewScheduledVUs(r)  // áp dụng số VU của step đó
+i++                       // sang step tiếp theo
+```
+
+Tại mọi thời điểm, executor chỉ đang xử lý đúng 1 `ExecutionStep` thuộc đúng 1 stage.
+
+**3) Stage không có "thời gian riêng"**
+
+Stage chỉ là input để sinh ra `rawSteps`. Sau khi sinh xong, executor không còn biết
+khái niệm "stage" nữa — chỉ thấy danh sách step theo timeline. Không có cách nào 2 stage
+"đè" lên nhau.
+
+Nhớ nhanh:
+
+```text
+Stage là khái niệm của config
+Step là khái niệm của runtime
+1 stage  -> N step trên 1 đoạn timeline liên tục
+2 stage  -> 2 đoạn timeline nối đuôi nhau, không bao giờ chồng nhau
+```
+
 ### 6.3.1. File demo
 
 ```text
