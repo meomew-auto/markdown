@@ -1082,6 +1082,14 @@ export const options = {
         { duration: "0s", target: 6 },  // stage 2: instant jump 4 -> 6
         { duration: "3s", target: 6 },  // stage 3: hold (duration trùng)
         { duration: "3s", target: 0 },  // stage 4: ramp 6 -> 0
+      ],
+      gracefulRampDown: "2s",
+      gracefulStop: "2s",
+    },
+  },
+};
+```
+
 ### 6.3.2. Header và summary thật
 
 Header:
@@ -1283,7 +1291,7 @@ Nhớ 4 ý:
    chúng chạy song song theo startTime của từng scenario
    ```
 
-
+## 7. Demo QuickPizza `2 requests / iteration`
 
 File:
 
