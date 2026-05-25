@@ -39,6 +39,8 @@ docs/20260517_ramping_vus_quickpizza_two_requests_worked_example.md
 - [Công thức nền](#3-công-thức-nền)
 - [Checklist core đã lọc](#39-checklist-core-đã-lọc-cho-ramping-vus)
 - [Thêm nhầm field của executor khác](#310-thêm-nhầm-field-của-executor-khác-có-lỗi-không)
+- [Bước nhảy giữa các VU trong 1 stage](#311-bước-nhảy-giữa-các-vu-trong-1-stage)
+- [Vì sao không spawn hết VU ngay](#312-vì-sao-không-spawn-hết-vu-ngay-từ-đầu)
 - [Demo stage timeline](#4-demo-stage-timeline)
 - [Demo VU nhanhchậm](#5-demo-vu-nhanhchậm)
 - [Demo gracefulRampDown và interrupted](#6-demo-gracefulrampdown-và-interrupted)
