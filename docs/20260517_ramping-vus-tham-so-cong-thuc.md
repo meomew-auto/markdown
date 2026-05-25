@@ -1110,6 +1110,94 @@ header max duration = 12s + gracefulStop 2s = 14s
 max VUs trong header = 6 (= target lớn nhất sau ramp)
 ```
 
+Chi tiết hơn — k6 tính các con số trên bằng cách nào?
+
+**1) `regular_duration`**:
+
+```text
+công thức: regular_duration = sum(stage.duration)
+
+stage 0: 3s
+stage 1: 3s
+stage 2: 0s   <- duration=0 vẫn cộng vào, chỉ là cộng 0
+stage 3: 3s
+stage 4: 3s
+-----------
+regular_duration = 12s
+```
+
+Lấy từ `ramping_vus.go:495`: `regularDuration, _ := lib.GetEndOffset(rawSteps)`.
+`rawSteps` là dãy `ExecutionStep` theo timeline; offset của step cuối chính là
+`sum(stage.duration)`.
+
+**2) `max_planned_vus` (số trong header `Up to N looping VUs`)**:
+
+```text
+công thức: max(rawSteps[i].PlannedVUs) trên toàn timeline
+
+duyệt qua stages, lấy target lớn nhất từng đạt:
+  startVUs = 2
+  stage 0 -> 4
+  stage 1 -> 4   (trùng, không tăng)
+  stage 2 -> 6   (đạt 6 ở t=6s)
+  stage 3 -> 6   (trùng, hold ở 6)
+  stage 4 -> 0   (giảm)
+-----------
+max_planned_vus_raw = 6
+```
+
+Sau đó cộng thêm reserve cho `gracefulRampDown` (xem `gracefulSteps` trong
+`reserveVUsForGracefulRampDowns()`). Trong demo này không có ramp-down giữa
+timeline nào tạo thêm reserve, nên:
+
+```text
+max VUs = GetMaxPlannedVUs(gracefulSteps) = 6
+```
+
+Khớp header: `Up to 6 looping VUs`.
+
+**3) `executor_wall_time_after_start_max` (header `max duration (incl. graceful stop)`)**:
+
+```text
+công thức: regular_duration + gracefulStop
+        = 12s + 2s
+        = 14s
+```
+
+Khớp header: `14s max duration (incl. graceful stop)`.
+
+**4) Tại sao `vus_max = 6` mà không phải 4?**:
+
+```text
+vus_max là Gauge phản ánh số VU instance được k6 init ở init phase
+init phase init đủ max_planned_vus = 6 instance
+nên vus_max = 6 ngay từ đầu, không thay đổi
+```
+
+Khác với `vus` (Gauge số VU đang active): số này lên xuống theo timeline,
+ở demo này min=1 (lúc gần cuối ramp-down), max=6 (lúc plateau ở stage 3).
+
+**5) Stage trùng target ảnh hưởng gì tới các số trên?**:
+
+```text
+không ảnh hưởng max_planned_vus
+không ảnh hưởng regular_duration (duration của stage trùng vẫn cộng vào)
+chỉ là không sinh ExecutionStep mới trong rawSteps
+```
+
+Đọc từ `getRawExecutionSteps()` (`ramping_vus.go:194-208`):
+
+```text
+stageVUDiff := stageEndVUs - fromVUs
+if stageVUDiff == 0 {
+    continue   // <- skip step, nhưng timeTillEnd vẫn đã += stageDuration
+}
+```
+
+Nghĩa là k6 **vẫn cộng `stageDuration` vào `timeTillEnd`** trước khi `continue`.
+Stage trùng target chỉ "biến mất" khỏi danh sách `ExecutionStep`, không biến mất
+khỏi `regular_duration`.
+
 ### 6.3.3. Đọc log theo mốc thời gian
 
 Stage 0 (`t=0..3s`, ramp 2 → 4):
