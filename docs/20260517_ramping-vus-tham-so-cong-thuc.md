@@ -757,17 +757,36 @@ trục VU=1   : [iter#0|iter#1 |iter#2 |iter#3...]
               0      4       8       12
 ```
 
-**Khi 1 stage giảm số VU**, executor sẽ:
+**Khi 1 stage giảm số VU** từ `N_cũ` xuống `N_mới` (với `N_mới < N_cũ`),
+executor sẽ:
 
 ```text
-1) emit step (timeOffset=stageEnd, plannedVUs=2)
-2) gọi vuHandle[3].gracefulStop()  -> chuyển state sang toGracefulStop
-                                       không start iter mới
-                                       iter đang chạy được tiếp tục
-3) gọi vuHandle[2].gracefulStop()  -> tương tự
-4) reserve thêm "gracefulRampDown" giây cho 2 VU đó kịp finish iter
-5) nếu sau gracefulRampDown VU vẫn còn iter chưa xong
-   -> hardStop() -> iter bị interrupt
+1) emit step (timeOffset=stageEnd, plannedVUs=N_mới)
+   "plannedVUs" = số VU active mới = target của stage giảm
+   ví dụ stage 4 -> 2 thì plannedVUs=2
+
+2) gọi gracefulStop() cho các VU "dư" (từ index N_mới đến N_cũ - 1)
+   ví dụ N_cũ=4, N_mới=2 -> stop vuHandle[3] và vuHandle[2]
+   (tức là __VU=4 và __VU=3, vì __VU là 1-based, vuHandle là 0-based)
+   các VU này:
+     - chuyển state sang toGracefulStop
+     - không start iter mới
+     - iter đang chạy được tiếp tục
+
+3) reserve thêm gracefulRampDown giây cho các VU vừa stop kịp finish iter
+   trong gracefulSteps
+
+4) sau gracefulRampDown:
+   - nếu VU đã finish iter -> ReturnVU về pool clean
+   - nếu VU còn iter chưa xong -> hardStop() -> iter bị interrupt
+```
+
+Lưu ý index:
+
+```text
+vuHandle[i]  : 0-based, dùng trong code Go
+__VU = i + 1 : 1-based, dùng trong JS
+=> vuHandle[3] tương ứng __VU=4
 ```
 
 Đọc từ core (`ramping_vus.go:313-417`, `vu_handle.go:147-181`):
