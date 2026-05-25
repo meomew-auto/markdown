@@ -303,6 +303,121 @@ Những điểm cần lưu ý khi đọc core:
 
   nhưng không có path emit `dropped_iterations` kiểu `per-vu-iterations` hay `shared-iterations`.
 
+### 1.3. VU ở các stage init ở phase nào? Có phải unplanned VUs không?
+
+Câu hỏi hay gặp:
+
+```text
+ban đầu chỉ có startVUs = 1
+nhưng stage 1 ramp lên 4 VU
+=> 3 VU mới đó được init lúc nào?
+=> nó có phải unplanned VUs như arrival-rate không?
+```
+
+Trả lời ngắn:
+
+```text
+VU của các stage được init ở init phase, không phải runtime
+ramping-vus không có khái niệm unplanned VUs
+closed model nói chung không có unplanned VUs
+```
+
+Đi vào chi tiết core:
+
+- **Init phase init đủ `maxVUs` instance một lần**:
+
+  Trước khi `Run()` chạy, k6 gọi `GetExecutionRequirements()` để biết tổng số VU
+  lớn nhất mà execution plan có thể cần. Với `ramping-vus`:
+
+  ```text
+  maxVUs = GetMaxPlannedVUs(gracefulSteps)
+  ```
+
+  `gracefulSteps` đã reserve thêm slot cho VU đang ramp-down còn finish iteration,
+  nên `maxVUs` thường lớn hơn hoặc bằng target lớn nhất trong stages.
+
+  k6 init đúng `maxVUs` VU instance: chạy file-level code (import, biến module-scope,
+  `export const options`), tạo JS context cho từng VU, đẩy hết vào pool của
+  `ExecutionState`. Bước này xong **trước** khi scenario bắt đầu chạy.
+
+- **`Run()` chỉ tạo `vuHandle` ở state `stopped`**:
+
+  Ở `ramping_vus.go:614-619`:
+
+  ```text
+  for i := 0; i < maxVUs; i++ {
+      vuHandles[i] = newStoppedVUHandle(...)
+      go vuHandles[i].runLoopsIfPossible(...)
+  }
+  ```
+
+  Tức là tất cả `maxVUs` handle đều được tạo ngay từ đầu, ở state `stopped`.
+  Chưa có VU nào active, chưa lấy VU instance nào ra khỏi pool.
+
+- **Scale up = lấy VU đã init từ pool, không init lại**:
+
+  Khi timeline yêu cầu tăng VU, `scheduledVUsHandlerStrategy()` gọi `vuHandle.start()`.
+  Ở `vu_handle.go:128`:
+
+  ```text
+  vh.initVU, err = vh.getVU()
+  vh.activeVU = vh.initVU.Activate(...)
+  ```
+
+  `getVU()` chỉ là `executionState.GetPlannedVU()` — lấy VU instance đã được
+  init từ trước ra khỏi pool, rồi `Activate()` tạo runtime context.
+  Không có bước init JS context lại.
+
+- **Scale down = trả VU về pool, không destroy**:
+
+  Khi timeline yêu cầu giảm VU, `vuHandle.gracefulStop()` cho iteration hiện tại
+  finish (trong `gracefulRampDown`), rồi gọi `returnVU()` → `executionState.ReturnVU()`.
+  VU instance về lại pool, sẵn sàng cho stage sau lấy ra dùng tiếp.
+
+- **`startVUs` không phải số VU được init**:
+
+  `startVUs` là số VU **active** ở `t=0`, không phải số VU được init.
+  Ví dụ:
+
+  ```text
+  startVUs = 1
+  stages = [{ duration: "4s", target: 4 }, ...]
+  ```
+
+  thì init phase vẫn init đủ `maxVUs` (ở demo này là 4) instance.
+  Lúc `t=0` chỉ có 1 VU được `start()`, 3 VU còn lại nằm ở state `stopped`
+  trong pool, chờ executor gọi `start()` ở các thời điểm sau.
+
+- **So sánh nhanh với arrival-rate (open model)**:
+
+  | Khái niệm | Closed model (`ramping-vus`, `constant-vus`, ...) | Open model (`*-arrival-rate`) |
+  | --- | --- | --- |
+  | Init thêm VU trong runtime? | không | có, nếu cần |
+  | Field `preAllocatedVUs` | không có | có |
+  | Field `maxVUs` (scenario) | không có | có |
+  | Khái niệm unplanned VU | không tồn tại | `MaxUnplannedVUs = maxVUs - preAllocatedVUs` |
+  | Vì sao? | iteration mới chỉ start sau khi iter cũ xong → biết trước số VU cần | rate cố định, có thể vượt năng lực preAllocated → cần spawn thêm |
+
+  Grep core để tự kiểm tra:
+
+  ```text
+  unplannedVUs / preAllocatedVUs chỉ xuất hiện ở:
+    constant_arrival_rate.go
+    ramping_arrival_rate.go
+  ```
+
+  Hoàn toàn không có ở `ramping_vus.go`, `constant_vus.go`,
+  `per_vu_iterations.go`, `shared_iterations.go`.
+
+Tóm lại:
+
+```text
+VU của các stage trong ramping-vus = planned VUs đã pre-init từ init phase
+không phải unplanned VUs
+closed model không có khái niệm unplanned VUs
+unplanned VUs là chuyện riêng của open model (arrival-rate)
+```
+
 ## 2. Bảng tham số tiếng Việt
 
 | Tên | Nghĩa tiếng Việt | Lấy ở đâu | Giá trị trong ví dụ | Ghi chú |
