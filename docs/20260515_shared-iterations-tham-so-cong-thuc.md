@@ -14,14 +14,20 @@ Nguồn docs Grafana:
 - [Ý tưởng chính](#1-ý-tưởng-chính)
 - [Khi nào dùng thực tế](#11-khi-nào-dùng-thực-tế)
 - [Core chạy như nào](#12-core-chạy-như-nào)
-- [Checklist core đã lọc](#13-checklist-core-đã-lọc-cho-shared-iterations)
+- [VU init ở phase nào](#13-vu-init-ở-phase-nào-có-phải-unplanned-vus-không)
+- [Checklist core đã lọc](#14-checklist-core-đã-lọc-cho-shared-iterations)
 - [Bảng tham số tiếng Việt](#2-bảng-tham-số-tiếng-việt)
 - [Công thức nền](#3-công-thức-nền)
+- [VU activate xong start iteration ngay](#36-vu-activate-xong-start-iteration-ngay-không-đợi-vu-khác)
+- [Vì sao spawn hết VU ngay từ đầu](#37-vì-sao-spawn-hết-vu-ngay-từ-đầu)
+- [maxDuration và gracefulStop chi tiết](#38-maxduration-và-gracefulstop-chi-tiết)
+- [Lifecycle VU iter counter](#39-lifecycle-vu-và-iter-counter)
 - [Khác gì với `per-vu-iterations`](#4-khác-gì-với-per-vu-iterations)
 - [Demo phân phối iteration](#5-demo-phân-phối-iteration)
 - [Demo đếm từng VU nhanh/chậm](#51-demo-đếm-từng-vu-nhanhchậm)
-- [Demo QuickPizza 2 requests](#6-demo-quickpizza-2-requests--iteration)
-- [Cheat sheet](#7-cheat-sheet)
+- [Edge case của shared-iterations](#6-edge-case-của-shared-iterations)
+- [Demo QuickPizza 2 requests](#7-demo-quickpizza-2-requests--iteration)
+- [Cheat sheet](#8-cheat-sheet)
 
 ## 1. Ý tưởng chính
 
