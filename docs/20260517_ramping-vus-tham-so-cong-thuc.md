@@ -799,6 +799,208 @@ startVUs = 10
 executor = ramping-vus
 ```
 
+## 3.11. Bước nhảy giữa các VU trong 1 stage
+
+Câu hỏi: trong stage `ramp 1 → 3 trong 3s`, các VU mới vào ở mốc nào?
+Có phải đều 1s/VU không?
+
+Trả lời ngắn:
+
+```text
+không phải hằng số 1s
+bước nhảy = stageDuration / |target - fromVUs|
+         = stageDuration / số VU phải thêm
+```
+
+### 3.11.1. Công thức từ core
+
+Đọc `ramping_vus.go:225-230` (nhánh ramp up):
+
+```go
+for ; unscaled <= stageEndVUs; scaled, unscaled = index.Next() {
+    addStep(
+        timeTillEnd-time.Duration(int64(stageDuration)*(stageEndVUs-unscaled)/stageVUDiff),
+        uint64(scaled),
+    )
+}
+```
+
+`timeOffset` của step thứ `n` được tính:
+
+```text
+timeOffset = timeTillEnd - stageDuration * (stageEndVUs - unscaled) / stageVUDiff
+```
+
+Khi `unscaled` tăng dần từ `fromVUs+1` tới `stageEndVUs`, `timeOffset` rải đều
+cách nhau:
+
+```text
+step_interval = stageDuration / stageVUDiff
+              = stageDuration / |target - fromVUs|
+```
+
+Mốc của VU thứ `n` thêm vào (với `n = 1..diff`):
+
+```text
+mốc_VU_thứ_n = stageStart + n * step_interval
+            = stageStart + (n / diff) * stageDuration
+```
+
+### 3.11.2. Ví dụ áp dụng
+
+Stage `ramp 1 → 3 trong 3s`:
+
+```text
+fromVUs = 1
+target  = 3
+diff    = 2
+duration = 3s
+step_interval = 3 / 2 = 1.5s
+
+t=0s    plannedVUs=1   (fromVUs)
+t=1.5s  plannedVUs=2   (VU thêm #1)
+t=3.0s  plannedVUs=3   (VU thêm #2, đúng cuối stage)
+```
+
+Bảng nhanh các tỉ lệ thường gặp:
+
+| Stage | fromVUs | target | diff | duration | step |
+| --- | --- | --- | --- | --- | --- |
+| ramp 1→3 / 3s | 1 | 3 | 2 | 3s | **1.5s** |
+| ramp 1→5 / 4s | 1 | 5 | 4 | 4s | 1s |
+| ramp 0→10 / 5s | 0 | 10 | 10 | 5s | 0.5s |
+| ramp 5→105 / 10s | 5 | 105 | 100 | 10s | 0.1s |
+| ramp 0→1000 / 1s | 0 | 1000 | 1000 | 1s | 1ms |
+
+### 3.11.3. Hai trường hợp đặc biệt
+
+```text
+1) duration=0s (instant jump)
+   step_interval = 0 / diff = 0
+   -> tất cả VU mới vào cùng tại mốc đó (cuối stageStart)
+
+2) target=fromVUs (hold)
+   diff = 0, code thoát sớm: if stageVUDiff == 0 { continue }
+   -> không sinh step nào trong stage này
+```
+
+### 3.11.4. Verify từ log thật
+
+Demo `ramping_vus_starttime_demo.js` có stage 0 = `ramp 1 → 3 trong 3s`,
+log thật:
+
+```text
+[iter] t=0.0s __VU=1 __ITER=0    <- scenario t=0
+[iter] t=1.5s __VU=3 __ITER=0    <- scenario t=1.5s ✓
+[iter] t=3.0s __VU=2 __ITER=0    <- scenario t=3.0s ✓
+```
+
+Khớp đúng công thức.
+
+## 3.12. Vì sao không spawn hết VU ngay từ đầu?
+
+Câu hỏi hợp lý: init phase đã init đủ `maxVUs` instance vào pool rồi. Vậy
+sao không activate hết ngay tại t=0 cho gọn, mà phải rải đều theo timeline?
+
+Trả lời ngắn:
+
+```text
+init phase init đủ instance VÀO POOL (sẵn sàng dùng)
+nhưng "sẵn sàng dùng" khác với "phải dùng ngay"
+
+ramping-vus là model "variable users over time"
+mục đích chính là MÔ PHỎNG concurrency thay đổi theo thời gian
+
+nếu spawn hết ngay -> không còn là ramp, mà là constant
+```
+
+### 3.12.1. Vì sao tách init phase và activate?
+
+Init một VU instance là việc nặng:
+
+```text
+- chạy lại file-level code (import module, init biến module-scope)
+- tạo JS runtime context riêng
+- copy module registry, set up sandbox
+```
+
+Nếu phải init lúc runtime mỗi khi cần thêm VU, mỗi lần ramp sẽ có spike
+latency vì k6 đang vừa init JS context vừa chạy iteration. Test result
+sẽ bị nhiễu.
+
+Vì vậy k6 chia làm 2 bước:
+
+```text
+1) Init phase  : init đủ maxVUs instance một lần, không tốn wall-clock của test
+2) Run phase   : chỉ Activate() các handle theo timeline, không init lại
+```
+
+Activate là việc nhẹ — chỉ tạo `ActiveVU` wrapper trên `InitializedVU` có sẵn.
+
+### 3.12.2. Vì sao stage ramp lại rải đều, không activate hết tại stageStart?
+
+Đây là **ý nghĩa nghiệp vụ** của ramp, không phải giới hạn kỹ thuật.
+
+Ví dụ stage `ramp 0 → 100 trong 10s`:
+
+```text
+mục đích: mô phỏng "load tăng dần từ 0 lên 100 user trong 10s"
+=> tại t=5s, hệ thống đang chịu khoảng 50 user, không phải 100 user
+
+nếu activate 100 VU ngay tại t=0:
+  -> tại t=5s đã là 100 user
+  -> không phải ramp, mà là constant 100 user trong 10s
+  -> sai mục đích test
+```
+
+Cho nên rải đều VU theo `step_interval = duration / diff` là cách k6 mô
+phỏng đúng quá trình "tăng dần". Đây là điểm phân biệt `ramping-vus` với
+`constant-vus`:
+
+```text
+constant-vus  : N VU active suốt duration
+ramping-vus   : VU active thay đổi theo timeline
+
+nếu muốn jump tức thì -> dùng stage duration=0s (xem 3.11.3)
+nếu muốn giữ nguyên N -> dùng constant-vus hoặc stage có target trùng
+```
+
+### 3.12.3. Liệt kê hành vi khi cần ramp
+
+```text
+- t < stageStart            : VU chưa được activate, ở state stopped
+- t = stageStart             : kích hoạt step (timeOffset=stageStart, plannedVUs=fromVUs)
+- t = stageStart + n*interval: kích hoạt step thứ n, VU thứ (fromVUs+n) được Activate()
+- t = stageEnd               : đủ target VU active
+
+VU đã activate sẽ loop iteration cho tới khi:
+  + bị scale-down: gracefulStop() rồi ReturnVU() về pool
+  + scenario kết thúc: tương tự
+```
+
+Pool VU trong `ExecutionState` không "rỗng" — luôn có đủ instance, chỉ là chưa
+được Activate. Activate là cờ "VU này đang chạy", không phải "VU này tồn tại".
+
+### 3.12.4. Kết luận
+
+```text
+"đã có sẵn VU trong pool" != "phải activate hết ngay"
+
+init phase  -> chuẩn bị nguyên liệu (instance JS context)
+activate    -> đưa nguyên liệu vào dùng theo nhịp timeline
+ramp        -> nhịp đó là tăng dần để mô phỏng concurrency tăng dần
+```
+
+Nếu muốn test "100 user đột ngột vào hệ thống" thì dùng:
+
+```text
+- stage { duration: "0s", target: 100 }       (instant jump)
+- hoặc executor: constant-vus với vus: 100   (giữ nguyên 100 từ đầu)
+- hoặc startVUs: 100                          (bắt đầu ngay với 100)
+```
+
+Còn `ramp` mặc định luôn rải đều, đó chính là điểm khác biệt nghiệp vụ của nó.
+
 ## 4. Demo stage timeline
 
 File:
