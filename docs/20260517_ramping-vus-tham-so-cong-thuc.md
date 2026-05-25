@@ -1386,6 +1386,215 @@ scenarios: (100.00%) 1 scenario, 3 max VUs, 12s max duration (incl. graceful sto
          * delayed_scenario: Up to 3 looping VUs for 8s over 3 stages (gracefulRampDown: 1s, startTime: 3s, gracefulStop: 2s)
 ```
 
+Đọc header:
+
+```text
+"Up to 3 looping VUs for 8s over 3 stages"
+  -> regular_duration nội bộ scenario = 3 + 3 + 2 = 8s
+  -> max planned VUs = 3 (target lớn nhất)
+
+"12s max duration (incl. graceful stop)"
+  -> startTime + regular_duration + gracefulStop
+  -> 3s + 8s + 2s = 13s? -> nhưng header in 12s
+```
+
+Lưu ý nhỏ: với 1 scenario duy nhất, k6 có thể tính `max duration` của test theo
+`max(startTime + regular_duration + gracefulStop)` qua các scenario, và khi
+chỉ có 1 scenario thì hiển thị có thể khác chút tùy phiên bản. Quan trọng nhất
+là đọc đúng phần nội bộ scenario `8s` và phần `startTime: 3s` được k6 ghi rõ
+trong dòng dưới.
+
+Output thật theo mốc thời gian (mốc đo từ lúc test start, không phải scenario start):
+
+```text
+t=1.0s   waiting  2.0s     <- progress bar đếm ngược tới khi scenario start
+t=2.0s   waiting  1.0s
+t=3.0s   waiting  0.0s     <- scenario sắp start
+t=3.0s   __VU=1 __ITER=0   <- iteration đầu tiên, đúng tại t=3s test
+t=4.0s   __VU=3 vào        (handle thứ 2 start, scenario nội bộ t=1s)
+t=6.0s   __VU=2 vào        (handle thứ 3 start, scenario nội bộ t=3s, đầu stage 1)
+t=11.0s  scenario end      (test t=11s = scenario nội bộ t=8s)
+```
+
+Cụ thể trong log:
+
+```text
+running (01.0s) ... [   0% ] waiting  2.0s
+running (02.0s) ... [   0% ] waiting  1.0s
+running (03.0s) ... [   0% ] waiting  0.0s
+[iter] t=0.0s __VU=1 __ITER=0    <- elapsedSeconds() đo từ scenario.startTime
+[iter] t=1.5s __VU=3 __ITER=0    (3s test = scenario t=1.5s, VU=3 vào)
+[iter] t=3.0s __VU=2 __ITER=0    (6s test = scenario t=3s, VU=2 vào)
+running (11.0s) ... [ 100% ]
+```
+
+`elapsedSeconds()` trong code dùng `exec.scenario.startTime`, không phải test start
+time, nên log in `t=0.0s` ngay cả khi test đã chạy được 3s. Đây là tham chiếu
+tốt khi muốn đo "VU vào ở giây thứ mấy của scenario".
+
+Tác động của `startTime` lên các con số:
+
+```text
+1) regular_duration scenario (sum stages)        : KHÔNG đổi (vẫn 8s)
+2) max_planned_vus scenario                       : KHÔNG đổi (vẫn 3)
+3) Wall-clock test end                            : DỊCH về sau startTime giây
+4) exec.scenario.startTime trong JS               : trả về Date thật khi scenario start
+5) Stage 0 vẫn bắt đầu ở "scenario nội bộ t=0"    : đúng tại wall-clock = startTime
+```
+
+Nói cách khác: `startTime` không thay đổi cách `ramping-vus` hoạt động, chỉ
+"đặt scenario vào vị trí nào trên trục test wall-clock". Đây là cách dùng để
+stagger nhiều scenario chạy lệch giờ trong cùng 1 file.
+
+#### B. Stage 0 có `duration: 0s`: instant jump tại t=0
+
+Đọc `getRawExecutionSteps()` (`ramping_vus.go:194-208`):
+
+```go
+timeTillEnd += stageDuration   // += 0 = không đổi, vẫn ở mốc 0
+
+stageVUDiff := stageEndVUs - fromVUs
+if stageVUDiff == 0 {
+    continue                   // target trùng startVUs -> skip luôn
+}
+if stageDuration == 0 {
+    addStep(timeTillEnd, ...)  // emit step ngay tại t=0
+    fromVUs = stageEndVUs
+    continue
+}
+```
+
+Hai nhánh chính:
+
+```text
+1) duration=0 và target == startVUs -> không sinh step nào (no-op)
+2) duration=0 và target != startVUs -> emit 1 step (timeOffset=0, plannedVUs=target)
+                                       jump VU tức thì tại t=0
+```
+
+File demo:
+
+```text
+examples/ramping_vus_stage0_zero_duration_demo.js
+```
+
+Code:
+
+```js
+export const options = {
+  scenarios: {
+    stage0_zero: {
+      executor: "ramping-vus",
+      startVUs: 1,
+      stages: [
+        { duration: "0s", target: 4 },  // stage 0: instant jump 1 -> 4
+        { duration: "5s", target: 4 },  // stage 1: hold 4 VU
+        { duration: "2s", target: 0 },  // stage 2: ramp down
+      ],
+      gracefulRampDown: "1s",
+      gracefulStop: "2s",
+    },
+  },
+};
+```
+
+Header thật:
+
+```text
+scenarios: (100.00%) 1 scenario, 4 max VUs, 8s max duration (incl. graceful stop):
+         * stage0_zero: Up to 4 looping VUs for 7s over 3 stages (gracefulRampDown: 1s, gracefulStop: 2s)
+```
+
+Đọc header:
+
+```text
+regular_duration = 0 + 5 + 2 = 7s
+max_planned_vus  = 4 (target lớn nhất, đạt ngay tại t=0)
+header max duration nội bộ = 7s + gracefulStop 2s = 9s
+header thực in 8s -> tùy phiên bản, đọc dòng "for 7s over 3 stages" là chuẩn nhất
+```
+
+Output thật theo mốc thời gian:
+
+```text
+t=0.0s   __VU=1, __VU=2, __VU=3, __VU=4 đều có iteration đầu tiên
+         <- 4 VU active luôn từ giây đầu, không có ramp dần
+t=0.5s   cả 4 VU vào iteration thứ 2
+t=1.0s   running 4/4 VUs, 4 complete
+
+t=5.0s   bắt đầu stage 2 (ramp down 4 -> 0)
+t=6.0s   3/4 VUs (1 VU đã hoàn thành iter cuối, không start iter mới)
+t=7.0s   scenario end
+```
+
+Đối chiếu với core: tại `t=0`, executor đã có sẵn step
+`(timeOffset=0, plannedVUs=4)`, nên `scheduledVUsHandlerStrategy()` start ngay
+4 VU handle. Không có quá trình "ramp từ 1 lên 4" nào xảy ra.
+
+So sánh với form viết trực tiếp `startVUs: 4`:
+
+```js
+// Form 1: stage 0 duration=0 jump
+startVUs: 1,
+stages: [
+  { duration: "0s", target: 4 },
+  { duration: "5s", target: 4 },
+  { duration: "2s", target: 0 },
+],
+
+// Form 2: dùng startVUs trực tiếp
+startVUs: 4,
+stages: [
+  { duration: "5s", target: 4 },
+  { duration: "2s", target: 0 },
+],
+```
+
+Hai form tương đương về behavior: cùng `regular_duration = 7s`,
+cùng `max_planned_vus = 4`, cùng pattern VU theo timeline.
+
+Khi nào dùng Form 1?
+
+```text
+- khi build options động bằng JS, startVUs đã pin = 1 từ logic chung
+  nhưng scenario này muốn jump lên N ngay
+- khi muốn nhấn mạnh "đoạn jump" trong stages cho dễ đọc
+- khi reuse template stages giữa nhiều scenario có startVUs khác nhau
+```
+
+Bình thường viết `startVUs` trực tiếp gọn hơn.
+
+#### C. Kết hợp `startTime` và stage 0 `duration=0s`
+
+Nếu cùng dùng cả hai:
+
+```js
+startTime: "5s",
+startVUs: 1,
+stages: [
+  { duration: "0s", target: 10 },
+  { duration: "10s", target: 10 },
+  { duration: "2s", target: 0 },
+],
+```
+
+Diễn giải timeline:
+
+```text
+t=0..5s   : scenario chưa start (waiting)
+t=5.0s    : scenario start, stage 0 emit ngay step (timeOffset=0_nội_bộ, plannedVUs=10)
+            -> 10 VU active đúng tại wall-clock t=5.0s
+t=5..15s  : stage 1 hold ở 10 VU
+t=15..17s : stage 2 ramp down
+```
+
+Hai field độc lập với nhau:
+
+```text
+startTime    -> dịch wall-clock của cả timeline
+duration=0s  -> jump VU tại "t=0 nội bộ" (= wall-clock startTime)
+```
+
 
 
 File:
