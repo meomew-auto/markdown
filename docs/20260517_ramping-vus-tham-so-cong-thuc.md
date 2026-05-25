@@ -41,6 +41,7 @@ docs/20260517_ramping_vus_quickpizza_two_requests_worked_example.md
 - [Thêm nhầm field của executor khác](#310-thêm-nhầm-field-của-executor-khác-có-lỗi-không)
 - [Bước nhảy giữa các VU trong 1 stage](#311-bước-nhảy-giữa-các-vu-trong-1-stage)
 - [Vì sao không spawn hết VU ngay](#312-vì-sao-không-spawn-hết-vu-ngay-từ-đầu)
+- [VU activate xong start iteration ngay](#313-vu-activate-xong-start-iteration-ngay-không-đợi-đủ-target)
 - [Demo stage timeline](#4-demo-stage-timeline)
 - [Demo VU nhanhchậm](#5-demo-vu-nhanhchậm)
 - [Demo gracefulRampDown và interrupted](#6-demo-gracefulrampdown-và-interrupted)
@@ -1000,6 +1001,163 @@ Nếu muốn test "100 user đột ngột vào hệ thống" thì dùng:
 ```
 
 Còn `ramp` mặc định luôn rải đều, đó chính là điểm khác biệt nghiệp vụ của nó.
+
+## 3.13. VU activate xong start iteration ngay, không đợi đủ target
+
+Câu hỏi: trong stage `ramp 1 → 3 trong 3s`, các VU vào ở `t=0, 1.5s, 3.0s`.
+Vậy VU vào ở `t=1.5s` start iteration ngay tại `t=1.5s`, hay phải đợi đến
+`t=3.0s` (lúc đủ 3 VU) mới bắt đầu chạy?
+
+Trả lời ngắn:
+
+```text
+VU nào activate xong là start iteration NGAY tại mốc đó
+không đợi VU khác, không đợi stage kết thúc
+mỗi VU một dòng đời độc lập (đặc trưng của closed model)
+```
+
+### 3.13.1. Đọc từ core
+
+`scheduledVUsHandlerStrategy()` (`ramping_vus.go:682-693`) — tại đúng mốc của
+`rawSteps`, executor gọi `start()` từng handle:
+
+```go
+for ; cur < pv; cur++ {
+    _ = rs.vuHandles[cur].start()   // gọi ngay tại timeOffset của step
+}
+```
+
+`vuHandle.start()` (`vu_handle.go:115-138`):
+
+```go
+vh.initVU, _ = vh.getVU()                  // lấy VU instance từ pool
+vh.activeVU = vh.initVU.Activate(...)      // tạo ActiveVU
+close(vh.canStartIter)                      // mở cờ chạy
+vh.changeState(starting)
+```
+
+`runLoopsIfPossible()` (`vu_handle.go:185-263`) đang chờ ở `<-canStartIter`.
+Khi cờ mở:
+
+```go
+vu, ctx, cancel = vh.activeVU, vh.ctx, vh.cancel
+vh.changeState(running)
+// fast path: runIter(ctx, vu) chạy ngay
+```
+
+Tổng độ trễ từ "activate" đến "iter đầu start" = vài microsecond cho channel
+signal + state change. Coi như **tức thì**.
+
+### 3.13.2. Verify từ log thật
+
+Demo `ramping_vus_starttime_demo.js`, stage 0 ramp 1→3 trong 3s:
+
+```text
+[iter] t=0.0s __VU=1 __ITER=0    <- VU 1 activate tại t=0,    chạy iter ngay
+[iter] t=1.5s __VU=3 __ITER=0    <- VU 3 activate tại t=1.5s, chạy iter ngay
+[iter] t=3.0s __VU=2 __ITER=0    <- VU 2 activate tại t=3.0s, chạy iter ngay
+```
+
+3 VU không đồng bộ. Mỗi VU có `__ITER=0` đúng tại mốc activate, không VU nào
+đợi VU khác.
+
+### 3.13.3. Snapshot tại các mốc trong stage
+
+Stage 0 = `ramp 1 → 3 trong 3s`, sleep mỗi iter = 0.5s:
+
+```text
+t=0.0s   VU=1 activate, vào iter#0
+t=0.5s   VU=1 vào iter#1
+t=1.0s   VU=1 vào iter#2
+t=1.5s   VU=1 vào iter#3, VU=3 activate vào iter#0
+t=2.0s   VU=1 iter#4, VU=3 iter#1
+t=2.5s   VU=1 iter#5, VU=3 iter#2
+t=3.0s   VU=1 iter#6, VU=3 iter#3, VU=2 activate vào iter#0
+```
+
+Tại `t=2.0s`:
+
+```text
+VU=1: đã chạy 5 iter (iter#0..4)
+VU=3: đã chạy 2 iter (iter#0..1)
+VU=2: chưa active
+```
+
+→ Mỗi VU có counter `__ITER` riêng, đếm độc lập.
+
+### 3.13.4. Throughput tăng dần theo số VU active
+
+Iteration không bị "gom" lại đợi đủ target — nó được sinh đều theo số VU đang
+chạy. Công thức peak rate trong stage:
+
+```text
+peak_iteration_rate(t) ≈ active_vus(t) / effective_iteration_time
+
+trong đó:
+  active_vus(t) = fromVUs + floor((t - stageStart) / step_interval)
+  step_interval = stageDuration / |target - fromVUs|
+```
+
+Áp vào stage demo (`fromVUs=1, target=3, duration=3s, step_interval=1.5s,
+iter=0.5s`):
+
+| t (scenario) | active_vus | peak_rate |
+| --- | --- | --- |
+| 0.0s | 1 | 1 / 0.5 = 2 iter/s |
+| 1.5s | 2 | 2 / 0.5 = 4 iter/s |
+| 3.0s | 3 | 3 / 0.5 = 6 iter/s |
+
+Throughput cứ 1.5s lại tăng 1 bậc. Nếu phải "đợi đủ target" mới chạy thì
+throughput ở `0..3s` sẽ là 0 — sai hoàn toàn.
+
+### 3.13.5. Khi VU đang ở giữa iteration thì stage chuyển sao?
+
+Stage chuyển không cắt ngang iteration đang chạy của VU đã active:
+
+```text
+t=2.99s : VU=3 đang ở giữa iter#1 (sleep 0.5s, còn 0.49s nữa)
+t=3.0s  : stage 1 bắt đầu (target=3 trùng nên không có VU mới)
+t=3.0s  : VU=2 vừa activate, vào iter#0 ngay
+t=3.49s : VU=3 finish iter#1, lập tức vào iter#2
+```
+
+Iteration đang chạy không bị reset hay đếm lại — VU chỉ đơn giản tiếp tục
+loop. Stage chỉ ảnh hưởng đến `plannedVUs` (số VU active tại thời điểm),
+không động tới iteration đang chạy.
+
+### 3.13.6. Điểm dễ nhầm
+
+```text
+SAI : "đợi đủ target VU rồi mới start hàng loạt"
+ĐÚNG: "VU nào activate trước, chạy trước; VU nào activate sau, chạy sau"
+
+SAI : "iteration của các VU đồng bộ với nhau"
+ĐÚNG: "mỗi VU loop iteration riêng, không sync với VU khác"
+
+SAI : "phải đợi stage kết thúc mới có metric"
+ĐÚNG: "iteration_duration, http_reqs, checks emit ngay từ iter đầu của VU đầu"
+
+SAI : "stage chuyển làm reset iteration đang chạy"
+ĐÚNG: "stage chuyển chỉ thay plannedVUs, iteration đang chạy tiếp tục"
+```
+
+### 3.13.7. Liên hệ với open model (arrival-rate)
+
+Để tránh nhầm:
+
+```text
+ramping-vus (closed):
+  - mỗi VU loop iteration của riêng nó
+  - khi VU active, nó tự khởi động iter đầu, không cần ai "schedule"
+  - rate iteration = sum(1/iter_time) của các VU đang active
+  - không có target rate cố định
+
+ramping-arrival-rate (open):
+  - scheduler ép tốc độ start iteration theo target rate/timeUnit
+  - VU không tự loop, mà chờ scheduler giao iter
+  - rate cố định (đến mức cho phép)
+  - có thể cần unplanned VU nếu rate vượt năng lực
+```
 
 ## 4. Demo stage timeline
 
