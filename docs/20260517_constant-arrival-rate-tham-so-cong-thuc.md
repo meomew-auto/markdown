@@ -35,6 +35,7 @@ docs/20260517_constant_arrival_rate_quickpizza_two_requests_worked_example.md
 - [Ý tưởng chính](#1-ý-tưởng-chính)
 - [Khi nào dùng thực tế](#11-khi-nào-dùng-thực-tế)
 - [Nếu muốn tìm ngưỡng quá tải thì tăng gì?](#111-nếu-muốn-tìm-ngưỡng-quá-tải-thì-tăng-gì)
+- [Open model vs closed model: vì sao arrival-rate khác hẳn VU-based](#13-open-model-vs-closed-model-vì-sao-arrival-rate-khác-hẳn-vu-based)
 - [Core chạy như nào](#12-core-chạy-như-nào)
 - [Bảng tham số tiếng Việt](#2-bảng-tham-số-tiếng-việt)
 - [Công thức nền](#3-công-thức-nền)
@@ -45,13 +46,19 @@ docs/20260517_constant_arrival_rate_quickpizza_two_requests_worked_example.md
 - [Bảng đối chiếu core truth](#394-bảng-đối-chiếu-core-truth)
 - [Source map core đã đối chiếu](#395-source-map-core-đã-đối-chiếu)
 - [Thêm nhầm field của executor khác](#310-thêm-nhầm-field-của-executor-khác-có-lỗi-không)
+- [Hai trục độc lập: arrival timeline vs VU iter timeline](#311-hai-trục-độc-lập-arrival-timeline-vs-vu-iter-timeline)
+- [Spawn timing của unplanned VU theo core](#312-spawn-timing-của-unplanned-vu-theo-core)
+- [Lifecycle của unplanned VU](#313-lifecycle-của-unplanned-vu)
+- [Dropped iterations: công thức và khi nào emit](#314-dropped-iterations-công-thức-và-khi-nào-emit)
+- [gracefulStop interaction với arrival timeline](#315-gracefulstop-interaction-với-arrival-timeline)
 - [Demo fixed start schedule đủ VU](#4-demo-fixed-start-schedule-đủ-vu)
 - [Demo thiếu VU và dropped_iterations](#5-demo-thiếu-vu-và-dropped_iterations)
 - [Demo preAllocatedVUs vs maxVUs](#6-demo-preallocatedvus-vs-maxvus)
 - [Demo interrupt cuối scenario](#7-demo-interrupt-cuối-scenario)
 - [Demo QuickPizza 2 requests / iteration](#8-demo-quickpizza-2-requests--iteration)
 - [So sánh với constant-vus ramping-vus per-vu shared](#9-so-sánh-với-constant-vus-ramping-vus-per-vu-shared)
-- [Cheat sheet](#10-cheat-sheet)
+- [Edge case và config không hợp lệ](#10-edge-case-và-config-không-hợp-lệ)
+- [Cheat sheet](#11-cheat-sheet)
 
 ## 1. Ý tưởng chính
 
