@@ -1410,10 +1410,38 @@ Output thật theo mốc thời gian (mốc đo từ lúc test start, không ph�
 t=1.0s   waiting  2.0s     <- progress bar đếm ngược tới khi scenario start
 t=2.0s   waiting  1.0s
 t=3.0s   waiting  0.0s     <- scenario sắp start
-t=3.0s   __VU=1 __ITER=0   <- iteration đầu tiên, đúng tại t=3s test
-t=4.0s   __VU=3 vào        (handle thứ 2 start, scenario nội bộ t=1s)
-t=6.0s   __VU=2 vào        (handle thứ 3 start, scenario nội bộ t=3s, đầu stage 1)
+t=3.0s   __VU=1 __ITER=0   <- iteration đầu tiên, đúng tại test t=3s
+t=4.5s   __VU=3 vào        (scenario nội bộ t=1.5s, ramp từ 1 lên 3 trong 3s -> bước 1.5s)
+t=6.0s   __VU=2 vào        (scenario nội bộ t=3s, kết thúc stage 0)
 t=11.0s  scenario end      (test t=11s = scenario nội bộ t=8s)
+```
+
+Bước nhảy giữa các VU mới không phải lúc nào cũng 1s. k6 rải đều theo công thức
+trong core (`ramping_vus.go:225-230`):
+
+```text
+step_interval = stageDuration / |target - fromVUs|
+              = stageDuration / số_VU_phải_thêm
+
+mốc_VU_thứ_n = stageStart + (n / stageVUDiff) * stageDuration
+```
+
+Áp vào stage 0 demo này (`duration=3s, target=3, fromVUs=1`):
+
+```text
+diff = 3 - 1 = 2 VU phải thêm
+step_interval = 3s / 2 = 1.5s
+
+VU thêm #1 (n=1) -> scenario t = 1.5s
+VU thêm #2 (n=2) -> scenario t = 3.0s
+```
+
+Nếu bạn đổi sang `duration=4s, target=5, fromVUs=1` thì:
+
+```text
+diff = 4 VU
+step_interval = 4s / 4 = 1.0s
+=> đúng 1s/VU. Đây mới là case "1s 1 VU".
 ```
 
 Cụ thể trong log:
@@ -1422,9 +1450,9 @@ Cụ thể trong log:
 running (01.0s) ... [   0% ] waiting  2.0s
 running (02.0s) ... [   0% ] waiting  1.0s
 running (03.0s) ... [   0% ] waiting  0.0s
-[iter] t=0.0s __VU=1 __ITER=0    <- elapsedSeconds() đo từ scenario.startTime
-[iter] t=1.5s __VU=3 __ITER=0    (3s test = scenario t=1.5s, VU=3 vào)
-[iter] t=3.0s __VU=2 __ITER=0    (6s test = scenario t=3s, VU=2 vào)
+[iter] t=0.0s __VU=1 __ITER=0    <- scenario t=0  (test t=3.0s)
+[iter] t=1.5s __VU=3 __ITER=0    <- scenario t=1.5s (test t=4.5s)
+[iter] t=3.0s __VU=2 __ITER=0    <- scenario t=3.0s (test t=6.0s)
 running (11.0s) ... [ 100% ]
 ```
 
