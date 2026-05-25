@@ -42,6 +42,7 @@ docs/20260517_ramping_vus_quickpizza_two_requests_worked_example.md
 - [Demo stage timeline](#4-demo-stage-timeline)
 - [Demo VU nhanhchậm](#5-demo-vu-nhanhchậm)
 - [Demo gracefulRampDown và interrupted](#6-demo-gracefulrampdown-và-interrupted)
+- [Demo stage trùng target trùng duration duration=0s](#63-demo-stage-trùng-target--trùng-duration--duration0s)
 - [Demo QuickPizza 2 requests / iteration](#7-demo-quickpizza-2-requests--iteration)
 - [So sánh với constant-vus per-vu shared arrival-rate](#8-so-sánh-với-constant-vus-per-vu-shared-arrival-rate)
 - [Cheat sheet](#9-cheat-sheet)
@@ -1032,7 +1033,169 @@ ramping-vus có interrupted iterations
 nhưng không có dropped_iterations theo đường code bình thường
 ```
 
-## 7. Demo QuickPizza `2 requests / iteration`
+## 6.3. Demo stage trùng target / trùng duration / duration=0s
+
+Câu hỏi hay gặp:
+
+```text
+nếu hai stage có cùng target thì sao?
+nếu hai stage có cùng duration thì sao?
+nếu duration = 0s thì sao?
+liệu có chuyện hai stage chạy song song / xung đột không?
+```
+
+Trả lời ngắn (đọc từ core `ramping_vus.go:194-233`):
+
+```text
+trong 1 scenario, stages luôn tuần tự
+stage i+1 bắt đầu đúng lúc stage i kết thúc
+không có chuyện 2 stage chạy song song
+
+stage trùng target  -> hold (không có VU change)
+stage trùng duration -> không sao, chỉ là độ dài giống nhau
+stage duration=0s   -> instant jump tới target ngay tại mốc đó
+```
+
+### 6.3.1. File demo
+
+```text
+examples/ramping_vus_stage_overlap_demo.js
+```
+
+Command:
+
+```powershell
+rtk k6 run .\examples\ramping_vus_stage_overlap_demo.js
+```
+
+Code:
+
+```js
+export const options = {
+  scenarios: {
+    stage_overlap: {
+      executor: "ramping-vus",
+      startVUs: 2,
+      stages: [
+        { duration: "3s", target: 4 },  // stage 0: ramp 2 -> 4
+        { duration: "3s", target: 4 },  // stage 1: target trùng -> hold
+        { duration: "0s", target: 6 },  // stage 2: instant jump 4 -> 6
+        { duration: "3s", target: 6 },  // stage 3: hold (duration trùng)
+        { duration: "3s", target: 0 },  // stage 4: ramp 6 -> 0
+### 6.3.2. Header và summary thật
+
+Header:
+
+```text
+scenarios: (100.00%) 1 scenario, 6 max VUs, 14s max duration (incl. graceful stop):
+         * stage_overlap: Up to 6 looping VUs for 12s over 5 stages (gracefulRampDown: 2s, gracefulStop: 2s)
+```
+
+Summary:
+
+```text
+iteration_duration...: avg=500.33ms min=500ms med=500.25ms max=502.41ms p(90)=500.5ms p(95)=500.54ms
+iterations...........: 96  7.994377/s
+vus..................: 1   min=1      max=6
+vus_max..............: 6   min=6      max=6
+
+running (12.0s), 0/6 VUs, 96 complete and 0 interrupted iterations
+```
+
+Tính nhanh:
+
+```text
+regular_duration = 3 + 3 + 0 + 3 + 3 = 12s
+header max duration = 12s + gracefulStop 2s = 14s
+max VUs trong header = 6 (= target lớn nhất sau ramp)
+```
+
+### 6.3.3. Đọc log theo mốc thời gian
+
+Stage 0 (`t=0..3s`, ramp 2 → 4):
+
+```text
+t=0.0s  __VU=2,3            (startVUs=2, lấy đúng 2 handle ra)
+t=1.5s  __VU=1 vào          (handle thứ 3 start)
+t=3.0s  __VU=4 vào          (handle thứ 4 start, đúng cuối stage 0)
+```
+
+Stage 1 (`t=3..6s`, target=4 **trùng** stage 0):
+
+```text
+chỉ thấy __VU=1,2,3,4 tiếp tục loop
+không có VU mới vào, không có VU nào bị stop
+=> hold ở 4 VU đúng 3s
+```
+
+Stage 2 (`t=6s`, `duration=0s`, jump 4 → 6):
+
+```text
+t=6.0s  __VU=5,6 vào ngay tại mốc 6.0s
+```
+
+Stage 3 (`t=6..9s`, hold ở 6, **duration "3s" trùng** stage 0/1/4):
+
+```text
+t=6..9s  __VU=1..6 loop đều
+=> trùng duration với stage khác không gây xung đột gì
+```
+
+Stage 4 (`t=9..12s`, ramp 6 → 0):
+
+```text
+t=10.0s  còn 5 VU active
+t=11.0s  còn 3 VU active
+t=12.0s  còn 1 VU active
+running (12.0s), 0/6 VUs, 96 complete
+```
+
+### 6.3.4. Kết luận
+
+Nhớ 4 ý:
+
+1. **Stage trong 1 scenario luôn tuần tự**:
+   ```text
+   stage[i+1] bắt đầu đúng lúc stage[i] kết thúc
+   không bao giờ có 2 stage cùng chạy song song trong 1 scenario
+   ```
+
+2. **Trùng `target` = hold**:
+   ```text
+   stage 0: 3s -> 4
+   stage 1: 3s -> 4   (trùng target)
+   => stage 1 chỉ là plateau 3s ở mức 4 VU
+   không có VU mới start, không có VU bị stop
+   ```
+
+   Nhìn từ `getRawExecutionSteps()`: `stageVUDiff = stageEndVUs - fromVUs = 0`
+   nên executor `continue` luôn, không sinh `ExecutionStep` mới cho stage này.
+
+3. **Trùng `duration` không sao**:
+   ```text
+   nhiều stage có cùng "3s" chỉ là độ dài bằng nhau
+   k6 cộng dồn: timeTillEnd += stageDuration
+   không có khái niệm "stage cùng chạy"
+   ```
+
+4. **`duration: "0s"` = instant jump**:
+   ```text
+   stage 2: 0s -> 6
+   tại mốc t=6s, k6 emit step (timeOffset=6s, plannedVUs=6) ngay
+   2 VU mới (__VU=5, __VU=6) start tại đúng t=6.0s
+   ```
+
+   Đây là cách hợp pháp để "nhảy bậc" mà không cần ramp dần.
+
+5. **Muốn 2 load shape chạy song song thật**:
+   ```text
+   không phải bằng 2 stage trùng giờ trong 1 scenario
+   mà là 2 scenario riêng biệt trong options.scenarios
+   mỗi scenario có timeline ramping-vus của chính nó
+   chúng chạy song song theo startTime của từng scenario
+   ```
+
+
 
 File:
 
