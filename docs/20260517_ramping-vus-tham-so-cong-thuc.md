@@ -34,6 +34,7 @@ docs/20260517_ramping_vus_quickpizza_two_requests_worked_example.md
 - [Ý tưởng chính](#1-ý-tưởng-chính)
 - [Khi nào dùng thực tế](#11-khi-nào-dùng-thực-tế)
 - [Core chạy như nào](#12-core-chạy-như-nào)
+- [VU ở các stage init ở phase nào](#13-vu-ở-các-stage-init-ở-phase-nào-có-phải-unplanned-vus-không)
 - [Bảng tham số tiếng Việt](#2-bảng-tham-số-tiếng-việt)
 - [Công thức nền](#3-công-thức-nền)
 - [Checklist core đã lọc](#39-checklist-core-đã-lọc-cho-ramping-vus)
