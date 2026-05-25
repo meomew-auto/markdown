@@ -713,7 +713,51 @@ hoặc tắt hẳn (set `0s` = no grace, hard-stop ngay).
 
 ### 3.8.1. `gracefulRampDown` — grace khi giảm VU giữa timeline
 
-Khi 1 stage giảm số VU (ví dụ stage `4 -> 2`), executor sẽ:
+**Trước khi đọc tiếp: hai timeline độc lập**
+
+Khi đọc các timeline ví dụ bên dưới, phải tách rõ 2 trục thời gian khác nhau:
+
+```text
+Trục 1 — STAGE timeline (do CONFIG quyết định):
+  stage.duration cộng dồn -> mỗi stage chiếm 1 đoạn
+  stage 0: 5s -> kéo dài t=0..5
+  stage 1: 1s -> kéo dài t=5..6
+  stage 2: 5s -> kéo dài t=6..11
+
+Trục 2 — VU iteration timeline (do CODE quyết định):
+  iter_duration = thời gian default function chạy xong (sleep, http, ...)
+  với sleep(4): iter#0 = t=0..4, iter#1 = t=4..8, iter#2 = t=8..12
+
+iter#N của VU = iteration thứ N của VU đó (counter __ITER riêng từng VU)
+iter#0 = iteration đầu tiên ngay khi VU activate
+```
+
+Hai trục **không đồng bộ** với nhau:
+
+```text
+- VU finish iter#0 ở t=4s -> KHÔNG phải stage chuyển
+  (stage 0 vẫn đang chạy, mới hết 4/5s)
+  VU chỉ đơn giản vào iter#1 ngay lập tức
+
+- Stage 0 hết ở t=5s -> KHÔNG cắt iter đang chạy
+  (lúc này VU đang ở giữa iter#1, mới chạy 1s, còn 3s)
+  VU tiếp tục iter#1 bình thường
+
+- Stage chỉ điều khiển plannedVUs tại từng mốc
+  không can thiệp vào dòng iter của từng VU đã active
+```
+
+Hình dung 2 trục song song:
+
+```text
+trục stage  : [-- stage 0 (5s) --|s1|-- stage 2 (5s) --]
+              0                  5  6                 11
+
+trục VU=1   : [iter#0|iter#1 |iter#2 |iter#3...]
+              0      4       8       12
+```
+
+**Khi 1 stage giảm số VU**, executor sẽ:
 
 ```text
 1) emit step (timeOffset=stageEnd, plannedVUs=2)
@@ -745,9 +789,9 @@ scenarios: {
     executor: "ramping-vus",
     startVUs: 4,
     stages: [
-      { duration: "5s", target: 4 },   // hold 4 VU
-      { duration: "1s", target: 2 },   // ramp xuống 2 VU
-      { duration: "5s", target: 2 },   // hold 2 VU
+      { duration: "5s", target: 4 },   // hold 4 VU trong 5s đầu
+      { duration: "1s", target: 2 },   // ramp 4 -> 2 trong 1s tiếp theo
+      { duration: "5s", target: 2 },   // hold 2 VU trong 5s cuối
     ],
     gracefulRampDown: "3s",
     gracefulStop: "2s",
@@ -758,36 +802,69 @@ scenarios: {
 export default function () { sleep(4); }
 ```
 
-Timeline:
+Tách 2 trục cho config này:
 
 ```text
-t=0s    plannedVUs=4, 4 VU bắt đầu iter#0 (sleep 4s)
-t=4s    4 VU finish iter#0, vào iter#1 (đến t=8s xong)
-t=5s    stage 1 bắt đầu (4 -> 2 trong 1s)
-t=6s    stage 1 kết thúc, plannedVUs=2
-        -> VU=3, VU=4 nhận gracefulStop()
-        -> chúng đang ở giữa iter#1 (đã chạy 2s, còn 2s nữa)
-        -> được reserve thêm gracefulRampDown=3s, hạn cuối = t=6+3 = t=9s
-t=8s    VU=3, VU=4 finish iter#1 sạch (2s < 3s grace)
-        -> không vào iter#2 (đã ở state toGracefulStop)
-        -> ReturnVU về pool
-t=8s..11s  chỉ còn VU=1, VU=2 chạy
+stage 0: t=0..5  (hold 4 VU)
+stage 1: t=5..6  (ramp 4 -> 2, step_interval = 1/2 = 0.5s)
+stage 2: t=6..11 (hold 2 VU)
+
+iter time = 4s (do sleep(4))
+```
+
+Timeline đầy đủ:
+
+```text
+t=0.0s   plannedVUs=4 (startVUs=4)
+         4 VU activate, đồng loạt vào iter#0 (sẽ chạy đến t=4.0s)
+
+t=4.0s   4 VU finish iter#0, lập tức vào iter#1 (sẽ đến t=8.0s)
+         stage 0 vẫn đang chạy (4/5s)
+
+t=5.0s   stage 0 kết thúc, stage 1 bắt đầu (4 -> 2 trong 1s)
+         step_interval = 1s / |2-4| = 0.5s
+         emit step (plannedVUs=4) tại t=5.0s -> không thay đổi
+
+t=5.5s   emit step (plannedVUs=3)
+         VU=4 nhận gracefulStop()
+         VU=4 đang ở giữa iter#1 (đã chạy 1.5s, còn 2.5s)
+         được phép tiếp tục, không vào iter mới
+
+t=6.0s   emit step (plannedVUs=2)
+         VU=3 nhận gracefulStop()
+         VU=3 đang ở giữa iter#1 (đã chạy 2s, còn 2s)
+         stage 1 kết thúc, stage 2 bắt đầu
+
+t=8.0s   VU=4 finish iter#1 (2.5s đã trôi qua < grace 3s, finish clean)
+         -> ReturnVU về pool
+         VU=3 finish iter#1 (2s đã trôi qua < grace 3s, finish clean)
+         -> ReturnVU về pool
+         VU=1, VU=2 finish iter#1, vào iter#2 (đến t=12.0s)
+
+t=11.0s  stage 2 kết thúc, regular_duration hết
+         VU=1, VU=2 đang ở giữa iter#2 (đã chạy 3s, còn 1s)
+         gracefulStop = 2s -> được phép tiếp tục đến t=13.0s
+
+t=12.0s  VU=1, VU=2 finish iter#2 (1s < grace 2s, finish clean)
+         scenario thật sự kết thúc
 ```
 
 Nếu đổi `iter time = 5s` (lâu hơn grace):
 
 ```text
-t=6s    VU=3, VU=4 đang ở iter#1 (đã chạy 1s, còn 4s)
-        reserve grace 3s, hạn cuối = t=9s
-t=9s    grace hết, VU=3, VU=4 vẫn còn 1s iter chưa xong
-        -> hardStop() -> 2 interrupted iterations
+t=5.5s   VU=4 đang ở iter#1 (đã chạy 1.5s, còn 3.5s)
+         reserve grace 3s, hạn cuối = t=8.5s
+t=6.0s   VU=3 đang ở iter#1 (đã chạy 2s, còn 3s)
+         reserve grace 3s, hạn cuối = t=9.0s
+t=8.5s   grace VU=4 hết, vẫn còn 0.5s iter -> hardStop, +1 interrupted
+t=9.0s   grace VU=3 hết, vẫn còn 0s iter -> đúng lúc hết, có thể clean
 ```
 
 Nếu set `gracefulRampDown: "0s"`:
 
 ```text
-t=6s    VU=3, VU=4 bị hardStop ngay tại đây
-        iter đang chạy bị cancel ngay -> 2 interrupted iterations
+t=5.5s   VU=4 bị hardStop NGAY -> iter#1 đang chạy bị cancel -> +1 interrupted
+t=6.0s   VU=3 bị hardStop NGAY -> iter#1 đang chạy bị cancel -> +1 interrupted
 ```
 
 ### 3.8.2. `gracefulStop` — grace ở cuối scenario
