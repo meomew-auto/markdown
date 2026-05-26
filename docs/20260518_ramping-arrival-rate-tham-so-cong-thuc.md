@@ -664,6 +664,37 @@ Quan sát quan trọng:
 - rate cao và iter chậm -> VU yêu cầu rất lớn
 ```
 
+> **Little's Law là công thức steady-state**: nó giả định `λ` (rate)
+> và `W` (iter_time) ổn định, hệ thống đã cân bằng. Trong
+> `ramping-arrival-rate` thật, `λ(t)` biến thiên theo timeline nên áp
+> dụng phải cẩn thận:
+>
+> ```text
+> Cách ĐÚNG để sizing trong ramping:
+>   1) Lấy λ_peak = max rate trong cả timeline (xem 3.2)
+>   2) required_vus = ceil(λ_peak × iter_time)
+>   3) preAllocatedVUs >= required_vus (cộng buffer 20%)
+>
+> Cách SAI thường gặp:
+>   - dùng λ_average -> thiếu VU ở giữa stage đỉnh -> drop
+>   - giả định L(t) cố định -> sai vì L(t) = λ(t) × W biến thiên theo λ(t)
+>
+> Tại 1 thời điểm trong steady đoạn, có ~L(t) = λ(t) × W VU đang bận
+> (không phải max VU). Pool VU thực dùng dao động theo timeline.
+> ```
+>
+> Steady-state vẫn đúng LOCAL nếu:
+>
+> ```text
+> 1) ramp đủ chậm để hệ thống bắt kịp (rate ổn định trong vài iter_time)
+> 2) iter_time không biến thiên quá lớn
+> 3) lưu ý caveat ở 3.1 (slot lẻ, slot đầu lệch t=0)
+> ```
+>
+> Nếu ramp quá nhanh (vd 0 → 1000/s trong 1s), VU spawn không kịp,
+> hệ thống chưa ổn định → Little's Law cho kết quả không chính xác,
+> phải set `preAllocatedVUs` cao từ đầu hoặc làm soft warm-up.
+
 **Áp dụng vào setup `preAllocatedVUs`**:
 
 ```text
