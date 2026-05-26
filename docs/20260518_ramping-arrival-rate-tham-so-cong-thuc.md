@@ -860,17 +860,17 @@ JS sandbox). Nếu quan tâm tới tail latency của hệ thống, phải set `
 > | `L(t)` | số VU đang bận tại t (Little's Law) | VU |
 > | `C` | capacity của pool M VU = `M / W` | iter/s |
 >
-> **Quan hệ chính** (chứng minh chi tiết ở 3.2-3.5):
+> **Quan hệ chính** (giải thích chi tiết ở 3.2-3.5):
 >
 > ```text
 > λ(t)    = λ_prev + slope × (t − stageStart)         (3.1, đường thẳng)
-> N_sched = ∫₀ᵀ λ(t) dt = Σ d_i × (λ_prev + λ_next)/2 (3.1, hình thang)
-> λ_avg   = N_sched / T                               (3.2)
+> N_sched = Σ d_i × (λ_prev + λ_next) / 2             (3.1, cộng diện tích hình thang)
+> λ_avg   = N_sched / T                               (3.2, rate trung bình)
 > L(t)    = λ(t) × W                                  (3.3, Little's Law)
-> C       = M / W                                     (3.3)
-> drop(t) = max(0, λ(t) − C)                          (3.3)
-> N_done ≈ N_sched − N_drop − N_int                   (3.4-3.5, ±1 do biên slot)
-> λ_peak ≥ λ_avg ≥ N_done / T_run = actual_rate       (3.4, bất đẳng thức)
+> C       = M / W                                     (3.3, capacity của M VU)
+> drop(t) = max(0, λ(t) − C)                          (3.3, rate vượt năng lực)
+> N_done ≈ N_sched − N_drop − N_int                   (3.4-3.5, xấp xỉ ±1)
+> λ_peak ≥ λ_avg ≥ N_done / T_run = actual_rate       (3.4, thứ tự 3 rate)
 > ```
 
 ### 3.1. Đếm slot: tổng số slot trong 1 stage và rate(t) tại mọi thời điểm
