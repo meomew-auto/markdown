@@ -836,6 +836,43 @@ JS sandbox). Nếu quan tâm tới tail latency của hệ thống, phải set `
 >
 > Cấu trúc mỗi mục: **ví dụ cụ thể → phân tích từng biến**.
 
+> **Bảng ký hiệu thống nhất** dùng xuyên suốt 3.1-3.5 (mọi section
+> giới thiệu biến mới phải tham chiếu bảng này):
+>
+> | Ký hiệu | Ý nghĩa | Đơn vị |
+> | --- | --- | --- |
+> | `λ(t)` | rate scheduler tại thời điểm t (hàm theo t) | iter/s |
+> | `λ_prev` | rate ở **đầu** stage (= rate cuối stage trước, hoặc `startRate`) | iter/s |
+> | `λ_next` | rate ở **cuối** stage (= `stage.target / timeUnit_seconds`) | iter/s |
+> | `λ_peak` | rate cao nhất toàn timeline = `max(λ_start, mọi λ_i_end)` | iter/s |
+> | `λ_avg` | rate trung bình toàn timeline = `N_sched / T` | iter/s |
+> | `λ_current` | rate hiện tại tại t (đồng nghĩa `λ(t)`, dùng khi nói về 1 thời điểm) | iter/s |
+> | `slope` | độ dốc rate trong stage = `(λ_next − λ_prev) / d_i` | iter/s² |
+> | `W` | iter_time hiệu dụng = `max(iter_duration, minIterationDuration)` | s/iter |
+> | `d_i` | duration stage i | s |
+> | `T` | tổng thời gian timeline = `sum(d_i)` (regular_duration) | s |
+> | `T_run` | runtime thực tế khi summary tính rate (mẫu số cột `/s`) | s |
+> | `N_sched` | tổng slot dự kiến cả timeline (= `scheduled_iterations_total`) | slot |
+> | `N_done` | số iter HOÀN THÀNH (= `iterations` trong summary) | iter |
+> | `N_drop` | số slot bị drop (= `dropped_iterations` metric) | slot |
+> | `N_int` | số iter đã start nhưng bị cancel (= `interrupted iterations`) | iter |
+> | `M` | tổng số VU thực tế = `preAllocatedVUs + spawned_unplanned` | VU |
+> | `L(t)` | số VU đang bận tại t (Little's Law) | VU |
+> | `C` | capacity của pool M VU = `M / W` | iter/s |
+>
+> **Quan hệ chính** (chứng minh chi tiết ở 3.2-3.5):
+>
+> ```text
+> λ(t)    = λ_prev + slope × (t − stageStart)         (3.1, đường thẳng)
+> N_sched = ∫₀ᵀ λ(t) dt = Σ d_i × (λ_prev + λ_next)/2 (3.1, hình thang)
+> λ_avg   = N_sched / T                               (3.2)
+> L(t)    = λ(t) × W                                  (3.3, Little's Law)
+> C       = M / W                                     (3.3)
+> drop(t) = max(0, λ(t) − C)                          (3.3)
+> N_done ≈ N_sched − N_drop − N_int                   (3.4-3.5, ±1 do biên slot)
+> λ_peak ≥ λ_avg ≥ N_done / T_run = actual_rate       (3.4, bất đẳng thức)
+> ```
+
 ### 3.1. Đếm slot: tổng số slot trong 1 stage và rate(t) tại mọi thời điểm
 
 #### Config demo
@@ -1180,66 +1217,109 @@ Trả lời:
 #### Phân tích công thức
 
 ```text
-lambda_peak = max(lambda_start, mọi lambda_i_end)
-average_target_rate = scheduled_iterations_total / total_regular_duration
+λ_peak  = max(λ_start, mọi λ_i_end)
+λ_avg   = N_sched / T
 ```
 
-| Biến | Ý nghĩa | Đơn vị |
-| --- | --- | --- |
-| `lambda_start` | rate ở đầu scenario (= `startRate / timeUnit_seconds`) | iter/s |
-| `lambda_i_end` | rate ở cuối stage i (= `stage[i].target / timeUnit_seconds`) | iter/s |
-| `lambda_peak` | rate cao nhất scenario phải fire ở bất kỳ thời điểm nào | iter/s |
-| `scheduled_iterations_total` | tổng slot trong cả timeline (xem `3.1`) | slot |
-| `total_regular_duration` | tổng thời gian timeline = `sum(stage.duration)` | seconds |
-| `average_target_rate` | rate trung bình tính theo tổng slot / tổng thời gian | iter/s |
+| Biến | Ý nghĩa | Đơn vị | Ref |
+| --- | --- | --- | --- |
+| `λ_start` | rate ở đầu scenario (= `startRate / timeUnit_seconds`) | iter/s | bảng KH |
+| `λ_i_end` | rate ở cuối stage i (= `stage[i].target / timeUnit_seconds`) | iter/s | bảng KH |
+| `λ_peak` | rate cao nhất scenario phải fire ở bất kỳ thời điểm nào | iter/s | bảng KH |
+| `N_sched` | tổng slot trong cả timeline (xem `3.1`) | slot | bảng KH |
+| `T` | tổng thời gian timeline = `sum(d_i)` | s | bảng KH |
+| `λ_avg` | rate trung bình tính theo tổng slot / tổng thời gian | iter/s | bảng KH |
 
-#### Vì sao `lambda_peak` chỉ cần xét điểm đầu/cuối stage?
+(Tên cũ `lambda_peak`, `average_target_rate` giữ lại trong code cho dễ
+tìm kiếm nhưng từ 3.2 trở đi văn bản dùng ký hiệu toán `λ_peak`, `λ_avg`
+để khớp bảng ký hiệu chung ở đầu Section 3.)
+
+#### Vì sao `λ_peak` chỉ cần xét điểm đầu/cuối stage?
 
 Vì rate ramp **tuyến tính** trong từng stage (xem `3.1`):
 
 ```text
-rate(t) = lambda_prev + slope × (t - stageStart)
+λ(t) = λ_prev + slope × (t − stageStart)
 ```
 
 Đây là phương trình đường thẳng. Cực trị (max/min) của 1 đường thẳng
 trên đoạn `[stageStart, stageEnd]` chỉ có thể nằm tại **2 đầu mút**, không
 bao giờ nằm giữa.
 
-Chứng minh trực quan:
+**Chứng minh chặt (giải tích)**:
 
 ```text
-Nếu slope > 0 (ramp lên):  rate tăng đều -> max ở stageEnd
-Nếu slope < 0 (ramp xuống): rate giảm đều -> max ở stageStart
-Nếu slope = 0 (hold):       rate cố định -> max ở mọi điểm (gồm cả 2 đầu)
+Đạo hàm: dλ/dt = slope = (λ_next − λ_prev) / d_i = const trên cả stage
+
+→ λ(t) là hàm đơn điệu (monotonic) trên [stageStart, stageEnd]:
+  - slope > 0 (ramp lên):    λ tăng đều  → max ở t = stageEnd
+  - slope < 0 (ramp xuống):  λ giảm đều  → max ở t = stageStart
+  - slope = 0 (hold):         λ const    → max = const (cả 2 đầu)
+
+Hàm đơn điệu trên đoạn đóng đạt cực trị tại đầu mút (định lý cực trị).
+→ λ_peak của 1 stage = max(λ_prev, λ_next) (chỉ 2 điểm).
 ```
 
-→ Chỉ cần kiểm tra rate tại các điểm đầu/cuối stage, không cần quét cả
-timeline. Code:
+**Mở rộng cho cả timeline** (n stage):
 
 ```text
-lambda_peak = max(
-    lambda_start,
-    lambda_0_end,    // = stage[0].target / timeUnit
-    lambda_1_end,    // = stage[1].target / timeUnit
-    ...
-    lambda_n_end
-)
+λ_peak_global = max trên toàn [0, T]
+              = max( λ_peak của từng stage )
+              = max( max(λ_prev_i, λ_next_i) for i = 0..n-1 )
+              = max( λ_start, λ_0_end, λ_1_end, ..., λ_(n-1)_end )
+
+Vì λ_prev_i = λ_(i-1)_end (rate cuối stage trước = rate đầu stage sau).
+→ chỉ cần xét n+1 điểm rời rạc, không cần quét cả timeline liên tục.
 ```
 
-#### Vì sao `average_target_rate` không dùng để sizing?
+#### Tính `λ_avg` bằng tích phân
+
+`λ_avg` là rate trung bình theo nghĩa tích phân (mean value của hàm
+liên tục trên đoạn):
+
+```text
+λ_avg = (1/T) × ∫₀ᵀ λ(t) dt
+```
+
+`∫₀ᵀ λ(t) dt` chính là **diện tích dưới đường rate(t)** = tổng slot
+fire trong toàn timeline = `N_sched` (đã chứng minh ở 3.1 qua hình thang).
+
+```text
+λ_avg = N_sched / T
+```
+
+**Áp config demo `3.2`**:
+
+```text
+N_sched = 4 + 12 + 4 = 20 slot
+T       = 2 + 3 + 2 = 7s
+λ_avg   = 20 / 7 ≈ 2.857 iter/s
+```
+
+So với cách tính theo tổng diện tích từng stage:
+
+```text
+∫₀ᵀ λ(t) dt = ∫₀² (0 + 2t) dt + ∫₂⁵ 4 dt + ∫₅⁷ (4 − 2(t−5)) dt
+            = [t²]₀² + [4t]₂⁵ + [4(t−5) − (t−5)²]₅⁷
+            = 4 + 12 + (8 − 4)
+            = 4 + 12 + 4 = 20 slot ✓
+
+→ λ_avg = 20 / 7 ≈ 2.857/s (khớp với công thức nhanh).
+```
+
+#### Vì sao `λ_avg` không dùng để sizing?
 
 Lấy lại config demo trên:
 
 ```text
 λ_peak = 4/s         <- giữa stage 1 (hold), nhịp đỉnh
-average = 2.86/s     <- bình quân cả timeline
+λ_avg  = 2.86/s      <- bình quân cả timeline
 ```
 
-Nếu sizing theo average:
+Nếu sizing theo `λ_avg`:
 
 ```text
-required_vus = ceil(average × iter_time)
-            = ceil(2.86 × W)        <- W = iter_time
+required_vus = ceil(λ_avg × W)        <- W = iter_time
 
 Với W=0.4s: required = ceil(2.86 × 0.4) = 2 VU
 
@@ -1247,16 +1327,39 @@ Tại stage 1 hold 4/s:
   λ(t) = 4/s, cần ceil(4 × 0.4) = 2 VU ... vẫn vừa khít
 
 Nhưng nếu W = 0.5s:
-  required theo average = ceil(2.86 × 0.5) = 2 VU
-  required tại stage 1  = ceil(4 × 0.5)    = 2 VU ... vẫn ổn
+  required theo λ_avg  = ceil(2.86 × 0.5) = 2 VU
+  required tại stage 1 = ceil(4 × 0.5)    = 2 VU ... vẫn ổn
 
 Nếu W = 1s:
-  required theo average = ceil(2.86 × 1) = 3 VU
-  required tại stage 1  = ceil(4 × 1)    = 4 VU ... THIẾU 1!
+  required theo λ_avg  = ceil(2.86 × 1) = 3 VU
+  required tại stage 1 = ceil(4 × 1)    = 4 VU ... THIẾU 1!
   -> tại stage 1 sẽ drop 1/s
 ```
 
-→ Càng W lớn, sai số càng lớn. Luôn dùng `lambda_peak` cho an toàn.
+→ Càng W lớn, sai số càng lớn. Luôn dùng `λ_peak` cho an toàn.
+
+**Counter-example mạnh hơn (timeline lệch nặng)**:
+
+Cấu hình "3 stage thấp + 1 stage đỉnh ngắn":
+
+```text
+stage 0: hold 1/s trong 10s    -> 10 slot
+stage 1: hold 1/s trong 10s    -> 10 slot
+stage 2: ramp 1 → 10/s trong 1s -> 5.5 slot
+stage 3: hold 10/s trong 2s     -> 20 slot
+                                -------
+                                N_sched ≈ 45.5 slot
+                                T = 23s
+                                λ_avg  ≈ 1.98/s
+                                λ_peak = 10/s
+
+Với W = 0.5s:
+  required theo λ_avg  = ceil(1.98 × 0.5) = 1 VU
+  required tại stage 3 = ceil(10 × 0.5)   = 5 VU ... THIẾU 4!
+```
+
+→ Timeline có "đỉnh ngắn" giữa các đoạn rate thấp khiến `λ_avg` rất xa
+`λ_peak`. Sizing theo `λ_avg` sẽ drop nặng tại đỉnh.
 
 #### Ví dụ áp dụng sizing
 
@@ -1279,37 +1382,85 @@ tài nguyên đáng kể (VU rảnh chỉ chờ ở channel).
 #### Quan hệ với `drop_rate`
 
 ```text
-drop_rate(t) ≈ max(0, lambda_current(t) - capacity_with_M_vus)
+drop(t) = max(0, λ_current(t) − C)
+        = max(0, λ(t) − M / W)
 ```
 
-| Biến | Ý nghĩa | Phụ thuộc |
+| Biến | Ý nghĩa | Ref |
 | --- | --- | --- |
-| `lambda_current(t)` | rate đang fire tại thời điểm t | timeline (xem `3.1`) |
-| `capacity_with_M_vus` | năng lực M VU = `M / W_effective` | M, W |
-| `drop_rate(t)` | rate slot bị drop tại thời điểm t | hiệu của 2 cái trên |
+| `λ_current(t)` (= `λ(t)`) | rate đang fire tại thời điểm t | bảng KH |
+| `C` | capacity của pool M VU = `M / W` | bảng KH |
+| `drop(t)` | rate slot bị drop tại thời điểm t (iter/s) | bảng KH |
 
 Áp vào ví dụ:
 
 ```text
-M = 3 VU, W = 0.5s  -> capacity = 3/0.5 = 6 iter/s
+M = 3 VU, W = 0.5s  -> C = 3 / 0.5 = 6 iter/s
 
-Tại đoạn 8/s: drop_rate = max(0, 8 - 6) = 2/s    <- drop 2 slot/giây
-Tại đoạn 5/s: drop_rate = max(0, 5 - 6) = 0       <- không drop
-Tại đoạn 2/s: drop_rate = max(0, 2 - 6) = 0       <- không drop
+Tại đoạn λ=8/s: drop(t) = max(0, 8 − 6) = 2/s    <- drop 2 slot/giây
+Tại đoạn λ=5/s: drop(t) = max(0, 5 − 6) = 0       <- không drop
+Tại đoạn λ=2/s: drop(t) = max(0, 2 − 6) = 0       <- không drop
 
-Tổng dropped trong scenario = ∫ drop_rate(t) dt
+Tổng dropped trong scenario = ∫ drop(t) dt
                             = "diện tích phần λ vượt capacity"
 ```
 
-→ chỉ phần `λ(t) > capacity` mới drop. Đoạn nào λ thấp hơn capacity,
-VU thừa nhưng không drop.
+→ chỉ phần `λ(t) > C` mới drop. Đoạn nào λ thấp hơn capacity, VU
+thừa nhưng không drop.
+
+#### Ví dụ tính tay (số cụ thể) cho config demo 3.2
+
+Áp toàn bộ bảng ký hiệu vào config `startRate=0, ramp 0→4 (2s),
+hold 4 (3s), ramp 4→0 (2s)`:
+
+```text
+Bước 1: Liệt kê các điểm rate
+  λ_start  = 0/s         (= startRate)
+  λ_0_end  = 4/s         (= stage[0].target)
+  λ_1_end  = 4/s         (= stage[1].target)
+  λ_2_end  = 0/s         (= stage[2].target)
+
+Bước 2: Tính λ_peak
+  λ_peak = max(0, 4, 4, 0) = 4 iter/s
+  → đỉnh xảy ra trong suốt stage 1 (hold) và tại t=2s, t=5s
+
+Bước 3: Tính λ_avg
+  N_sched = 4 + 12 + 4 = 20 slot           (xem 3.1)
+  T       = 2 + 3 + 2 = 7s
+  λ_avg   = 20 / 7 ≈ 2.857 iter/s
+
+Bước 4: Verify đẳng thức λ_peak ≥ λ_avg
+  4 ≥ 2.857 ✓                              (luôn đúng vì peak là max)
+
+Bước 5: Sizing với W = 0.4s
+  required = ceil(λ_peak × W) = ceil(4 × 0.4) = ceil(1.6) = 2 VU
+  capacity tại 2 VU: C = 2/0.4 = 5 iter/s ≥ λ_peak = 4 ✓ → 0 drop
+
+Bước 6: Sizing nhầm với λ_avg (W = 0.4s)
+  required_avg = ceil(2.857 × 0.4) = ceil(1.143) = 2 VU
+  → trong demo này tình cờ trùng do đỉnh thấp. Demo W=1s sẽ lệch
+    (xem section "vì sao λ_avg không sizing").
+```
+
+#### Caveat / Edge case
+
+```text
+- λ_peak chỉ đúng khi rate trong stage là tuyến tính (k6 luôn vậy).
+- Nếu có stage duration=0s, đó chỉ là "đặt lại điểm" (xem 3.20),
+  không sinh slot, không ảnh hưởng λ_peak (vẫn xét điểm cuối stage).
+- λ_avg không tính grace, không tính transient warmup.
+- λ_peak có thể nằm tại λ_start nếu startRate cao hơn mọi target
+  (ví dụ startRate=10, stage ramp xuống 5 → 0).
+```
 
 #### Tóm gọn 3.2
 
 ```text
-lambda_peak                 -> dùng cho sizing VU (3.3)
-average_target_rate          -> dùng đánh giá rate trung bình (KHÔNG sizing)
-drop_rate(t)                 -> diễn biến drop theo thời gian
+λ_peak  = max(λ_start, mọi λ_i_end)            -> dùng SIZING VU (3.3)
+λ_avg   = N_sched / T                          -> đối chiếu sau test
+drop(t) = max(0, λ(t) − C)                     -> diễn biến drop theo t
+
+Quy tắc nhớ: peak >= avg luôn đúng. Sizing dùng peak.
 ```
 
 ### 3.3. Đếm VU: cần bao nhiêu VU để không drop (Little's Law)
@@ -1363,26 +1514,28 @@ required_vus = ceil(lambda_peak × iter_time)
 #### Phân tích công thức
 
 ```text
-required_vus_min_peak ≈ ceil(lambda_peak × W_effective)
-capacity_with_M_vus   ≈ M / W_effective
-drop_rate             ≈ max(0, lambda_current - capacity_with_M_vus)
+required_vus_min_peak ≈ ceil(λ_peak × W)
+C                     ≈ M / W
+drop(t)               ≈ max(0, λ(t) − C)
 ```
 
-| Biến | Ý nghĩa | Đơn vị |
-| --- | --- | --- |
-| `lambda_peak` | rate cao nhất scenario phải chịu (xem `3.2`) | iter/s |
-| `W_effective` | iter_time hiệu dụng = `max(iter_duration, minIterationDuration)` | s/iter |
-| `lambda_peak × W_effective` | số VU **đồng thời bận** tại đỉnh rate | VU |
-| `ceil(...)` | làm tròn lên (không có nửa VU) | VU |
-| `M` | số VU thực tế trong pool | VU |
-| `M / W_effective` | năng lực pool M VU = bao nhiêu iter/s | iter/s |
-| `lambda_current - capacity` | phần dư khi rate vượt năng lực | iter/s |
+| Biến | Ý nghĩa | Đơn vị | Ref |
+| --- | --- | --- | --- |
+| `λ_peak` | rate cao nhất scenario phải chịu (xem `3.2`) | iter/s | bảng KH |
+| `W` | iter_time hiệu dụng = `max(iter_duration, minIterationDuration)` | s/iter | bảng KH |
+| `λ_peak × W` | số VU **đồng thời bận** tại đỉnh rate | VU | bảng KH |
+| `ceil(...)` | làm tròn lên (không có nửa VU) | VU | - |
+| `M` | số VU thực tế trong pool = `preAllocatedVUs + spawned_unplanned` | VU | bảng KH |
+| `C = M / W` | capacity của pool M VU = bao nhiêu iter/s phục vụ được | iter/s | bảng KH |
+| `λ_current − C` | phần dư khi rate vượt năng lực (= drop) | iter/s | - |
 
 **Đây chính là Little's Law** đã thấy ở `1.3`:
 
 ```text
-VUs_đồng_thời = rate × iter_time
-              = mục tiêu_rate × thời gian giữ VU mỗi iter
+L(t) = λ(t) × W
+     = số VU bận đồng thời tại t
+
+required_vus = max L(t) = λ_peak × W   (đủ cho đỉnh)
 ```
 
 #### Kiểm tra đơn vị
@@ -1421,52 +1574,195 @@ code mất 0.2s, minIterationDuration = 1s
 => rate=10/s cần ceil(10 × 1) = 10 VU (không phải 2 VU)
 ```
 
-#### Vì sao công thức là `λ × W` (chứng minh trực quan)
+#### Vì sao công thức là `λ × W` (chứng minh chặt từ định nghĩa)
 
 Đây là **Little's Law** — định luật cơ bản của hệ thống hàng đợi
-(queueing theory). Phát biểu:
+(queueing theory). Phát biểu chính xác:
 
 ```text
 L = λ × W
 
-L = số "items" trong hệ thống tại 1 thời điểm (steady-state)
-λ = arrival rate (items vào hệ thống / giây)
-W = thời gian 1 item ở trong hệ thống
+L = số "items" trung bình trong hệ thống ở trạng thái steady-state
+λ = arrival rate trung bình (items vào hệ thống / đơn vị thời gian)
+W = thời gian trung bình 1 item ở trong hệ thống
 ```
 
-Áp vào k6 arrival-rate:
+**Phát biểu cho k6 arrival-rate**:
 
 ```text
-hệ thống = pool VU
-items = iteration
-L = số iteration đang chạy = số VU đang bận
-λ = rate slot fire (mục tiêu scheduler)
-W = iter_time (thời gian 1 iter chiếm 1 VU)
+Hệ thống = pool VU
+Item     = iteration
+L(t)     = số iteration đang chạy tại t = số VU đang bận tại t
+λ(t)     = rate slot fire (mục tiêu scheduler)
+W        = iter_time (thời gian 1 iter chiếm 1 VU)
+
+Steady-state: L = λ × W
 ```
 
-→ `số VU đang bận = rate × iter_time`.
+**Chứng minh chặt từ định nghĩa "throughput"**:
 
-Chứng minh trực quan với `rate=10/s, iter_time=0.5s`:
+Đặt window quan sát `[t − W, t]` (1 cửa sổ rộng W giây kết thúc tại t).
+
+```text
+Số iter ĐÃ START trong window này:
+  N_started = ∫_{t−W}^{t} λ(τ) dτ
+
+Tại thời điểm t, mỗi iter đã start trong window này VẪN CÒN BẬN
+(vì iter mất W giây để hoàn thành, và iter sớm nhất start tại t−W
+sẽ kết thúc đúng tại t).
+
+→ L(t) = N_started ≈ λ_avg_window × W
+
+Nếu λ ổn định (≈ const = λ trong window):
+  L(t) = λ × W ✓
+```
+
+**Chứng minh bằng số (rate=10/s, W=0.5s)**:
 
 ```text
 slot_interval = 1/10 = 100ms
-iter_time = 500ms = 5 × slot_interval
+W = 500ms = 5 × slot_interval
 
-Tại slot t=500ms (slot thứ 5), iter#0 vừa kết thúc.
-Trong khoảng [0, 500ms] đã fire: slot#0..#4 = 5 slot
-Mỗi slot chiếm 1 VU 500ms.
-=> 5 slot × 500ms = 5 × 0.5 = 2.5 VU-second tích lũy
-=> ÷ 0.5s window = 5 VU đang bận trung bình
+Window [0, 500ms]:
+  slot fire tại t = 0, 100, 200, 300, 400 ms (5 slot)
+  iter#0 (start tại t=0)   bận đến t=500ms  → đang bận tại t=500ms
+  iter#1 (start tại t=100) bận đến t=600ms  → đang bận tại t=500ms
+  iter#2 (start tại t=200) bận đến t=700ms  → đang bận tại t=500ms
+  iter#3 (start tại t=300) bận đến t=800ms  → đang bận tại t=500ms
+  iter#4 (start tại t=400) bận đến t=900ms  → đang bận tại t=500ms
 
-Đúng = rate × iter_time = 10 × 0.5 = 5 VU.
+→ L(t=500ms) = 5 VU đang bận = 10 × 0.5 = λ × W ✓
+```
+
+#### Vì sao `W` dùng `max(iter_duration, minIterationDuration)`?
+
+Phát sinh từ **behavior k6 sleep bù**: nếu code chạy nhanh hơn
+`minIterationDuration`, k6 chèn 1 sleep nội bộ để VU bận đủ
+`minIterationDuration` trước khi return về pool.
+
+```text
+iter_duration            = thời gian thực sự code chạy
+minIterationDuration     = sàn k6 ép buộc
+
+Nếu iter_duration < minIterationDuration:
+  k6 sleep (minIterationDuration − iter_duration) thêm
+  → VU bận tổng cộng minIterationDuration
+
+Nếu iter_duration >= minIterationDuration:
+  → VU bận = iter_duration (không bù gì)
+
+→ W_effective = max(iter_duration, minIterationDuration)
+```
+
+Ví dụ:
+
+```text
+code mất 0.2s, minIterationDuration = 1s
+=> W = max(0.2, 1) = 1s
+=> rate=10/s cần ceil(10 × 1) = 10 VU (không phải 2 VU)
+```
+
+#### Khi nào Little's Law KHÔNG áp được?
+
+Little's Law cần **steady-state** và **arrival rate ổn định**. Trong
+ramping-arrival-rate có 3 tình huống lệch:
+
+```text
+1) Transient state đầu stage ramp lên gắt
+   - λ vừa nhảy từ 1/s lên 10/s, hệ chưa kịp filling
+   - L(t) tăng dần từ 1 → 10 trong vài chu kỳ W
+   - Tại window nhỏ, L(t) < λ × W (chưa đầy)
+   → Sau ~2W giây hệ ổn định, công thức lại đúng.
+
+2) Ramp xuống gắt (rate giảm nhanh)
+   - λ vừa giảm từ 10/s xuống 1/s
+   - VU đang bận từ rate cao chưa kịp xong
+   - L(t) > λ × W trong vài chu kỳ W (residual)
+   → Tạm thời đông VU bận hơn công thức đoán.
+
+3) Đỉnh ngắn hơn W (rate spike < W giây)
+   - Vd hold 10/s chỉ trong 0.1s với W=0.5s
+   - Window quan sát chưa kịp filling đã hết spike
+   - L thực tế < λ_peak × W
+   → Trong thực tế ramp k6 hiếm khi có spike < W.
+```
+
+→ Trong load test thường (stage >= 5W), Little's Law là xấp xỉ tốt.
+Sizing dùng `λ_peak × W` luôn là **giới hạn trên** (upper bound) của
+số VU đồng thời, do đó an toàn.
+
+#### Quan hệ ba biến `λ_peak, M, W` quyết định drop hay không
+
+```text
+Không drop  ⟺  C ≥ λ_peak  ⟺  M / W ≥ λ_peak  ⟺  M ≥ λ_peak × W
+
+→ 3 cách giảm drop:
+  (a) Tăng M:        thêm VU (preAllocatedVUs hoặc maxVUs)
+  (b) Giảm W:        code nhanh hơn, bỏ minIterationDuration
+  (c) Giảm λ_peak:   hạ stage.target xuống
+```
+
+Quyết định phụ thuộc context:
+
+```text
+- Test stress server → KHÔNG hạ λ_peak, tăng M.
+- Test code logic → có thể hạ λ_peak để loại drop.
+- Test thiết kế cố ý drop → giữ M nhỏ (xem 3.5).
+```
+
+#### Ví dụ tính tay (số cụ thể) cho config demo 3.3
+
+Áp toàn bộ bảng ký hiệu vào config `λ_peak=8/s, sleep(0.4)`:
+
+```text
+Bước 1: Đọc config
+  λ_peak (từ stage.target) = 8 iter/s
+  W (từ code: sleep(0.4))  = 0.4 s/iter
+  preAllocatedVUs          = 5 (đã set)
+  maxVUs                   = 10
+
+Bước 2: Tính required_vus
+  L_peak = λ_peak × W = 8 × 0.4 = 3.2 VU đồng thời bận tại đỉnh
+  required = ceil(L_peak) = ceil(3.2) = 4 VU
+
+Bước 3: So với pool
+  preAllocatedVUs = 5 ≥ 4 ✓     → KHÔNG drop tại đỉnh
+  maxVUs           = 10 ≥ 5     → có quota unplanned (an toàn)
+
+Bước 4: Tính capacity với pool 5 VU
+  C_5 = 5 / 0.4 = 12.5 iter/s ≥ λ_peak=8 ✓
+
+Bước 5: Verify drop
+  drop(t) = max(0, λ(t) − C_5)
+  Trên cả timeline λ(t) ∈ [0, 8] ≤ 12.5
+  → drop(t) = 0 với mọi t → tổng dropped = 0
+```
+
+**Ngược lại nếu chỉ có M=3 VU**:
+
+```text
+C_3 = 3 / 0.4 = 7.5 iter/s
+Tại λ=8: drop = 8 − 7.5 = 0.5 iter/s
+Trong stage hold 8/s × 3s = 1.5 slot drop
+→ summary sẽ thấy dropped_iterations ≈ 1-2.
+```
+
+#### Caveat / Edge case
+
+```text
+- W phải là iter_time HIỆU DỤNG, gồm sleep, http wait, minIterationDuration.
+- Nếu code có sleep ngẫu nhiên: dùng W ≈ p95(iter_duration) cho an toàn.
+- Little's Law cho ramping chỉ đúng "trung bình", có jitter ở biên stage.
+- Nếu set maxVUs > preAllocatedVUs, M có thể tăng dần → C tăng dần.
+- W không cố định nếu server response time biến động → C cũng biến động.
 ```
 
 #### Tóm gọn 3.3
 
 ```text
-required_vus = ceil(λ_peak × W_effective)            <- sizing
-capacity     = M / W_effective                        <- năng lực M VU
-drop_rate    = max(0, λ_current - capacity)           <- phần vượt
+required_vus = ceil(λ_peak × W)             <- sizing
+C            = M / W                          <- năng lực M VU
+drop(t)      = max(0, λ(t) − C)               <- phần vượt
 
 Quy tắc:
   preAllocatedVUs >= required_vus × 1.2 (buffer 20%)
@@ -1533,135 +1829,198 @@ actual_rate (2.57/s) < average_target_rate (2.86/s) vì có 2 slot không hoàn 
 #### Phân tích công thức
 
 ```text
-actual_summary_iterations_rate = completed_iterations / summary_runtime_base
-http_reqs_rate                 = total_http_requests / summary_runtime_base
-checks_total_rate              = total_checks / summary_runtime_base
+actual_rate     = N_done / T_run
+http_reqs_rate  = total_http_requests / T_run
+checks_rate     = total_checks / T_run
 ```
 
-| Biến | Ý nghĩa | Nguồn |
-| --- | --- | --- |
-| `completed_iterations` | số iter HOÀN THÀNH (không drop, không interrupt) | summary `iterations` |
-| `total_http_requests` | tổng HTTP request đã gửi | summary `http_reqs` |
-| `summary_runtime_base` | mẫu số core dùng cho cột `/s` | xem dưới |
+| Biến | Ý nghĩa | Đơn vị | Ref |
+| --- | --- | --- | --- |
+| `N_done` | số iter HOÀN THÀNH (không drop, không interrupt) | iter | bảng KH |
+| `actual_rate` | rate thực tế summary in trong cột `iterations.../s` | iter/s | bảng KH |
+| `total_http_requests` | tổng HTTP request đã gửi | req | summary `http_reqs` |
+| `T_run` | runtime thực tế khi summary tính rate (mẫu số cột `/s`) | s | bảng KH |
 
-#### `summary_runtime_base` là gì?
+#### `T_run` là gì?
 
 Mẫu số core dùng cho cột `/s` của Counter. Trong demo 1 scenario, không
 `setup()/teardown()`, `startTime=0`:
 
 ```text
-summary_runtime_base ≈ thời gian scenario thật sự chạy (regular_duration + grace nếu có dùng)
+T_run ≈ thời gian scenario thật sự chạy (regular_duration + grace nếu có dùng)
 ```
 
-Nhưng KHÔNG NÊN đồng nhất với `total_regular_duration`:
+Nhưng KHÔNG NÊN đồng nhất với `T` (= total_regular_duration):
 
 ```text
-total_regular_duration  = sum(stage.duration) = lý thuyết
-summary_runtime_base    = thực tế khi chạy, có thể chênh ±1s
+T      = sum(d_i)             = lý thuyết (tổng stage)
+T_run  = thời gian summary đo  = thực tế khi chạy, có thể chênh ±1s
 ```
 
-#### 3 rate phân biệt
+Quan hệ:
 
 ```text
-1) lambda_peak                       [iter/s, mục tiêu cao nhất]
-2) average_target_rate               [iter/s, trung bình lịch start]
-3) actual_summary_iterations_rate    [iter/s, completed thực tế]
+T ≤ T_run ≤ T + gracefulStop
+
+- T_run = T              khi mọi iter xong trước hết regular_duration
+- T_run = T + grace      khi có iter "kéo dài" hết grace
+- T_run ∈ (T, T+grace)   trường hợp giữa
 ```
 
-Ý nghĩa khác nhau:
+#### 3 rate phân biệt (đã thống nhất ký hiệu)
 
 ```text
-- (1) dùng SIZING VU (preAllocatedVUs >= ceil(lambda_peak × iter_time))
-- (2) dùng đối chiếu sau test (xem có drop/interrupt nhiều không)
-- (3) dùng làm KPI cuối cùng (rate thực hệ thống chịu được)
+1) λ_peak       [iter/s, mục tiêu cao nhất] - dùng SIZING (3.3)
+2) λ_avg        [iter/s, trung bình lịch start = N_sched/T] - đối chiếu (3.2)
+3) actual_rate  [iter/s, completed thực tế = N_done/T_run] - KPI cuối cùng
 ```
 
-#### Verify quan hệ
+#### Bất đẳng thức `λ_peak ≥ λ_avg ≥ actual_rate` (chứng minh)
+
+**Bổ đề 1: `λ_peak ≥ λ_avg`** (peak luôn ≥ average)
 
 ```text
-(1) lambda_peak   >= (2) average_target_rate   (peak luôn >= average)
-(2) average_target_rate >= (3) actual_rate     (target >= thực, do drop/interrupt)
+Theo định nghĩa: λ_avg = (1/T) × ∫₀ᵀ λ(t) dt
+
+Vì λ(t) ≤ λ_peak với mọi t (peak là max):
+  ∫₀ᵀ λ(t) dt ≤ ∫₀ᵀ λ_peak dt = λ_peak × T
+
+→ λ_avg = (1/T) × ∫₀ᵀ λ(t) dt ≤ (1/T) × λ_peak × T = λ_peak ✓
+
+Đẳng thức xảy ra khi λ(t) = const = λ_peak (timeline phẳng).
 ```
 
-Nếu thấy `(3) > (2)` → nhiều khả năng đo lệch, cần kiểm tra lại
-`summary_runtime_base` có đúng không.
-
-#### Vì sao actual_rate < average_target_rate?
-
-Mọi slot bị drop hoặc interrupt đều **không đếm** vào `iterations` summary:
+**Bổ đề 2: `λ_avg ≥ actual_rate`** (target ≥ thực tế)
 
 ```text
-iterations summary = chỉ đếm iter HOÀN THÀNH
-                   = scheduled_total - dropped - interrupted
+Quan hệ: N_done ≈ N_sched − N_drop − N_int
+(xấp xỉ vì biên slot, xem 3.1 caveat)
 
-Áp config demo:
-  scheduled_total = 20 (theo 3.1)
-  dropped+interrupt = 2
-  completed = 18
+→ N_done ≤ N_sched (luôn)
 
-actual_rate = 18 / runtime ≈ 18 / 7 ≈ 2.57/s   <- thực tế đạt được
-average_target_rate = 20 / 7 ≈ 2.86/s          <- mục tiêu config
+actual_rate = N_done / T_run
+λ_avg       = N_sched / T
+
+Trường hợp T_run = T (không dùng grace):
+  actual_rate = N_done / T ≤ N_sched / T = λ_avg ✓
+
+Trường hợp T_run > T (dùng grace):
+  T_run > T và N_done < N_sched
+  → 2 cái cùng ép actual_rate xuống → vẫn ≤ λ_avg ✓
 ```
 
-Khoảng cách giữa 2 con số này = "khoảng thiếu hụt" của hệ thống. Càng
-gần nhau → hệ thống chịu được rate config tốt.
-
-#### Cách tính `summary_runtime_base` (gần đúng)
-
-Đây là hàm nội bộ của k6, công thức sát nhất:
+**Đẳng thức xảy ra khi nào?**
 
 ```text
-summary_runtime_base
-  ≈ max(0, scenario_end_time - scenario_start_time)
-
-Trong scenario thông thường:
-  start = startTime (mặc định 0)
-  end   = startTime + regular_duration + (grace nếu dùng)
-
-=> summary_runtime_base ≈ regular_duration + grace_thực_tế_dùng
+λ_peak = λ_avg ⟺ rate phẳng (timeline 1 stage hold)
+λ_avg = actual_rate ⟺ N_drop = N_int = 0 và T_run = T
+                    ⟺ test "hoàn hảo" (đủ VU, không grace)
 ```
 
-Nếu scenario dùng grace ít (vì iter ngắn, kết thúc sớm):
+#### `N_done` quan hệ với scheduled
 
 ```text
-runtime ≈ regular_duration (~7s với demo)
+N_done ≈ N_sched − N_drop − N_int
+
+Xấp xỉ vì:
+  + biên slot (xem 3.1 caveat 2: slot đầu lệch t=0)
+  + slot cuối có thể đã fire nhưng iter chưa xong (chưa kịp tính done)
+  + part-slot mang sang stage sau (xem 3.1 caveat 1)
+  → có thể lệch ±1 slot
 ```
 
-Nếu scenario dùng hết grace (iter dài chưa xong):
+#### Áp config demo 3.4 vào quan hệ (ví dụ tính tay)
+
+Config: `preAlloc=3, maxVUs=3, sleep(0.5)`, stage `2s, 3s, 2s` target
+`4, 4, 0` (giống demo 3.2):
 
 ```text
-runtime ≈ regular_duration + gracefulStop
-```
+Bước 1: Tính lý thuyết
+  λ_peak  = 4 iter/s
+  N_sched = 4 + 12 + 4 = 20 slot     (xem 3.1)
+  T       = 7s
+  λ_avg   = 20 / 7 ≈ 2.857 iter/s
 
-→ trong demo `3.4`, `runtime ≈ 7s` vì `iter=0.5s < grace mặc định`,
-không cần kéo dài.
+Bước 2: Sizing kiểm tra
+  required = ceil(λ_peak × W) = ceil(4 × 0.5) = 2 VU
+  M = 3 VU → C = 3 / 0.5 = 6 iter/s ≥ λ_peak=4 ✓
+  → Lý thuyết KHÔNG drop (nếu W chính xác = 0.5s)
+
+Bước 3: Đọc summary thật
+  iterations: 18    actual_rate ≈ 2.571/s
+  → có lệch 20 − 18 = 2 iter (không match lý thuyết)
+
+Bước 4: Giải thích lệch
+  Nguyên nhân có thể:
+  (a) iter_duration thực tế > 0.5s (cộng overhead startup VU)
+      → W_thực ≈ 0.55-0.6s → C_thực = 3/0.6 = 5/s vẫn ≥ λ_peak ✓
+  (b) Slot đầu fire muộn so với t=0 (caveat 2 ở 3.1)
+      → 1-2 slot không kịp fire trong T=7s → không drop, chỉ thiếu
+  (c) Race spawn unplanned (xem 3.16)
+      → trong demo này maxVUs=preAlloc nên KHÔNG có spawn → không liên quan
+  → Khả năng cao là (b): biên slot.
+
+Bước 5: Verify quan hệ bất đẳng thức
+  λ_peak = 4   ≥   λ_avg = 2.857   ≥   actual_rate = 2.571 ✓
+  4 ≥ 2.857 ≥ 2.571 (đúng cả 2 vế).
+
+Bước 6: Tính N_drop, N_int
+  N_done = 18, N_sched ≈ 20
+  N_drop + N_int ≈ 2 (kiểm tra summary cụ thể)
+  Trong demo này iter=0.5s ngắn, không có ai bị grace cancel
+  → N_int = 0, N_drop ≈ 2 (hoặc 1 + 1 lệch biên).
+```
 
 #### Phân biệt `iterations rate` vs `http_reqs rate`
 
 ```text
-iterations rate   = số iter HOÀN THÀNH / runtime
-http_reqs rate    = số HTTP request đã gửi / runtime
+iterations rate   = N_done / T_run   (số iter HOÀN THÀNH)
+http_reqs rate    = total_http_requests / T_run
 
 Quan hệ:
-  http_reqs ≈ iterations × số_request_per_iter (nếu code không có nhánh fail)
+  total_http_requests ≈ N_done × số_request_per_iter (nếu code không có nhánh fail)
 
 Ví dụ với 2 request/iter:
-  iterations = 18 -> http_reqs = 36
-  rate iter = 2.57/s -> rate http = 5.14/s
+  N_done = 18 -> http_reqs = 36
+  iterations rate = 2.57/s -> http_reqs rate = 5.14/s
 ```
 
 → rate http_reqs **không phải** rate slot, mà là rate request đã gửi
 thành công trong các iter HOÀN THÀNH.
 
+#### Caveat / Edge case
+
+```text
+- T_run vs T có thể lệch khi:
+  + scenario dừng sớm (abort, error fatal)
+  + scenario dùng hết grace (iter cuối kéo dài)
+  → kiểm tra summary header để biết T_run thực tế.
+
+- N_done không bằng N_sched ngay cả khi không drop:
+  + slot fire ở t=T-ε mà iter chưa kịp xong → không tính done
+  + slot biên (caveat 3.1) lệch ±1
+
+- Nếu actual_rate > λ_avg → BẤT THƯỜNG, cần check lại:
+  + summary_runtime_base có đúng không
+  + có nhầm metric (vd dùng http_reqs thay iterations)
+  + có duplicate counter (multi-scenario)
+
+- λ_peak ≥ λ_avg là tính chất của hàm liên tục (chứng minh ở trên),
+  không phụ thuộc vào behavior k6.
+```
+
 #### Tóm gọn 3.4
 
 ```text
-actual_rate = completed / runtime    <- KPI thực tế
-< average_target_rate                  <- mục tiêu lý thuyết
-< lambda_peak                          <- đỉnh rate
+actual_rate = N_done / T_run        <- KPI thực tế (summary in)
+λ_avg       = N_sched / T            <- mục tiêu lý thuyết
+λ_peak      = max(λ_start, λ_i_end)  <- đỉnh rate
+
+Bất đẳng thức (luôn đúng):
+  λ_peak ≥ λ_avg ≥ actual_rate
 
 Càng sát nhau -> hệ thống chịu rate càng tốt
-Lệch xa -> kiểm tra dropped/interrupted
+Lệch xa -> kiểm tra dropped/interrupted (3.5)
 ```
 
 ### 3.5. Phân biệt `dropped` vs `interrupted`: chưa start vs đã start nhưng không finish
