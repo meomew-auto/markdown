@@ -441,6 +441,94 @@ t=300-500ms các slot tiếp theo: VU=3 rảnh -> TryRunIteration succeed
 Tóm gọn: unplanned VU CỨU các slot SẮP TỚI, không cứu slot ĐÃ DROP.
 ```
 
+**Phân tích chi tiết 3 phase khi `preAllocated < ideal_vus` nhưng `maxVUs > preAllocated`**
+
+Cùng config `rate=10/s, sleep(0.5), preAllocated=2, maxVUs=10` (`ideal_vus = 5`).
+
+Phase 1 — Trước khi cần spawn (steady với preAllocated):
+
+```text
+t=0ms    slot#0 -> VU=1 nhận, iter#0 (xong t=500ms)
+t=100ms  slot#1 -> VU=2 nhận, iter#1 (xong t=600ms)
+t=200ms  slot#2 -> CẢ 2 VU bận
+                  TryRunIteration() = false (ramping_arrival_rate.go:527-534)
+                  -> dropped_iterations += 1
+                  -> đẩy signal vào makeUnplannedVUCh
+                     (ramping_arrival_rate.go:498-502)
+                  -> background goroutine bắt đầu init VU=3
+                  -> remainingUnplannedVUs--
+```
+
+Phase 2 — Đang spawn unplanned (window ~10-50ms cho init JS context):
+
+```text
+t=300ms  slot#3 -> 2 VU vẫn bận, VU=3 chưa ready
+                  -> drop, dropped_iterations += 1
+                  -> đẩy signal -> NHƯNG channel đã có item
+                  -> default branch (line 501)
+                  -> KHÔNG --remainingUnplannedVUs (idempotent)
+t=400ms  slot#4 -> 2 VU bận, VU=3 vẫn chưa ready
+                  -> drop, dropped += 1
+                  -> trigger spawn VU=4
+                  -> remainingUnplannedVUs--
+t=~250ms VU=3 init xong, vào pool, chờ ở `for range p.iterations` (line 552)
+```
+
+→ Trong window spawn: slot bị drop, KHÔNG có delay.
+
+Phase 3 — Sau khi unplanned ready:
+
+```text
+t=500ms  slot#5 -> VU=1 vừa finish + VU=3 đã ready
+                  TryRunIteration() = true
+                  -> race: VU=1 hoặc VU=3 đọc channel trước
+                  -> 1 trong 2 nhận iter#5
+                  -> iter#5 start ĐÚNG t=500ms, KHÔNG delay
+
+t=~450ms VU=4 cũng ready (init từ slot#4)
+t=500ms+ các slot tiếp theo đều có VU rảnh, không drop
+```
+
+**3 case kết luận user thấy được sau test**:
+
+```text
+Case A: preAllocatedVUs đủ (>= ideal_vus)
+  dropped_iterations = 0
+  vus_max = preAllocatedVUs (k6 không spawn thêm)
+  vus đỉnh ≤ preAllocatedVUs
+  -> setup tối ưu
+
+Case B: preAllocated thiếu, maxVUs đủ
+  dropped_iterations > 0 (vài slot đầu trong window spawn)
+  vus_max tăng dần lên gần ideal_vus
+  cuối cùng dropped ngừng tăng (đã catch up)
+  -> hệ thống "chạy được" nhưng phí drop ban đầu
+
+Case C: preAllocated thiếu, maxVUs cũng thiếu
+  dropped_iterations tăng LIÊN TỤC suốt scenario
+  vus_max bằng maxVUs (đã chạm trần)
+  log warning: "Insufficient VUs, reached N active VUs and cannot initialize more"
+                (ramping_arrival_rate.go:492)
+  -> setup không đủ năng lực, hệ thống nghẽn nặng
+```
+
+**Lưu ý quan trọng về "delay"**:
+
+```text
+TRONG MỌI CASE: iter HOẶC start ĐÚNG slot_time HOẶC bị drop
+KHÔNG có case "start delayed bằng X ms"
+
+Vì TryRunIteration() là non-blocking (select default ở line 530-532):
+
+  case p.iterations <- struct{}{}:
+      return true   // có VU rảnh, send thành công NGAY
+  default:
+      return false  // không VU rảnh, return false NGAY (không đợi)
+
+-> scheduler không bao giờ "đợi" -> không có delay
+-> không có metric "start_delay" hoặc "scheduling_jitter"
+```
+
 **Vì sao thiết kế "hoặc start đúng giờ hoặc drop"?**
 
 ```text
