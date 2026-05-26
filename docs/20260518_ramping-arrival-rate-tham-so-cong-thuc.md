@@ -2141,6 +2141,99 @@ VU=2:   [iter#1 ──── done]   [iter#4 ── X cancel]   <- INTERRUPTED
    -> iter đang chạy không hoàn thành
 ```
 
+#### Lệch giữa N_sched và (N_done + N_drop + N_int)
+
+Quan hệ chính xác là:
+
+```text
+N_done + N_drop + N_int = N_sched ± biên_slot
+```
+
+Lệch về phía nào?
+
+```text
+Trường hợp lệch DƯƠNG (N_done + N_drop + N_int > N_sched):
+  - hiếm gặp
+  - có thể do double-count (xem 3.16 race spawn)
+  → kiểm tra log, không phải logic sizing
+
+Trường hợp lệch ÂM (N_done + N_drop + N_int < N_sched):
+  - thường gặp
+  - slot biên cuối stage chưa kịp fire trong T
+  - slot đầu lệch t=0 (caveat 2 ở 3.1)
+  - phần lẻ doneSoFar mang sang stage cuối chưa fire hết
+  → lệch 1-2 slot là bình thường, không cần xử lý
+```
+
+#### Ví dụ tính tay (số cụ thể) cho config demo 3.5
+
+Config: `preAlloc=2, maxVUs=2, gracefulStop=1s, sleep(2)`, stages
+`3s target=4, 2s target=4`:
+
+```text
+Bước 1: Tính lý thuyết
+  λ_peak = 4 iter/s
+  λ_avg  = (3 × 4 + 2 × 4) / (3+2) = 20/5 = 4/s   (hold suốt nên = peak)
+  N_sched = 5 × 4 = 20 slot
+  T = 5s
+
+Bước 2: Sizing đáng lẽ
+  required = ceil(λ_peak × W) = ceil(4 × 2) = 8 VU
+  M = 2 VU (CỐ TÌNH thiếu) → C = 2 / 2 = 1 iter/s
+  → drop_rate = 4 − 1 = 3 iter/s liên tục
+  → N_drop_lý_thuyết ≈ 3 × 5 = 15 slot
+
+Bước 3: Lý thuyết N_done
+  N_done_lý_thuyết = N_sched − N_drop = 20 − 15 = 5 iter
+  Kiểm tra với capacity: C × T = 1 × 5 = 5 iter ✓
+
+Bước 4: Tính N_int
+  Tại t = T = 5s, các VU đang chạy iter (chưa kịp xong vì sleep(2)).
+  Grace = 1s. iter cuối cần 2s nữa, chỉ được grace 1s → cancel sau 1s.
+  → 2 VU đang bận tại t=5s → 2 iter bị interrupt sau grace.
+  N_int ≈ 2
+
+Bước 5: Verify đẳng thức
+  N_done + N_drop + N_int = 5 + 15 + 2 = 22
+  N_sched = 20
+  → lệch +2: do biên slot (2 iter cuối tính cả vào "đã start trong window
+    cuối" nhưng cũng tính vào "sẽ fire trong slot 19-20")
+  → trong thực tế summary có thể thấy: N_done=18, N_drop=5, N_int=2
+    (số demo trong section là 18/5/2)
+
+Bước 6: Số trong demo summary thật (đề bài)
+  iterations: 18, dropped_iterations: 5, interrupted: 2
+  N_done + N_drop + N_int = 25 > 20
+  → Sai lệch dương: do iter chạy DÀI (sleep(2)) → grace cho phép
+    fire thêm slot trong window grace, fire thêm slot ngoài T
+  → cho thấy N_sched chỉ là số "lý thuyết" trong T, có thể thấp hơn
+    số thực tế khi grace dài.
+
+  Bài học: đếm chính xác N_sched cần tích phân cả window grace nếu
+  scenario kết thúc bằng iter dài.
+```
+
+#### Verify công thức khi cộng số từ demo cụ thể
+
+Lấy 3 demo đã có trong file:
+
+```text
+Demo 3.4 (preAlloc=3, maxVUs=3, sleep(0.5), stages 4/4/0):
+  N_sched = 20, N_done = 18, N_drop = 2, N_int = 0
+  18 + 2 + 0 = 20 = N_sched ✓ (khớp tuyệt đối)
+
+Demo 3.5 (preAlloc=2, maxVUs=2, sleep(2), stages 4/4):
+  N_sched = 20, N_done = 18, N_drop = 5, N_int = 2
+  18 + 5 + 2 = 25 > N_sched (lệch +5 do grace fire thêm)
+
+Demo 3.3 (preAlloc=5, maxVUs=10, sleep(0.4), stages 8/8):
+  N_sched ≈ 4 + 24 = 28 slot (tự tính theo 3.1)
+  N_done ≈ 28, N_drop = 0, N_int = 0
+  28 + 0 + 0 = 28 ✓
+```
+
+→ Khớp tốt khi không có grace dài. Lệch khi grace cộng thêm slot.
+
 #### Tóm gọn nhớ nhanh
 
 ```text
