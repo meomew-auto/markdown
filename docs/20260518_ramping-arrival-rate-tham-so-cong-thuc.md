@@ -281,11 +281,12 @@ ramping-arrival-rate (open):
                        để cố giữ rate
 ```
 
-Cụ thể với `rate: 10, timeUnit: 1s`:
+Cụ thể với `rate: 10, timeUnit: 1s` **(rate cố định trong 1 stage hold)**:
 
 ```text
 scheduler có nghĩa vụ FIRE 10 "slot" start iter mỗi giây
-mỗi slot cách nhau 1/10 = 100ms
+slot_interval = 1/10 = 100ms (đều, vì rate không đổi)
+
 tại mỗi slot, scheduler tìm VU rảnh để giao iter:
 - có VU rảnh → VU bắt đầu iter đó (start at t)
 - không có VU rảnh & còn quota maxVUs → spawn unplanned VU (start trễ chút)
@@ -293,6 +294,13 @@ tại mỗi slot, scheduler tìm VU rảnh để giao iter:
 
 rate ở đây là MỤC TIÊU của scheduler, không phải kết quả tính từ VU
 ```
+
+> **Lưu ý quan trọng**: ví dụ dưới minh họa với rate **CỐ ĐỊNH** trong 1
+> stage hold cho dễ hiểu (slot_interval đều 100ms). Trong
+> `ramping-arrival-rate` thật sự, rate **THAY ĐỔI** theo timeline (ramp lên/xuống),
+> nên `slot_interval` thay đổi theo. Section `3.1` tính tổng slot bằng
+> công thức diện tích hình thang vì rate ramp tuyến tính, không phải
+> đơn giản `rate × duration` như ở đây.
 
 Ví dụ minh họa khác biệt:
 
@@ -574,6 +582,13 @@ Hai mô hình khác nhau, k6 cố tình KHÔNG mô phỏng buffer để giữ op
 ```
 
 #### Tính tổng VU cần khi iter_time > slot_interval
+
+> **Lưu ý quan trọng**: phần này tính với rate **CỐ ĐỊNH** (như stage hold,
+> hoặc constant-arrival-rate). Trong `ramping-arrival-rate` thật, rate
+> thay đổi theo timeline → `slot_interval` cũng thay đổi → công thức
+> Little's Law dưới đây chỉ áp được cho từng đoạn rate ổn định
+> (ví dụ stage hold). Đối với stage ramp, dùng `lambda_peak` (xem `3.2`)
+> để sizing theo mức rate cao nhất.
 
 Đây là chỗ user hay nhầm. Khi:
 
