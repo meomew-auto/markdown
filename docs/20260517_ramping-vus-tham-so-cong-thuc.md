@@ -42,6 +42,7 @@ docs/20260517_ramping_vus_quickpizza_two_requests_worked_example.md
 - [Bước nhảy giữa các VU trong 1 stage](#311-bước-nhảy-giữa-các-vu-trong-1-stage)
 - [Vì sao không spawn hết VU ngay](#312-vì-sao-không-spawn-hết-vu-ngay-từ-đầu)
 - [VU activate xong start iteration ngay](#313-vu-activate-xong-start-iteration-ngay-không-đợi-đủ-target)
+- [Bước nhảy áp cho cả ramp up và ramp down](#314-bước-nhảy-áp-cho-cả-ramp-up-và-ramp-down)
 - [Demo stage timeline](#4-demo-stage-timeline)
 - [Demo VU nhanhchậm](#5-demo-vu-nhanhchậm)
 - [Demo gracefulRampDown và interrupted](#6-demo-gracefulrampdown-và-interrupted)
@@ -1800,6 +1801,140 @@ ramping-arrival-rate (open):
   - VU không tự loop, mà chờ scheduler giao iter
   - rate cố định (đến mức cho phép)
   - có thể cần unplanned VU nếu rate vượt năng lực
+```
+
+## 3.14. Bước nhảy áp cho cả ramp up và ramp down
+
+Section này tổng hợp 2 ý đã rải ở `3.8.1` và `3.11` thành 1 quy tắc gọn,
+để tránh hiểu nhầm "ramp up có bước nhảy, ramp down chỉ có gracefulStop ở
+cuối stage".
+
+### 3.14.1. Quy tắc chung
+
+```text
+step_interval = stageDuration / |target - fromVUs|
+```
+
+Áp dụng **cho cả 2 chiều**:
+
+```text
+ramp 1 → 5 trong 4s : step = 4/4 = 1s, mỗi 1s thêm 1 VU
+ramp 5 → 1 trong 4s : step = 4/4 = 1s, mỗi 1s bớt 1 VU
+ramp 4 → 2 trong 1s : step = 1/2 = 0.5s, mỗi 0.5s bớt 1 VU
+```
+
+Ramp down **không phải "stop hết tại stageEnd"**. Mỗi VU bị stop lần lượt
+theo bước nhảy, kèm grace để finish iter đang chạy.
+
+### 3.14.2. Khác biệt là HÀNH ĐỘNG tại mỗi mốc
+
+Đọc `scheduledVUsHandlerStrategy()` (`ramping_vus.go:682-693`):
+
+```go
+return func(raw lib.ExecutionStep) {
+    pv := raw.PlannedVUs
+    for ; cur < pv; cur++ {
+        _ = rs.vuHandles[cur].start()         // ramp UP: activate
+    }
+    for ; pv < cur; cur-- {
+        rs.vuHandles[cur-1].gracefulStop()    // ramp DOWN: stop dần
+    }
+}
+```
+
+Bảng:
+
+| Hướng | Tại mỗi mốc bước nhảy | Hành động |
+| --- | --- | --- |
+| Ramp up | `vuHandle[cur].start()` | activate VU từ pool, vào iter ngay |
+| Ramp down | `vuHandle[cur-1].gracefulStop()` | VU không nhận iter mới, finish iter hiện tại trong gracefulRampDown, rồi ReturnVU |
+
+Cùng một concept "bước nhảy" — chỉ khác nội dung làm tại mỗi mốc.
+
+### 3.14.3. Ví dụ ramp up
+
+Stage `ramp 1 → 4 trong 3s`:
+
+```text
+step_interval = 3s / |4-1| = 1s
+
+t=stageStart       emit step plannedVUs=1 (= fromVUs, không thay đổi)
+t=stageStart+1s    emit step plannedVUs=2 -> vuHandle[1].start()
+                                              -> __VU=2 vào iter ngay
+t=stageStart+2s    emit step plannedVUs=3 -> vuHandle[2].start()
+                                              -> __VU=3 vào iter ngay
+t=stageStart+3s    emit step plannedVUs=4 -> vuHandle[3].start()
+                                              -> __VU=4 vào iter ngay
+```
+
+### 3.14.4. Ví dụ ramp down
+
+Stage `ramp 4 → 2 trong 1s, gracefulRampDown=3s`:
+
+```text
+step_interval = 1s / |2-4| = 0.5s
+
+t=stageStart       emit step plannedVUs=4 (= fromVUs, không thay đổi)
+t=stageStart+0.5s  emit step plannedVUs=3 -> vuHandle[3].gracefulStop()
+                                              -> __VU=4 không nhận iter mới
+                                              -> được finish iter hiện tại
+                                                 trong gracefulRampDown=3s
+t=stageStart+1.0s  emit step plannedVUs=2 -> vuHandle[2].gracefulStop()
+                                              -> __VU=3 tương tự
+
+VU=4 finish iter trong [stageStart+0.5s, stageStart+0.5s+3s]
+   -> ReturnVU clean (nếu kịp)
+   -> hardStop (nếu hết grace mà iter chưa xong)
+
+VU=3 finish iter trong [stageStart+1.0s, stageStart+1.0s+3s]
+   -> tương tự
+```
+
+### 3.14.5. Stage trùng target = no-op
+
+Nếu `target = fromVUs`:
+
+```text
+diff = 0 -> step_interval = stageDuration / 0 = không xác định
+core thoát sớm: if stageVUDiff == 0 { continue }
+=> không emit step nào
+=> không có start() và không có gracefulStop()
+```
+
+Đây là case "hold" (xem `3.3` và `6.3`). VU đang active tiếp tục loop iter
+như bình thường, không có thay đổi.
+
+### 3.14.6. Stage `duration: 0s` = instant jump
+
+Nếu `duration = 0`:
+
+```text
+step_interval = 0 / diff = 0
+=> mọi VU đổi state cùng lúc tại stageStart
+
+ramp up:   tất cả VU mới start() đồng loạt
+ramp down: tất cả VU dư gracefulStop() đồng loạt
+```
+
+Xem `6.3.4` (instant jump) và `6.3.5/B` (stage 0 duration=0s).
+
+### 3.14.7. Tổng kết
+
+```text
+"bước nhảy" = đặc tính kỹ thuật của tất cả stages có diff != 0
+              cả ramp up và ramp down đều có
+"gracefulRampDown" = tham số RIÊNG cho ramp down
+                     không phải thay thế cho bước nhảy
+                     mà là TÀI NGUYÊN cho VU đang bị stop tại mỗi bước nhảy
+```
+
+Đọc kết hợp với:
+
+```text
+3.8.1 - chi tiết 5 bước executor làm khi giảm VU
+3.11  - công thức step_interval
+3.13  - VU activate xong start iter ngay (closed model)
+6.3   - edge case stage trùng / duration=0s
 ```
 
 ## 4. Demo stage timeline
