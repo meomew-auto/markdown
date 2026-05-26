@@ -1026,102 +1026,274 @@ drop_rate ≈ max(0, lambda_current - capacity_with_M_vus)
 Ý chính: nhìn `lambda_current` chứ không phải `average_target_rate`. Đoạn
 giữa stage có `lambda_current` cao hơn trung bình → đó là chỗ dễ drop.
 
-### 3.3. Ước lượng VU
+### 3.3. Ước lượng VU cần chuẩn bị
+
+#### Ví dụ trước
+
+Scenario:
 
 ```text
-required_vus_min_peak ~= ceil(lambda_peak * W_effective)
-capacity_with_M_vus ~= M / W_effective
-drop_rate ~= max(0, lambda_current - capacity_with_M_vus)
+lambda_peak = 8 iter/s   (rate cao nhất)
+iter_time   = 0.4s       (do code: vd http 100ms + sleep 0.3s)
 ```
 
-Đọc kiểu thực tế:
+Hỏi: cần chuẩn bị bao nhiêu VU để không drop?
 
-- `lambda_peak * W_effective`: một iteration giữ VU bao lâu, nhân với nhịp cao nhất.
-- `ceil(...)`: làm tròn lên vì không thể có nửa VU.
-- `capacity_with_M_vus`: với `M` VU thì cả pool chạy được khoảng bao nhiêu iteration/s.
-- `drop_rate`: nhịp hiện tại lớn hơn sức chứa thì phần dư sẽ bị drop.
-
-Kiểm tra đơn vị:
+Trả lời theo Little's Law:
 
 ```text
-lambda_peak [iterations/s] * W_effective [s/iteration] = số VU cần đồng thời
-M [VU] / W_effective [s/iteration] = capacity [iterations/s]
+required_vus = ceil(lambda_peak × iter_time)
+             = ceil(8 × 0.4)
+             = ceil(3.2)
+             = 4 VU
 ```
 
-Ví dụ nhanh:
+→ `preAllocatedVUs >= 4` (nên cộng buffer 20% → 5).
+
+#### Phân tích công thức
 
 ```text
-lambda_peak = 8 iterations/s
-W_effective = 0.4s
-ceil(8 * 0.4) = ceil(3.2) = 4 VUs
+required_vus_min_peak ≈ ceil(lambda_peak × W_effective)
+capacity_with_M_vus   ≈ M / W_effective
+drop_rate             ≈ max(0, lambda_current - capacity_with_M_vus)
 ```
 
-Với `W_effective`:
+| Biến | Ý nghĩa | Đơn vị |
+| --- | --- | --- |
+| `lambda_peak` | rate cao nhất scenario phải chịu (xem `3.2`) | iter/s |
+| `W_effective` | iter_time hiệu dụng = `max(iter_duration, minIterationDuration)` | s/iter |
+| `lambda_peak × W_effective` | số VU **đồng thời bận** tại đỉnh rate | VU |
+| `ceil(...)` | làm tròn lên (không có nửa VU) | VU |
+| `M` | số VU thực tế trong pool | VU |
+| `M / W_effective` | năng lực pool M VU = bao nhiêu iter/s | iter/s |
+| `lambda_current - capacity` | phần dư khi rate vượt năng lực | iter/s |
+
+**Đây chính là Little's Law** đã thấy ở `1.3`:
 
 ```text
-W_effective ~= iteration_duration nếu không có minIterationDuration
-W_effective ~= max(iteration_duration, minIterationDuration) nếu có minIterationDuration
+VUs_đồng_thời = rate × iter_time
+              = mục tiêu_rate × thời gian giữ VU mỗi iter
 ```
 
-### 3.4. Rate của summary
+#### Kiểm tra đơn vị
+
+```text
+lambda_peak [iter/s] × W_effective [s/iter] = [VU]    ✓
+M [VU] / W_effective [s/iter]                = [iter/s] ✓
+```
+
+#### Ví dụ ngược lại: capacity hiện có chịu được rate nào?
+
+Có sẵn `M = 6 VU`, `iter_time = 0.5s`:
+
+```text
+capacity = 6 / 0.5 = 12 iter/s
+```
+
+→ scenario có `lambda_peak ≤ 12` → không drop.
+→ scenario có `lambda_peak = 15` → drop 3/s tại đỉnh.
+
+#### `W_effective` là gì?
+
+```text
+W_effective = iter_duration                              nếu KHÔNG set minIterationDuration
+            = max(iter_duration, minIterationDuration)   nếu CÓ set minIterationDuration
+```
+
+`minIterationDuration` là sàn: nếu code chạy nhanh hơn `min`, k6 sleep bù
+sau function. VU bị giữ trong toàn bộ `min` đó → ảnh hưởng sizing.
+
+Ví dụ:
+
+```text
+code mất 0.2s, minIterationDuration = 1s
+=> W_effective = max(0.2, 1) = 1s
+=> rate=10/s cần ceil(10 × 1) = 10 VU (không phải 2 VU)
+```
+
+### 3.4. Rate của summary thực tế
+
+#### Ví dụ trước
+
+Sau khi chạy xong scenario, summary in:
+
+```text
+iterations.........: 18    2.571428/s
+http_reqs..........: 36    5.142857/s
+checks_total.......: 36    5.142857/s
+```
+
+Hỏi: rate `2.57/s` này nghĩa là gì? So với `lambda_peak=4/s` và
+`average_target_rate=2.86/s` ở trên, vì sao khác?
+
+Trả lời:
+
+```text
+2.571428/s = completed_iterations / summary_runtime_base
+           = 18 / 7s ≈ 2.57/s
+           = rate THỰC TẾ k6 đã hoàn thành (sau khi trừ drop/interrupt)
+```
+
+Trong ví dụ này:
+
+```text
+scheduled_total          = 20 slot (theo công thức 3.1)
+completed_iterations     = 18      (trong summary)
+=> dropped/interrupted   = 20 - 18 = 2
+
+actual_rate (2.57/s) < average_target_rate (2.86/s) vì có 2 slot không hoàn thành
+```
+
+#### Phân tích công thức
 
 ```text
 actual_summary_iterations_rate = completed_iterations / summary_runtime_base
-http_reqs_rate = total_http_requests / summary_runtime_base
-checks_total_rate = total_checks / summary_runtime_base
+http_reqs_rate                 = total_http_requests / summary_runtime_base
+checks_total_rate              = total_checks / summary_runtime_base
 ```
 
-Đây là rate của metric summary thật, đọc từ `count / runtime` của Counter.
-`summary_runtime_base` là mẫu số mà core summary dùng cho cột `/s` của cả test run.
-Trong demo 1 scenario, `startTime=0`, không `setup()/teardown`, nó thường gần với thời gian scenario
-thật sự chạy, nhưng hai đại lượng không nên đồng nhất trong trường hợp tổng quát.
-Nó khác `average_target_rate` ở trên:
+| Biến | Ý nghĩa | Nguồn |
+| --- | --- | --- |
+| `completed_iterations` | số iter HOÀN THÀNH (không drop, không interrupt) | summary `iterations` |
+| `total_http_requests` | tổng HTTP request đã gửi | summary `http_reqs` |
+| `summary_runtime_base` | mẫu số core dùng cho cột `/s` | xem dưới |
+
+#### `summary_runtime_base` là gì?
+
+Mẫu số core dùng cho cột `/s` của Counter. Trong demo 1 scenario, không
+`setup()/teardown()`, `startTime=0`:
 
 ```text
-average_target_rate = rate lịch start trung bình
-actual_summary_iterations_rate = rate completed iteration thực tế
+summary_runtime_base ≈ thời gian scenario thật sự chạy (regular_duration + grace nếu có dùng)
 ```
+
+Nhưng KHÔNG NÊN đồng nhất với `total_regular_duration`:
+
+```text
+total_regular_duration  = sum(stage.duration) = lý thuyết
+summary_runtime_base    = thực tế khi chạy, có thể chênh ±1s
+```
+
+#### 3 rate phân biệt
+
+```text
+1) lambda_peak                       [iter/s, mục tiêu cao nhất]
+2) average_target_rate               [iter/s, trung bình lịch start]
+3) actual_summary_iterations_rate    [iter/s, completed thực tế]
+```
+
+Ý nghĩa khác nhau:
+
+```text
+- (1) dùng SIZING VU (preAllocatedVUs >= ceil(lambda_peak × iter_time))
+- (2) dùng đối chiếu sau test (xem có drop/interrupt nhiều không)
+- (3) dùng làm KPI cuối cùng (rate thực hệ thống chịu được)
+```
+
+#### Verify quan hệ
+
+```text
+(1) lambda_peak   >= (2) average_target_rate   (peak luôn >= average)
+(2) average_target_rate >= (3) actual_rate     (target >= thực, do drop/interrupt)
+```
+
+Nếu thấy `(3) > (2)` → nhiều khả năng đo lệch, cần kiểm tra lại
+`summary_runtime_base` có đúng không.
 
 ### 3.5. `dropped` khác `interrupted` như nào?
 
-Đây là 2 loại rất dễ lẫn:
+#### Ví dụ trước
+
+Sau test, summary cho:
 
 ```text
-dropped
-  = slot đã đến giờ nhưng chưa từng start được iteration
-  = lý do thường gặp: không có VU rảnh đúng lúc
-
-interrupted
-  = iteration đã start rồi nhưng bị cancel trước khi chạy xong
-  = lý do thường gặp: hết grace, context bị hủy, abort
+iterations.................: 18    completed
+dropped_iterations.........: 5     metric Counter riêng
+running (...), 2 interrupted iterations  <- progress/footer
 ```
 
-Nói rất ngắn:
+Hỏi: 5 dropped vs 2 interrupted khác nhau ở đâu?
+
+Trả lời:
 
 ```text
-dropped = chưa start được
-interrupted = đã start nhưng không finish
+5 dropped     = 5 slot ĐÃ ĐẾN GIỜ start nhưng không tìm được VU rảnh
+                -> CHƯA TỪNG vào iter
+                -> không tốn thời gian VU nào
+
+2 interrupted = 2 iter ĐÃ START rồi nhưng bị cancel giữa chừng
+                -> ĐÃ vào iter, đang chạy thì context bị hủy
+                -> đã tốn thời gian VU + tài nguyên
 ```
 
-Trong core arrival-rate:
+#### Phân tích phân biệt
+
+| | `dropped` | `interrupted` |
+| --- | --- | --- |
+| Định nghĩa | slot không start được iter | iter đã start nhưng không finish |
+| Khi nào xảy ra? | tại lúc slot fire mà `TryRunIteration()` fail | khi iter đang chạy thì context cancel (hết grace, abort, ...) |
+| Đã tốn VU? | KHÔNG | CÓ (VU đã đang chạy iter) |
+| Nguyên nhân thường gặp | preAllocated thiếu, code chậm hơn dự kiến | hết `gracefulStop`, scenario bị abort, error fatal |
+| Vị trí trong output | metric Counter `dropped_iterations` | số ở progress/footer cuối run, không có Counter riêng |
+| Code emit | `ramping_arrival_rate.go:479-486` | `helpers.go:80-113` (context cancel ở giữa iter) |
+
+#### Tổng quan timeline minh họa
 
 ```text
-TryRunIteration() fail
-  -> dropped_iterations tăng
+slot fire  ▼     ▼     ▼     ▼     ▼     ▼
+trục thời gian  ──────────────────────────────────────►
 
-RunOnce() đã vào rồi nhưng context chết giữa chừng
-  -> interrupted iterations tăng ở progress/footer
+VU=1: [iter#0 ──── done]   [iter#3 ──── done]
+VU=2:   [iter#1 ──── done]   [iter#4 ── X cancel]   <- INTERRUPTED
+                  ▲                            ▲
+                  │                            └─ iter đã chạy giữa chừng
+                  └─ slot fire mà cả 2 VU bận
+                     -> dropped_iterations +1
+                     (không tốn VU nào)
 ```
 
-Vì vậy khi đọc output:
+#### Khi nào xảy ra `dropped`?
 
 ```text
-dropped_iterations
-  = metric riêng trong summary
+1) preAllocated < ideal_vus, không có quota unplanned
+   -> slot fire mà không có VU rảnh -> drop
 
-interrupted iterations
-  = số ở progress/footer cuối run
-  không phải Counter summary riêng giống iterations hay http_reqs
+2) preAllocated thiếu, đang chờ unplanned spawn
+   -> trong window spawn (~10-50ms), slot vẫn fire -> drop
+   (xem 3.16, phase 2)
+
+3) iter_time đột nhiên dài hơn dự kiến (server chậm)
+   -> năng lực VU tụt xuống dưới rate -> drop
+```
+
+#### Khi nào xảy ra `interrupted`?
+
+```text
+1) Iter đang chạy tại t = regular_duration + gracefulStop
+   -> grace hết, hardStop -> interrupted
+
+2) User Ctrl+C / scenario bị abort
+   -> tất cả iter đang chạy bị cancel
+
+3) Error fatal trong VU (vd OOM, panic)
+   -> iter đang chạy không hoàn thành
+```
+
+#### Tóm gọn nhớ nhanh
+
+```text
+dropped      = chưa start được          (lúc slot fire)
+interrupted  = đã start nhưng không finish (lúc context cancel)
+
+dropped không tốn VU
+interrupted đã tốn VU, không gặt được data
+```
+
+Vì vậy khi đọc summary:
+
+```text
+- dropped cao -> sizing VU thiếu -> tăng preAllocatedVUs/maxVUs
+- interrupted cao -> code chậm hơn duration -> tăng gracefulStop hoặc giảm rate
 ```
 
 Nếu 1 completed iteration chạy đủ N request:
