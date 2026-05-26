@@ -304,16 +304,21 @@ rate ở đây là MỤC TIÊU của scheduler, không phải kết quả tính 
 
 Ví dụ minh họa khác biệt:
 
+> **Lưu ý**: ví dụ dưới dùng rate **CỐ ĐỊNH 10/s** cho gọn (tương đương
+> stage hold hoặc `constant-arrival-rate`). Đây KHÔNG phải timeline
+> thực của `ramping-arrival-rate`. Khi rate thay đổi (ramp lên/xuống),
+> phải áp dụng riêng cho từng đoạn — xem `3.1` và `3.3`.
+
 ```text
 Cấu hình code: sleep(0.5)  -> iter_time = 0.5s
 
-Open (ramping-arrival-rate, rate=10/s):
+Open (ramping-arrival-rate trong stage hold 10/s, hoặc constant-arrival-rate rate=10/s):
   10 slot/s start, mỗi slot tốn 1 VU 0.5s
   cần ≥ 5 VU để kịp (1 VU làm được 2 iter/s, 5 VU làm 10 iter/s)
   preAllocatedVUs >= 5 -> không drop
   preAllocatedVUs < 5 -> drop hoặc spawn unplanned
 
-Closed (ramping-vus, vus=5):
+Closed (ramping-vus trong stage hold vus=5, hoặc constant-vus vus=5):
   rate tự nhiên = 5 VU / 0.5s = 10 iter/s   <- TÌNH CỜ trùng
 
 Nếu đổi code sang sleep(1):
