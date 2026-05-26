@@ -2087,18 +2087,17 @@ Trả lời:
 #### Phân tích công thức
 
 ```text
-dropped_iterations     = count of slots where TryRunIteration() returned false
-interrupted_iterations = count of iters where context cancelled mid-run
-
-scheduled_total = completed + dropped + interrupted   (xấp xỉ ±1 do biên slot)
+N_drop = số slot fire mà TryRunIteration() return false
+N_int  = số iter đã start mà context cancel giữa chừng
+N_done = N_sched − N_drop − N_int   (xấp xỉ ±1 do biên slot, xem 3.1 caveat)
 ```
 
 | Biến | Ý nghĩa | Đơn vị | Nguồn |
 | --- | --- | --- | --- |
-| `dropped_iterations` | số slot fire mà không có VU rảnh | slot count | summary metric |
-| `interrupted_iterations` | số iter đã start mà bị cancel | iter count | progress/footer |
-| `completed_iterations` | số iter chạy xong sạch | iter count | summary `iterations` |
-| `scheduled_total` | tổng slot dự kiến (xem `3.1`) | slot | tự tính từ config |
+| `N_drop` | số slot fire mà không có VU rảnh | slot | summary metric `dropped_iterations` |
+| `N_int` | số iter đã start mà bị cancel | iter | progress/footer (`X interrupted iterations`) |
+| `N_done` | số iter chạy xong sạch | iter | summary `iterations` |
+| `N_sched` | tổng slot dự kiến (xem `3.1`) | slot | tự tính từ config |
 
 #### Tổng quan timeline minh họa
 
