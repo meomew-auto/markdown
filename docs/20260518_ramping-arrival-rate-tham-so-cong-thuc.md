@@ -787,9 +787,32 @@ JS sandbox). Nếu quan tâm tới tail latency của hệ thống, phải set `
 
 ### 3.1. Tổng số slot trong 1 stage
 
-#### Ví dụ trước
+#### Config demo
 
-Stage `ramp 2 → 4 iter/s trong 2s`:
+```js
+export const options = {
+  scenarios: {
+    demo_3_1: {
+      executor: "ramping-arrival-rate",
+      startRate: 2,
+      timeUnit: "1s",
+      preAllocatedVUs: 4,
+      maxVUs: 10,
+      stages: [
+        { duration: "2s", target: 4 },   // ramp 2 → 4 iter/s
+      ],
+    },
+  },
+};
+
+export default function () {
+  // code chạy trong mỗi iter
+}
+```
+
+#### Đọc config
+
+Stage 0: `ramp 2 → 4 iter/s trong 2s`:
 
 ```text
 đầu stage  (t=0s):  rate = 2/s   -> slot_interval = 500ms
@@ -955,9 +978,28 @@ liên tiếp để update progress UI, không phải hằng số toàn run.
 
 ### 3.2. Nhịp cao nhất và nhịp bình quân
 
-#### Ví dụ trước
+#### Config demo
 
-Cùng scenario như `3.1`:
+```js
+export const options = {
+  scenarios: {
+    demo_3_2: {
+      executor: "ramping-arrival-rate",
+      startRate: 0,
+      timeUnit: "1s",
+      preAllocatedVUs: 4,
+      maxVUs: 10,
+      stages: [
+        { duration: "2s", target: 4 },   // ramp 0 → 4/s
+        { duration: "3s", target: 4 },   // hold 4/s
+        { duration: "2s", target: 0 },   // ramp 4 → 0/s
+      ],
+    },
+  },
+};
+```
+
+#### Đọc config
 
 ```text
 startRate = 0/s
@@ -966,7 +1008,7 @@ stages:
   stage 1: hold 4/s trong 3s
   stage 2: ramp 4 → 0/s trong 2s
 
-scheduled_total = 4 + 12 + 4 = 20 slot
+scheduled_total = 4 + 12 + 4 = 20 slot   (theo công thức 3.1)
 total_regular_duration = 2 + 3 + 2 = 7s
 ```
 
@@ -1028,13 +1070,37 @@ giữa stage có `lambda_current` cao hơn trung bình → đó là chỗ dễ d
 
 ### 3.3. Ước lượng VU cần chuẩn bị
 
-#### Ví dụ trước
+#### Config demo
 
-Scenario:
+```js
+export const options = {
+  scenarios: {
+    demo_3_3: {
+      executor: "ramping-arrival-rate",
+      startRate: 0,
+      timeUnit: "1s",
+      preAllocatedVUs: 5,    // sẽ tính lại dựa vào lambda_peak × iter_time
+      maxVUs: 10,
+      stages: [
+        { duration: "2s", target: 8 },   // ramp 0 → 8/s (peak)
+        { duration: "3s", target: 8 },   // hold 8/s
+      ],
+    },
+  },
+};
+
+import { sleep } from "k6";
+export default function () {
+  // giả lập: 1 http request 100ms + sleep 0.3s
+  sleep(0.4);   // -> iter_time ≈ 0.4s
+}
+```
+
+#### Đọc config
 
 ```text
-lambda_peak = 8 iter/s   (rate cao nhất)
-iter_time   = 0.4s       (do code: vd http 100ms + sleep 0.3s)
+lambda_peak = 8 iter/s   (rate cao nhất, từ stage.target)
+iter_time   = 0.4s       (do code: sleep(0.4))
 ```
 
 Hỏi: cần chuẩn bị bao nhiêu VU để không drop?
@@ -1113,7 +1179,31 @@ code mất 0.2s, minIterationDuration = 1s
 
 ### 3.4. Rate của summary thực tế
 
-#### Ví dụ trước
+#### Config demo
+
+```js
+export const options = {
+  scenarios: {
+    demo_3_4: {
+      executor: "ramping-arrival-rate",
+      startRate: 0,
+      timeUnit: "1s",
+      preAllocatedVUs: 3,    // ÍT hơn ideal -> sẽ có 1-2 drop để minh họa
+      maxVUs: 3,             // không cho spawn unplanned
+      stages: [
+        { duration: "2s", target: 4 },
+        { duration: "3s", target: 4 },
+        { duration: "2s", target: 0 },
+      ],
+    },
+  },
+};
+
+import { sleep } from "k6";
+export default function () { sleep(0.5); }
+```
+
+#### Đọc summary thật
 
 Sau khi chạy xong scenario, summary in:
 
@@ -1202,7 +1292,31 @@ Nếu thấy `(3) > (2)` → nhiều khả năng đo lệch, cần kiểm tra l�
 
 ### 3.5. `dropped` khác `interrupted` như nào?
 
-#### Ví dụ trước
+#### Config demo
+
+```js
+export const options = {
+  scenarios: {
+    demo_3_5: {
+      executor: "ramping-arrival-rate",
+      startRate: 0,
+      timeUnit: "1s",
+      preAllocatedVUs: 2,    // CỐ TÌNH thiếu để có drop
+      maxVUs: 2,             // không cho spawn unplanned
+      gracefulStop: "1s",    // grace ngắn để có interrupted ở cuối
+      stages: [
+        { duration: "3s", target: 4 },
+        { duration: "2s", target: 4 },
+      ],
+    },
+  },
+};
+
+import { sleep } from "k6";
+export default function () { sleep(2); }   // iter dài hơn grace -> interrupt cuối
+```
+
+#### Đọc summary thật
 
 Sau test, summary cho:
 
