@@ -248,6 +248,85 @@ nhưng vẫn giữ VU bận.
 - stages curve:  rate đó thay đổi theo timeline thay vì giữ một con số
 ```
 
+**QUAN TRỌNG: `rate` ở đây nghĩa là gì?**
+
+Câu hỏi hay gặp:
+
+```text
+"rate=10/s nghĩa là 10 iter HOÀN THÀNH mỗi giây à?
+hay là active_vus / iter_time như ramping-vus?"
+```
+
+Trả lời: KHÔNG phải cả hai. `rate` ở đây là:
+
+```text
+rate = số iteration ĐƯỢC START /timeUnit (mục tiêu scheduler)
+     = config target, CỐ ĐỊNH theo timeline
+     = ĐỘC LẬP với iter_time của code
+```
+
+So sánh sát:
+
+```text
+ramping-vus (closed):
+  throughput = sum(1/t_i) các VU active
+             = active_vus / iter_time
+             -> phụ thuộc iter_time
+             -> nếu code chậm, throughput tự động giảm
+
+ramping-arrival-rate (open):
+  throughput target = rate config (vd 10/s)
+                    -> KHÔNG phụ thuộc iter_time
+                    -> code chậm thì k6 SPAWN thêm VU hoặc DROP iter
+                       để cố giữ rate
+```
+
+Cụ thể với `rate: 10, timeUnit: 1s`:
+
+```text
+scheduler có nghĩa vụ FIRE 10 "slot" start iter mỗi giây
+mỗi slot cách nhau 1/10 = 100ms
+tại mỗi slot, scheduler tìm VU rảnh để giao iter:
+- có VU rảnh → VU bắt đầu iter đó (start at t)
+- không có VU rảnh & còn quota maxVUs → spawn unplanned VU (start trễ chút)
+- không có VU rảnh & hết quota → drop iter (+1 dropped_iterations)
+
+rate ở đây là MỤC TIÊU của scheduler, không phải kết quả tính từ VU
+```
+
+Ví dụ minh họa khác biệt:
+
+```text
+Cấu hình code: sleep(0.5)  -> iter_time = 0.5s
+
+Open (ramping-arrival-rate, rate=10/s):
+  10 slot/s start, mỗi slot tốn 1 VU 0.5s
+  cần ≥ 5 VU để kịp (1 VU làm được 2 iter/s, 5 VU làm 10 iter/s)
+  preAllocatedVUs >= 5 -> không drop
+  preAllocatedVUs < 5 -> drop hoặc spawn unplanned
+
+Closed (ramping-vus, vus=5):
+  rate tự nhiên = 5 VU / 0.5s = 10 iter/s   <- TÌNH CỜ trùng
+
+Nếu đổi code sang sleep(1):
+  Open:   rate vẫn cố giữ 10/s -> CẦN 10 VU thay vì 5
+                                  (preAllocated cũ 5 -> drop hoặc spawn unplanned)
+  Closed: rate tự động giảm 5/1 = 5 iter/s
+                                  (không drop, throughput đơn giản giảm)
+```
+
+Tóm gọn:
+
+```text
+Open model = "ép rate" (chủ động giữ throughput, có thể drop nếu quá tải)
+Closed model = "rate tự sinh" (throughput phụ thuộc VU và iter_time)
+```
+
+Đây là lý do `ramping-arrival-rate` cần `preAllocatedVUs` và `maxVUs` —
+hai field không tồn tại ở `ramping-vus`. Vì rate là mục tiêu, k6 phải biết
+trước có bao nhiêu VU sẵn dùng (`preAllocatedVUs`) và được phép tạo thêm
+tối đa bao nhiêu (`maxVUs`) khi rate vượt năng lực.
+
 Cách dễ hiểu:
 
 ```text
@@ -263,6 +342,7 @@ Tách ý so sánh `ramping-arrival-rate` với `ramping-vus`:
 | Ý nghĩa stages | thay đổi số VU active theo thời gian | thay đổi nhịp start iteration theo thời gian |
 | `stage.target` | số VU active ở cuối stage | rate (iter/timeUnit) ở cuối stage |
 | Số VU runtime | bằng đúng `stage.target` đang nội suy | thay đổi theo nhu cầu, trần là `maxVUs` |
+| Quan hệ với `iter_time` | rate phụ thuộc iter_time | rate độc lập iter_time |
 | Tổng iter biết trước? | không | không, nhưng `scheduled_iterations_total` biết trước |
 | `dropped_iterations` | không có path emit bình thường | có, đếm khi không có VU rảnh đúng giờ |
 | Unplanned VU | không có khái niệm | có, sinh khi rate vượt năng lực `preAllocatedVUs` |
