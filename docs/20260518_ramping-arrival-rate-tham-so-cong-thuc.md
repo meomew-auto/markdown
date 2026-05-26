@@ -1021,7 +1021,7 @@ rate
 
 Công thức diện tích `(lambda_prev + lambda_next) / 2 × duration` ở trên
 chính là **diện tích hình thang** — chỉ đúng với đường thẳng. Nếu k6 ramp
-cong (parabol, exponential), công thức tích phân sẽ khác hoàn toàn.
+cong (parabol, exponential), công thức tính sẽ phức tạp hơn nhiều.
 
 k6 chọn tuyến tính vì:
 
@@ -1032,8 +1032,7 @@ k6 chọn tuyến tính vì:
 ```
 
 Code ref: `cal()` trong `ramping_arrival_rate.go:234-282` dùng công thức
-nghiệm bậc 2 từ tích phân của hàm tuyến tính `rate(t) = a + bt` để tìm
-mốc fire của slot thứ n.
+nghiệm bậc 2 (toán học của hình thang) để tìm mốc fire của slot thứ n.
 
 **Ramp xuống cũng vẫn tuyến tính** — slope âm:
 
@@ -1582,7 +1581,7 @@ code mất 0.2s, minIterationDuration = 1s
 => rate=10/s cần ceil(10 × 1) = 10 VU (không phải 2 VU)
 ```
 
-#### Vì sao công thức là `λ × W` (chứng minh chặt từ định nghĩa)
+#### Vì sao công thức là `λ × W` (giải thích từ định nghĩa)
 
 Đây là **Little's Law** — định luật cơ bản của hệ thống hàng đợi
 (queueing theory). Phát biểu chính xác:
@@ -1701,7 +1700,10 @@ số VU đồng thời, do đó an toàn.
 #### Quan hệ ba biến `λ_peak, M, W` quyết định drop hay không
 
 ```text
-Không drop  ⟺  C ≥ λ_peak  ⟺  M / W ≥ λ_peak  ⟺  M ≥ λ_peak × W
+Không drop khi capacity đủ phục vụ rate đỉnh:
+   C ≥ λ_peak
+   M / W ≥ λ_peak
+   M ≥ λ_peak × W            (= required_vus)
 
 → 3 cách giảm drop:
   (a) Tăng M:        thêm VU (preAllocatedVUs hoặc maxVUs)
@@ -1923,9 +1925,9 @@ Trường hợp T_run > T (dùng grace):
 **Đẳng thức xảy ra khi nào?**
 
 ```text
-λ_peak = λ_avg ⟺ rate phẳng (1 stage hold suốt scenario)
-λ_avg = actual_rate ⟺ N_drop = N_int = 0 và T_run = T
-                    ⟺ test "hoàn hảo" (đủ VU, không grace)
+λ_peak = λ_avg khi rate phẳng (1 stage hold suốt scenario)
+λ_avg = actual_rate khi N_drop = N_int = 0 và T_run = T
+                    (tức test "hoàn hảo": đủ VU, không grace)
 ```
 
 #### `N_done` quan hệ với scheduled
@@ -2016,7 +2018,7 @@ thành công trong các iter HOÀN THÀNH.
   + có nhầm metric (vd dùng http_reqs thay iterations)
   + có duplicate counter (multi-scenario)
 
-- λ_peak ≥ λ_avg là tính chất của hàm liên tục (chứng minh ở trên),
+- λ_peak ≥ λ_avg là tính chất của trung bình (đã giải thích ở trên),
   không phụ thuộc vào behavior k6.
 ```
 
@@ -2027,7 +2029,7 @@ actual_rate = N_done / T_run        <- KPI thực tế (summary in)
 λ_avg       = N_sched / T            <- mục tiêu lý thuyết
 λ_peak      = max(λ_start, λ_i_end)  <- đỉnh rate
 
-Bất đẳng thức (luôn đúng):
+Quan hệ thứ tự (luôn đúng):
   λ_peak ≥ λ_avg ≥ actual_rate
 
 Càng sát nhau -> hệ thống chịu rate càng tốt
@@ -2220,8 +2222,9 @@ Bước 6: Số trong demo summary thật (đề bài)
   → cho thấy N_sched chỉ là số "lý thuyết" trong T, có thể thấp hơn
     số thực tế khi grace dài.
 
-  Bài học: đếm chính xác N_sched cần tích phân cả window grace nếu
-  scenario kết thúc bằng iter dài.
+  Bài học: nếu scenario kết thúc bằng iter dài, grace cho phép fire
+  thêm slot ngoài T → N_sched lý thuyết (chỉ trong T) có thể thấp
+  hơn số slot thật sự đã fire trong window T + gracefulStop.
 ```
 
 #### Verify công thức khi cộng số từ demo cụ thể
@@ -3925,7 +3928,7 @@ gap cuối ≈ 1/8 = 0.125s
 rate(t=4.5s in stage3) ≈ 0 + 8*(0.5/2) = 2/s -> gap ~ 0.5s? thực tế đo 0.207s
 ```
 
-Sai số bởi vì gap không hoàn toàn = `1/rate(t_k)` mà là tích phân của rate.
+Sai số vì gap không hoàn toàn = `1/rate(t_k)` mà còn phụ thuộc rate ở slot trước.
 Nhưng đại khái:
 
 ```text
