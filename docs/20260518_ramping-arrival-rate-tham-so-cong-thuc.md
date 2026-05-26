@@ -485,6 +485,125 @@ Job queue Redis: có buffer
 Hai mô hình khác nhau, k6 cố tình KHÔNG mô phỏng buffer để giữ open model thuần.
 ```
 
+#### Tính tổng VU cần khi iter_time > slot_interval
+
+Đây là chỗ user hay nhầm. Khi:
+
+```text
+slot_interval = 1 / rate    (vd rate=10/s -> slot=100ms)
+iter_time     = thời gian 1 VU bận cho 1 iter (vd sleep(0.5) = 500ms)
+```
+
+Nếu `iter_time > slot_interval`, thì **iter trước CHƯA xong khi slot kế tiếp đã fire**.
+Nghĩa là tại 1 thời điểm có nhiều iter "overlap" — đang chạy đồng thời trên các VU khác nhau.
+
+**Công thức (Little's Law)**:
+
+```text
+VUs_cần_đồng_thời = rate × iter_time
+                  = iter_time / slot_interval
+```
+
+Đây là số iter ĐANG CHẠY song song tại 1 thời điểm khi rate đã ổn định (steady state).
+
+**Ví dụ với rate=10/s, sleep(0.5)**:
+
+```text
+slot_interval = 1/10 = 100ms
+iter_time     = 500ms
+
+VUs_cần = 10 × 0.5 = 5 VU
+        = 500ms / 100ms = 5 slot/iter
+
+=> tại 1 thời điểm trong steady state có 5 iter đang chạy
+=> cần preAllocatedVUs >= 5 để không drop
+```
+
+**Diễn giải timeline để thấy rõ overlap**:
+
+```text
+slot fire mỗi 100ms, mỗi iter chiếm 500ms
+
+thời gian:  0ms  100  200  300  400  500  600  700  800  900  1000
+slot fire:   0    1    2    3    4    5    6    7    8    9    10
+
+VU=1:       [iter#0 ----------> 500ms][iter#5 ---------> 1000ms]
+VU=2:           [iter#1 -----> 600ms][iter#6 ---------> ...
+VU=3:                [iter#2 ---> 700ms][iter#7 ----> ...
+VU=4:                     [iter#3 ----> 800ms][iter#8 ...
+VU=5:                          [iter#4 ----> 900ms][iter#9 ...
+
+Snapshot tại t=400ms: 5 iter đang overlap (iter#0,1,2,3,4 trên 5 VU)
+```
+
+**Vài tỉ lệ thực tế cho dễ nhớ**:
+
+| rate | iter_time | VUs cần | Giải thích |
+| --- | --- | --- | --- |
+| 10/s | 0.1s | 1 | iter vừa hết thì slot kế đến → 1 VU đủ |
+| 10/s | 0.5s | 5 | mỗi iter overlap 5 slot |
+| 10/s | 1s | 10 | mỗi iter overlap 10 slot |
+| 100/s | 0.5s | 50 | overlap 50 lần |
+| 100/s | 0.1s | 10 | overlap vừa khít |
+| 1/s | 5s | 5 | rate thấp nhưng iter lâu → vẫn overlap nhiều |
+
+Quan sát quan trọng:
+
+```text
+- iter_time < slot_interval -> 1 VU thừa sức (vd rate=2/s, iter=0.1s -> 0.2 VU)
+- iter_time = slot_interval -> đúng 1 VU vừa khít
+- iter_time > slot_interval -> nhiều VU overlap, dùng Little's Law
+- rate cao và iter chậm -> VU yêu cầu rất lớn
+```
+
+**Áp dụng vào setup `preAllocatedVUs`**:
+
+```text
+preAllocatedVUs nên >= ceil(rate × iter_time × 1.2)
+                     (×1.2 = buffer 20% cho biến động iter_time)
+
+vd rate=10/s, sleep(0.5):
+  preAllocatedVUs >= ceil(10 × 0.5 × 1.2) = ceil(6) = 6
+
+vd rate=100/s, http_req=200ms + sleep(0.3):
+  iter_time ≈ 500ms
+  preAllocatedVUs >= ceil(100 × 0.5 × 1.2) = 60
+```
+
+**Sai số phổ biến — đừng nhầm**:
+
+```text
+SAI : "rate=10/s thì cần 10 VU"
+      -> SAI nếu iter_time != 1s
+      -> rate là số slot/s, không phải số VU
+
+SAI : "tăng VU làm iter_time giảm"
+      -> SAI: VU thêm chỉ tăng năng lực song song
+      -> iter_time vẫn = code time + server response time
+
+SAI : "iter_time = 0.5s nghĩa là 1 VU làm 2 iter/s"
+      -> ĐÚNG, nhưng đây là per-VU rate, không phải scenario rate
+      -> scenario rate = config "rate" field, không tự suy ra từ VU
+```
+
+**Vì sao công thức này khác `ramping-vus`?**
+
+```text
+ramping-vus (closed):
+  rate_thực = active_vus / iter_time
+  -> CÓ iter_time -> KÉO theo rate giảm
+  -> thay đổi iter_time là tự nhiên, không cần can thiệp
+
+ramping-arrival-rate (open):
+  rate_target = config (cố định)
+  VU_cần = rate × iter_time
+  -> CÓ iter_time -> KÉO theo VU cần TĂNG
+  -> nếu preAllocated cố định -> drop hoặc spawn unplanned
+```
+
+Đây là điểm khác fundamental: closed model "iter_time tăng → throughput giảm",
+open model "iter_time tăng → cần thêm VU (hoặc drop)".
+
 Cách dễ hiểu:
 
 ```text
