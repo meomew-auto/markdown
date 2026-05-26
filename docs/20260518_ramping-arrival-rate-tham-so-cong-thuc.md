@@ -773,236 +773,258 @@ JS sandbox). Nếu quan tâm tới tail latency của hệ thống, phải set `
 
 ## 3. Công thức nền
 
-### 3.1. Rate theo stage
+> **Ngôn ngữ thống nhất với 1.3**: section này dùng các thuật ngữ
+> đã thống nhất ở `1.3`:
+>
+> ```text
+> rate          = số iter ĐƯỢC START /timeUnit (mục tiêu scheduler)
+> slot          = 1 mốc fire của scheduler để start 1 iter
+> slot_interval = 1 / rate
+> iter_time     = thời gian 1 VU bận cho 1 iter (do code điều khiển)
+> ```
+>
+> Cấu trúc mỗi mục: **ví dụ cụ thể → phân tích từng biến**.
+
+### 3.1. Tổng số slot trong 1 stage
+
+#### Ví dụ trước
+
+Stage `ramp 2 → 4 iter/s trong 2s`:
 
 ```text
-lambda_start = startRate / timeUnit_seconds
-lambda_i_end = stage.target / timeUnit_seconds
+đầu stage  (t=0s):  rate = 2/s   -> slot_interval = 500ms
+giữa stage (t=1s):  rate = 3/s   -> slot_interval ≈ 333ms
+cuối stage (t=2s):  rate = 4/s   -> slot_interval = 250ms
+
+Câu hỏi: tổng có bao nhiêu slot fire trong stage này?
 ```
 
-`cal()` của core tạo mốc start bằng cách tích lũy "phần việc đã hẹn theo thời gian".
-Trong toán học người ta hay gọi đó là **diện tích dưới đường rate**, nhưng khi học k6 có thể
-đọc đời thường hơn:
+Suy nghĩ trực giác:
 
 ```text
-rate = mỗi giây k6 muốn bấm start bao nhiêu lần
-thời gian = stage kéo dài bao nhiêu giây
-rate * thời gian = tổng số mốc start trong đoạn đó
+nếu rate cố định 2/s suốt 2s -> 2 × 2 = 4 slot
+nếu rate cố định 4/s suốt 2s -> 4 × 2 = 8 slot
+rate ramp tuyến tính 2 → 4   -> rate trung bình = 3/s
+                              -> tổng = 3 × 2 = 6 slot
 ```
 
-Nếu rate không đổi, ví dụ 4/s trong 3s:
+Áp công thức:
 
 ```text
-4 lần/s * 3s = 12 mốc start
+scheduled_slots = duration × (rate_đầu + rate_cuối) / 2
+                = 2s × (2 + 4) / 2
+                = 6 slot
 ```
 
-Nếu rate tăng đều từ 2/s lên 4/s, mỗi giây không còn giống nhau nữa.
-Ta không lấy riêng đầu stage là 2/s, cũng không lấy riêng cuối stage là 4/s.
-Vì nó tăng đều, lấy nhịp trung bình:
+#### Phân tích công thức
 
 ```text
-nhịp trung bình = (nhịp đầu + nhịp cuối) / 2
+scheduled_iterations_i = d_i × (lambda_prev + lambda_next) / 2
 ```
 
-Rồi nhân với thời gian stage.
-Đó chính là ý của cụm "diện tích dưới đường rate".
-Nó không phải diện tích hình học xa lạ; trong bài này nó chỉ trả lời câu hỏi:
+| Biến | Ý nghĩa | Đơn vị |
+| --- | --- | --- |
+| `d_i` | duration stage i | seconds |
+| `lambda_prev` | rate ở **đầu** stage (= rate cuối stage trước) | iter/s |
+| `lambda_next` | rate ở **cuối** stage (= `stage.target / timeUnit_seconds`) | iter/s |
+| `(lambda_prev + lambda_next) / 2` | rate **trung bình** của stage | iter/s |
+| `scheduled_iterations_i` | tổng slot fire trong stage này | slot |
+
+`lambda` = "nhịp start" = bao nhiêu iter cần START mỗi giây. Đây là **mục
+tiêu scheduler** (đã thống nhất ở `1.3`), không liên quan iter_time hay VU.
+
+Vì sao là trung bình? Vì rate ramp tuyến tính. Trên đồ thị `rate(t)`:
 
 ```text
-trong cả stage này, tổng cộng k6 cần hẹn bao nhiêu mốc start?
-```
-
-Với stage ramp tuyến tính từ `lambda_prev` sang `lambda_next` trong `d_i`:
-
-```text
-scheduled_iterations_i = d_i * (lambda_prev + lambda_next) / 2
-```
-
-Đọc chậm từng biến:
-
-- `lambda_start`: nhịp start lúc scenario vừa mở màn.
-- `lambda_i_end`: nhịp start ở cuối stage i.
-- `d_i`: stage đó kéo dài bao lâu.
-- `lambda_prev`: nhịp ở đầu stage đang xét.
-- `lambda_next`: nhịp ở cuối stage đang xét.
-- `scheduled_iterations_i`: tổng số lần k6 phải bắt đầu trong stage đó.
-
-Trong mấy công thức dưới, cứ đọc `lambda` là "nhịp start".
-Nó chỉ là cách viết gọn của tốc độ k6 phải bấm start trong 1 giây.
-Không cần hiểu `lambda` là ký hiệu gì phức tạp; nó tương đương:
-
-```text
-lambda = bao nhiêu iteration start mỗi giây
-```
-
-Tưởng tượng k6 như người bấm nút start theo lịch:
-
-```text
-stage dài 2 giây
-đầu stage bấm ít
-cuối stage bấm nhiều
-vì nhịp thay đổi đều nên cả stage tính bằng nhịp trung bình
-```
-
-Nói bằng tiếng thường:
-
-```text
-stage ramp tuyến tính = 1 đoạn thời gian mà nhịp start tăng hoặc giảm đều
-số slot của stage = nhịp trung bình trong stage * thời gian của stage
-```
-
-Ví dụ dễ nhất:
-
-```text
-2 -> 4 iterations/s trong 2s
-0s: 2/s
-1s: 3/s
-2s: 4/s
-trung bình = 3/s
-2s * 3/s = 6 iterations
-```
-
-Ramp xuống cũng giống vậy:
-
-```text
-4 -> 1 iterations/s trong 2s
-0s: 4/s
-1s: 2.5/s
-2s: 1/s
-trung bình = 2.5/s
-2s * 2.5/s = 5 iterations
-```
-
-Nếu muốn nhìn bằng hình:
-
-```text
-Ramp lên 2 -> 4 trong 2s
-
 rate
 4 |           /|
-3 |          / |
+3 |          / |    <- diện tích dưới đường = tổng slot
 2 |_________/  |
-0 +------0s----2s
+0 +---0s-------2s
 
-0s=2/s, 1s=3/s, 2s=4/s
-=> tổng 6 slot
+= hình thang:
+  đáy nhỏ = lambda_prev = 2
+  đáy lớn = lambda_next = 4
+  chiều cao = duration = 2s
 
-Ramp xuống 4 -> 1 trong 2s
+Diện tích = (đáy nhỏ + đáy lớn) / 2 × chiều cao
+          = (2 + 4) / 2 × 2 = 6
+```
+
+#### Các biến thể stage
+
+**Ramp xuống** — cùng công thức:
+
+```text
+ramp 4 → 1 iter/s trong 2s
+slot = 2 × (4 + 1) / 2 = 5 slot
 
 rate
 4 |--------\   |
 3 |         \  |
 2 |          \ |
 1 |           \|
-0 +------0s----2s
+0 +---0s-------2s
 
-0s=4/s, 1s=2.5/s, 2s=1/s
-=> tổng 5 slot
+5 slot rải dưới đường, slot đầu dày, slot cuối thưa.
 ```
 
-Trong core, `cal()` chỉ làm việc này:
+**Hold (rate cố định)** — `lambda_prev = lambda_next`:
 
 ```text
-đi qua từng stage
-tính tổng slot của stage đó
-cộng phần slot còn dư sang stage sau
+hold 4 iter/s trong 3s
+slot = 3 × (4 + 4) / 2 = 12
+
+(hoặc đơn giản: slot = duration × rate = 3 × 4 = 12)
+slot_interval = 1/4 = 250ms, đều suốt stage.
 ```
 
-`scheduled_iterations_i` có thể ra số lẻ. Core không làm tròn ngay; phần lẻ được mang sang stage
-sau qua `doneSoFar`.
-
-Nếu stage không ramp, tức là giữ nguyên một nhịp:
-
-```text
-scheduled_iterations_i = d_i * lambda
-```
-
-Tổng số lần k6 dự tính bấm start cho cả bài:
+**Tổng cả timeline**:
 
 ```text
 scheduled_iterations_total = sum(scheduled_iterations_i)
 ```
 
-Đây là số lần k6 định bấm start, chưa tính chuyện bị rớt hay bị dừng sớm.
-Nếu có drop/interrupt, summary completed rate sẽ thấp hơn con số này.
-
-Trong `cal()`:
-
-- `doneSoFar` = số slot đã tích lũy trước stage hiện tại
-- `endCount` = số slot tích lũy tới cuối stage hiện tại
-- `i` = slot nguyên kế tiếp cần được gán thời điểm start
-
-Ví dụ stage trước kết thúc ở `9.8` events thì `0.8` không mất đi. Core giữ phần đó trong
-`doneSoFar`, rồi stage sau chỉ cần cộng tiếp phần còn lại để tìm khi nào slot kế tiếp xảy ra.
-
-Hai caveat rất quan trọng:
+Ví dụ scenario 3 stage (`startRate=0`):
 
 ```text
-ramping-arrival-rate không có một ticker_period cố định cho toàn run
+stage 0: ramp 0 → 4/s trong 2s   -> 2 × (0+4)/2 = 4 slot
+stage 1: hold 4/s trong 3s        -> 3 × 4       = 12 slot
+stage 2: ramp 4 → 0/s trong 2s   -> 2 × (4+0)/2 = 4 slot
+                                   -----------------
+                                   scheduled_total = 20 slot
 ```
 
-Khác `constant-arrival-rate`, gap giữa các slot thay đổi theo stage curve.
-`tickerPeriod` trong `Run()` chỉ là khoảng cách hiện tại giữa hai slot liên tiếp để update progress/UI.
-
-Và:
+Đây là số slot k6 **DỰ TÍNH** fire (mục tiêu scheduler), khác số iter
+HOÀN THÀNH (= `iterations` trong summary). Quan hệ:
 
 ```text
-slot đầu không mặc định ở t=0
+iterations_completed + dropped_iterations + interrupted_iterations
+  ≈ scheduled_iterations_total   (xấp xỉ ±1 do biên slot)
 ```
 
-`cal()` phát các mốc start tuyệt đối theo số event nguyên đầu tiên cần đạt.
-Nói đời thường:
+#### 3 caveat từ core
+
+**Caveat 1: slot có thể ra số lẻ**
+
+`scheduled_iterations_i` không nhất thiết nguyên (vd 5.7 slot). Core
+giữ phần lẻ trong `doneSoFar` rồi mang sang stage sau.
 
 ```text
-k6 không hiểu là "vừa vào bài thì phải bấm start ngay ở t=0"
-k6 chờ đến lúc diện tích tích lũy đủ cho event nguyên đầu tiên
+stage 0: 2.5 slot -> fire 2 slot, dư 0.5 mang sang
+stage 1: 3.7 slot -> fire 4 slot (3.7 + 0.5 = 4.2 -> 4), dư 0.2
+stage 2: ...
 ```
 
-Mini ví dụ:
+Code ref: `cal()` ở `ramping_arrival_rate.go:234-282`, biến `doneSoFar`.
+
+**Caveat 2: slot đầu KHÔNG mặc định ở t=0**
 
 ```text
-startRate = 2/s
-stage 1 ramp 2 -> 4 trong 2s
-
-slot 1: xuất hiện ở mốc đầu tiên đủ 1 event
-slot 2: xuất hiện ở mốc tiếp theo đủ 2 events cộng dồn
-slot 3: xuất hiện ở mốc tiếp theo đủ 3 events cộng dồn
+k6 KHÔNG tự fire slot tại t=0
+k6 CHỜ đến lúc tích lũy đủ 1 event nguyên đầu tiên
 ```
 
-Vì vậy khi so `scheduled_iterations_total` với số completed thực tế, lệch 1 slot ở biên đầu/cuối có
-thể chỉ là timing của slot, chưa chắc đã là drop hay interrupt.
+Mini ví dụ với `startRate=0, stage 1 ramp 0 → 4/s trong 2s`:
+
+```text
+t=0s   : tích lũy = 0           -> chưa fire
+t=0.5s : tích lũy = 0.25        -> chưa đủ 1
+t=1.0s : tích lũy = 1.0         -> fire slot đầu tại t=1.0s
+t=1.5s : tích lũy = 2.25        -> fire slot 2
+t=2.0s : tích lũy = 4.0         -> fire các slot còn lại
+```
+
+→ slot đầu lệch khỏi `t=0` khi `startRate < target stage 1`. So
+`scheduled_total` với completed lệch 1 slot ở biên là bình thường,
+chưa chắc do drop/interrupt.
+
+**Caveat 3: không có `ticker_period` cố định**
+
+Khác `constant-arrival-rate` (slot đều), `ramping-arrival-rate` có
+`slot_interval` thay đổi:
+
+```text
+giữa stage ramp lên : slot_interval THU HẸP (rate tăng -> slot dày)
+giữa stage hold     : slot_interval ĐỀU
+giữa stage ramp xuống: slot_interval DÃN RA (rate giảm -> slot thưa)
+```
+
+`tickerPeriod` trong `Run()` chỉ là khoảng cách hiện tại giữa 2 slot
+liên tiếp để update progress UI, không phải hằng số toàn run.
 
 ### 3.2. Nhịp cao nhất và nhịp bình quân
+
+#### Ví dụ trước
+
+Cùng scenario như `3.1`:
+
+```text
+startRate = 0/s
+stages:
+  stage 0: ramp 0 → 4/s trong 2s
+  stage 1: hold 4/s trong 3s
+  stage 2: ramp 4 → 0/s trong 2s
+
+scheduled_total = 4 + 12 + 4 = 20 slot
+total_regular_duration = 2 + 3 + 2 = 7s
+```
+
+Hỏi:
+
+```text
+1) rate cao nhất scenario phải chịu là bao nhiêu?
+2) rate trung bình của cả timeline là bao nhiêu?
+```
+
+Trả lời:
+
+```text
+1) lambda_peak = max(0, 4, 4, 0) = 4/s
+   (max trong: startRate, mọi stage.target)
+
+2) average_target_rate = 20 / 7 ≈ 2.86/s
+```
+
+#### Phân tích công thức
 
 ```text
 lambda_peak = max(lambda_start, mọi lambda_i_end)
 average_target_rate = scheduled_iterations_total / total_regular_duration
 ```
 
-`lambda_peak` là nhịp cao nhất mà timeline đòi k6 phải start ở bất kỳ đoạn nào.
-Vì stage ramp đi đều từ đầu sang cuối, chỗ cao nhất của stage chỉ nằm ở 2 đầu stage.
+| Biến | Ý nghĩa | Vì sao max chỉ ở "đầu/cuối stage"? |
+| --- | --- | --- |
+| `lambda_peak` | rate cao nhất scenario phải fire | rate ramp tuyến tính → cực trị nằm ở 2 đầu stage, không nằm giữa |
+| `average_target_rate` | rate trung bình của cả timeline | dùng đánh giá chung, không dùng để sizing VU |
 
-`average_target_rate` là nhịp bình quân của cả bài test nếu lấy tổng slot chia cho tổng thời gian.
-Nó không phải summary completed rate.
-
-Nói dễ hiểu:
-
-```text
-lambda_peak = nhịp cao nhất cần chịu
-average_target_rate = nhịp trung bình của cả timeline
-```
-
-Ví dụ: cả bài có lúc lên 8/s rồi xuống 2/s thì sizing phải nhìn 8/s, vì chính đoạn 8/s mới là
-đoạn dễ thiếu VU nhất.
-
-`drop_rate` là phần slot bị rớt khi nhịp hiện tại vượt quá khả năng của VU:
+#### Ví dụ áp dụng sizing
 
 ```text
-drop_rate ~= max(0, lambda_current - capacity_with_M_vus)
+scenario lên 8/s rồi xuống 2/s:
+
+nếu sizing theo average:  (8+2)/2 = 5/s -> chỉ đủ VU cho rate trung bình
+                          -> đoạn 8/s sẽ DROP nhiều
+nếu sizing theo peak:     8/s        -> đủ VU cho rate cao nhất
+                          -> không drop
 ```
 
-`lambda_current` là nhịp đang xảy ra ngay lúc đó. Đầu stage có thể thấp, giữa stage có thể cao hơn.
-Khi chuẩn bị VU, đừng nhìn `average_target_rate` một mình, vì nhịp giữa stage mới là chỗ dễ thiếu VU.
+→ luôn dùng `lambda_peak` cho sizing, không dùng `average_target_rate`.
+
+#### Quan hệ với `drop_rate`
+
+```text
+drop_rate ≈ max(0, lambda_current - capacity_with_M_vus)
+```
+
+| Biến | Ý nghĩa |
+| --- | --- |
+| `lambda_current` | rate đang xảy ra **tại 1 thời điểm cụ thể** (đầu stage thấp, giữa stage cao hơn) |
+| `capacity_with_M_vus` | năng lực M VU = `M / iter_time` (xem `3.3`) |
+| `drop_rate` | rate slot bị drop tại thời điểm đó |
+
+Ý chính: nhìn `lambda_current` chứ không phải `average_target_rate`. Đoạn
+giữa stage có `lambda_current` cao hơn trung bình → đó là chỗ dễ drop.
 
 ### 3.3. Ước lượng VU
 
