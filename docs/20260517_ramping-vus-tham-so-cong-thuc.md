@@ -523,53 +523,165 @@ không phải:
 
 ## 3.4. Throughput của `ramping-vus`
 
-Vì `ramping-vus` là closed model:
+`ramping-vus` là closed model — quy tắc cốt lõi:
 
 ```text
-1 VU chỉ start iteration mới sau khi iteration cũ xong
+1 VU chỉ start iteration MỚI sau khi iteration CŨ xong
 ```
 
-nên nếu một VU có iteration time trung bình là `t_i`:
+→ throughput phụ thuộc 2 yếu tố:
 
 ```text
-per_vu_rate_i = 1 / t_i
+1) số VU đang active (do timeline điều khiển)
+2) thời gian 1 iteration của VU (do code điều khiển)
 ```
 
-Tại một thời điểm, nếu đang có `active_vus` VU bận:
+### 3.4.1. Per-VU rate
+
+Mỗi VU có iteration time `t_i` (thời gian từ lúc bắt đầu iter tới lúc kết thúc iter):
 
 ```text
-peak_iteration_rate_if_all_active
-  = sum(1 / t_i)
+per_vu_rate_i = 1 / t_i  (iter/giây/VU)
 ```
 
-Nếu đơn giản hóa mọi VU gần như giống nhau:
+Ví dụ:
 
 ```text
-peak_iteration_rate_if_all_active
-  ~= active_vus / effective_iteration_time
+VU=1 chạy iter mất 0.5s -> per_vu_rate_1 = 1/0.5 = 2 iter/s
+VU=2 chạy iter mất 1.0s -> per_vu_rate_2 = 1/1.0 = 1 iter/s
+VU=3 chạy iter mất 0.4s -> per_vu_rate_3 = 1/0.4 = 2.5 iter/s
 ```
 
-Trong đó:
+### 3.4.2. Peak rate khi nhiều VU active
+
+Tại 1 thời điểm có `active_vus` VU đang bận:
 
 ```text
-effective_iteration_time ~= iteration_duration nếu không có minIterationDuration
-effective_iteration_time ~= max(iteration_duration, minIterationDuration) nếu có minIterationDuration
+peak_iteration_rate = sum(1 / t_i)  (cộng per-VU rate của tất cả VU active)
 ```
 
-Lưu ý:
+Ví dụ với 3 VU bên trên cùng active:
 
 ```text
-active_vus thay đổi theo timeline
+peak_iteration_rate = 2 + 1 + 2.5 = 5.5 iter/s
 ```
 
-nên `ramping-vus` không có một peak cố định cho cả bài test.
-
-Bạn phải nghĩ theo từng đoạn:
+Nếu tất cả VU **giống nhau** (cùng `t`):
 
 ```text
-đang ở đoạn nào
-lúc đó khoảng bao nhiêu VU active
-iteration_duration khoảng bao nhiêu
+peak_iteration_rate ≈ active_vus / t
+
+t ở đây = effective_iteration_time
+       = iteration_duration                            nếu KHÔNG set minIterationDuration
+       = max(iteration_duration, minIterationDuration) nếu CÓ set minIterationDuration
+```
+
+### 3.4.3. Vì sao `ramping-vus` không có peak cố định
+
+Khác với `constant-vus` (số VU cố định), `ramping-vus` có `active_vus` thay đổi theo timeline:
+
+```text
+active_vus(t) phụ thuộc stage đang chạy
+=> peak_rate(t) cũng thay đổi theo
+=> không có 1 con số "peak rate" cho cả bài test
+```
+
+Phải nghĩ theo từng đoạn:
+
+```text
+đang ở stage nào?
+lúc đó active_vus khoảng bao nhiêu?
+iteration_duration trong code khoảng bao nhiêu?
+```
+
+### 3.4.4. Ví dụ đầy đủ
+
+Config:
+
+```js
+scenarios: {
+  demo_throughput: {
+    executor: "ramping-vus",
+    startVUs: 1,
+    stages: [
+      { duration: "3s", target: 3 },   // ramp 1 -> 3
+      { duration: "5s", target: 3 },   // hold 3 VU
+      { duration: "2s", target: 0 },   // ramp 3 -> 0
+    ],
+  },
+},
+
+// code: mỗi iter sleep 0.5s
+export default function () { sleep(0.5); }
+```
+
+Bước nhảy stage 0 (ramp 1 → 3 trong 3s):
+
+```text
+step_interval = 3s / |3-1| = 1.5s
+=> VU thứ 2 vào tại t=1.5s, VU thứ 3 vào tại t=3.0s
+```
+
+Throughput theo từng mốc (giả sử iter time đều ≈ 0.5s):
+
+| t (scenario) | stage | active_vus | peak_rate |
+| --- | --- | --- | --- |
+| 0.0s | stage 0 | 1 | 1 / 0.5 = 2 iter/s |
+| 1.5s | stage 0 | 2 | 2 / 0.5 = 4 iter/s |
+| 3.0s | stage 0/1 | 3 | 3 / 0.5 = 6 iter/s |
+| 5.0s | stage 1 | 3 | 6 iter/s (hold) |
+| 8.0s | stage 1/2 | 3 | 6 iter/s (chưa giảm VU) |
+| 8.67s | stage 2 | 2 | 2 / 0.5 = 4 iter/s |
+| 9.33s | stage 2 | 1 | 1 / 0.5 = 2 iter/s |
+| 10.0s | stage 2 | 0 | 0 (scenario hết) |
+
+Diễn giải:
+
+```text
+- Stage 0 ramp up: rate tăng theo bước, mỗi 1.5s nhảy +2 iter/s
+- Stage 1 hold:    rate giữ peak ổn định ở 6 iter/s suốt 5s
+- Stage 2 ramp down: rate giảm theo bước (step = 2s/3 ≈ 0.67s)
+                    nhưng vì gracefulRampDown, VU đang stop vẫn finish iter
+                    -> rate thực tế hơi cao hơn công thức tại các mốc giảm
+```
+
+### 3.4.5. Thực tế khác lý thuyết một chút
+
+Công thức `active_vus / iter_time` là **peak lý thuyết**. Thực tế thấp hơn vài %:
+
+```text
+- VU activate xong cần vài µs để vào iter đầu (channel signal, state change)
+- console.log, http call có overhead nhỏ
+- gracefulRampDown ở stage giảm: VU vẫn finish iter -> rate thực hơi cao
+- nếu iter có biến động (http chậm), iter_time thực không đều
+```
+
+Verify bằng summary thật:
+
+```text
+iterations.........: 51   4.045744/s   <- average rate cả scenario
+iteration_duration.: avg=700.32ms      <- iter_time thực
+
+Tính lại từ summary:
+  scenario_runtime = 51 / 4.045744 ≈ 12.61s
+  với 4 VU peak, iter ~ 700ms -> peak rate lý thuyết = 4/0.7 ≈ 5.7 iter/s
+  rate thật trung bình 4 iter/s vì có giai đoạn ramp ít VU
+```
+
+### 3.4.6. Tóm tắt công thức
+
+```text
+per_vu_rate_i      = 1 / t_i
+peak_rate(t)       = sum(1 / t_i) trên các VU đang active tại t
+                   ≈ active_vus(t) / effective_iteration_time
+
+effective_iteration_time = max(iteration_duration, minIterationDuration)
+
+active_vus(t) = số VU active theo timeline ramping-vus
+              = đoạn ramp up:   fromVUs + floor((t - stageStart) / step_interval)
+              = đoạn hold:      target của stage đó
+              = đoạn ramp down: target_cũ - floor((t - stageStart) / step_interval)
+                                (có grace nên thực tế hơi cao hơn)
 ```
 
 ## 3.5. Average iteration rate của toàn scenario
