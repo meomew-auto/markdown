@@ -536,6 +536,120 @@ không phải:
 2) thời gian 1 iteration của VU (do code điều khiển)
 ```
 
+### 3.4.0. `iter_time` là gì? Nhiều VU có làm iter nhanh hơn không?
+
+Câu hỏi rất hay gặp:
+
+```text
+"nếu code có sleep(0.5), tại sao iter_time vẫn = 0.5s khi có nhiều VU?
+nhiều VU thì phải nhanh hơn chứ?"
+```
+
+Trả lời ngắn:
+
+```text
+iter_time = thời gian 1 VU chạy 1 iter của RIÊNG VU đó
+          = phụ thuộc CODE (sleep, http, logic)
+          = KHÔNG phụ thuộc số VU khác đang chạy
+
+nhiều VU = THROUGHPUT cao (nhiều iter song song),
+           KHÔNG phải LATENCY thấp (mỗi iter vẫn mất từng đó thời gian)
+```
+
+#### Throughput vs Latency — khái niệm cơ bản
+
+```text
+Latency    = thời gian xử lý 1 task           -> KHÔNG đổi khi tăng VU
+Throughput = số task hoàn thành trong 1 giây  -> TĂNG theo số VU
+```
+
+Ví dụ đời thường:
+
+```text
+1 quầy thanh toán: mỗi khách 30s -> latency 30s, throughput 2 khách/phút
+4 quầy thanh toán: mỗi khách vẫn 30s, nhưng có 4 quầy
+                   -> latency vẫn 30s, throughput 8 khách/phút
+```
+
+4 quầy không làm khách thanh toán nhanh hơn — chỉ giúp **đồng thời** xử lý nhiều khách.
+
+#### Áp vào k6
+
+Mỗi VU trong k6 = 1 goroutine Go riêng + 1 instance JS riêng. Khi user viết:
+
+```js
+export default function () {
+  sleep(0.5);
+}
+```
+
+→ MỖI VU đều mất 0.5s cho 1 iteration của nó. VU=1 sleep 0.5s không liên quan
+VU=2 sleep 0.5s. Chúng chạy **đồng thời, không chia sẻ**.
+
+#### Ví dụ cụ thể: 3 VU active từ t=3s đến t=4s
+
+Code: `sleep(0.5)`, iter_time mỗi VU = 0.5s
+
+```text
+VU=1: iter#10 (t=3.0 -> 3.5), iter#11 (t=3.5 -> 4.0)
+VU=2: iter#5  (t=3.0 -> 3.5), iter#6  (t=3.5 -> 4.0)
+VU=3: iter#3  (t=3.0 -> 3.5), iter#4  (t=3.5 -> 4.0)
+                                       -----
+                              6 iter trong 1 giây
+```
+
+Quan sát:
+
+```text
+- mỗi VU vẫn làm 2 iter/s (latency mỗi iter vẫn 0.5s)
+- 3 VU x 2 iter/s = 6 iter/s tổng (throughput tổng)
+- iter_time KHÔNG giảm xuống 0.17s ("0.5s / 3 VU") như có thể tưởng nhầm
+```
+
+#### Ngoại lệ: server bị bottleneck
+
+`iter_time` chỉ tăng khi server đích **chậm đi dưới tải**:
+
+```text
+Test 1 VU:    HTTP response time = 200ms -> iter_time ~ 200ms + sleep
+Test 100 VU:  server quá tải, response = 800ms -> iter_time ~ 800ms + sleep
+```
+
+Đây là biểu hiện của bottleneck phía server, không phải bản chất closed model.
+Trong demo dùng `sleep()` thuần (không gọi server) → không có bottleneck →
+iter_time giữ nguyên 0.5s dù bao nhiêu VU.
+
+#### Khi nào iter_time GIẢM khi tăng VU?
+
+**Không bao giờ** trong closed model với code thuần. iter_time chỉ giảm nếu:
+
+```text
+- code thay đổi (giảm sleep, optimize logic, ít HTTP call hơn)
+- server trả nhanh hơn (ít người dùng, cache warm up)
+=> 2 trường hợp này KHÔNG do tăng VU
+```
+
+Nếu thấy `iteration_duration` summary giảm khi tăng VU, kiểm tra:
+
+```text
+- server có cache warm-up làm response nhanh hơn?
+- iter time đang đo từ khi VU đầu start (vài VU đầu chạy lúc còn ramp,
+  iter chưa "nóng" -> rồi peak nhanh hơn)? => kiểm tra với percentile p95/p99
+```
+
+#### Tóm tắt cho phần dưới
+
+```text
+iter_time = 0.5s là CỦA TỪNG VU
+peak rate tổng = sum(1/t_i) các VU đang active
+              ≈ active_vus / iter_time  (nếu mọi VU giống nhau)
+
+Khi đọc bảng peak_rate ở 3.4.4, hiểu là:
+  active_vus=3, iter=0.5s
+  -> peak_rate = 3/0.5 = 6 iter/s   (3 VU mỗi VU làm 2 iter/s)
+  KHÔNG phải iter_time giảm
+```
+
 ### 3.4.1. Per-VU rate
 
 Mỗi VU có iteration time `t_i` (thời gian từ lúc bắt đầu iter tới lúc kết thúc iter):
