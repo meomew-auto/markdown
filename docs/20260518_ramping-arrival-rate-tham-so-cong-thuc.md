@@ -4407,31 +4407,110 @@ W_effective
 
 không chỉ nhìn rate trung bình của cả timeline.
 
-## 6. Cheat sheet
+## 6. Cheat sheet — Công thức cần nhớ nhất
+
+> Đây là tóm tắt công thức quan trọng dùng nhiều nhất. Ký hiệu đồng nhất
+> với bảng ký hiệu ở đầu Section 3 (`λ, W, T, M, N_*`).
+
+### 6.1. TOP 5 công thức bắt buộc nhớ
 
 ```text
-startRate = rate lúc bắt đầu
-stage.target = rate đích ở cuối stage
-stage.duration = thời lượng stage
-total_regular_duration = sum(stage.duration)
-lambda_peak = max(startRate, mọi stage.target) / timeUnit
+[1] Sizing VU (dùng Little's Law):
+    required_vus = ceil(λ_peak × W) × 1.2 (buffer 20%)
+    -> đặt preAllocatedVUs >= required_vus
+
+[2] λ_peak = max(startRate, mọi stage.target) / timeUnit
+    -> rate đỉnh để sizing, không dùng λ_avg
+
+[3] Tổng slot 1 stage (hình thang):
+    scheduled_slots = duration × (λ_prev + λ_next) / 2
+
+[4] rate(t) trong stage (đường thẳng):
+    rate(t) = λ_prev + slope × (t − stageStart)
+    slope = (λ_next − λ_prev) / duration
+
+[5] Quan hệ kết quả test:
+    N_done ≈ N_sched − N_drop − N_int
+    actual_rate = N_done / T_run
 ```
 
-```text
-scheduled_iterations_stage = d * (lambda_prev + lambda_next) / 2
-scheduled_iterations_total = sum(scheduled_iterations_stage)
-```
+### 6.2. Công thức theo ngữ cảnh (dùng khi nào)
+
+#### Khi config scenario (trước khi chạy)
 
 ```text
-required_vus_min_peak ~= ceil(lambda_peak * W_effective)
-capacity_with_M_vus ~= M / W_effective
+T = sum(stage.duration)                        <- tổng timeline
+λ_peak = max(startRate, mọi stage.target) / timeUnit
+N_sched = Σ stage_i × (λ_prev_i + λ_next_i)/2  <- tổng slot dự kiến
+λ_avg = N_sched / T                            <- đối chiếu (KHÔNG sizing)
+
+required_vus = ceil(λ_peak × W) × 1.2
+preAllocatedVUs >= required_vus
+maxVUs >= preAllocatedVUs (mặc định bằng nhau)
 ```
 
-```text
-W_effective ~= iteration_duration nếu không có minIterationDuration
-W_effective ~= max(iteration_duration, minIterationDuration) nếu có minIterationDuration
-```
+#### Khi tính capacity của setup hiện có
 
 ```text
-actual_summary_iterations_rate = completed_iterations / summary_runtime_base
+capacity = M / W                               <- iter/s pool M VU làm được
+drop xảy ra khi λ(t) > capacity
+drop_rate(t) = max(0, λ(t) − capacity)
+```
+
+#### Khi đọc summary sau test
+
+```text
+T_run ∈ [T, T + gracefulStop]                  <- thời gian thực tế
+actual_rate = N_done / T_run                   <- rate thực
+
+Quan hệ thứ tự (luôn đúng):
+  λ_peak ≥ λ_avg ≥ actual_rate
+
+Verify drop/interrupt:
+  N_done + N_drop + N_int ≈ N_sched (xấp xỉ ±1)
+
+Phân biệt:
+  N_drop = slot CHƯA start được     -> do thiếu VU
+  N_int  = iter ĐÃ start nhưng cancel -> do hết grace
+```
+
+### 6.3. Quy tắc nhanh
+
+```text
+[Sizing]
+  λ_peak (KHÔNG λ_avg) -> required_vus -> preAllocatedVUs
+
+[Khi drop nhiều]
+  Tăng preAllocatedVUs (cách an toàn nhất)
+  Hoặc tăng maxVUs (cho phép spawn unplanned, nhưng có window drop)
+  Hoặc giảm λ_peak (hạ stage.target)
+  Hoặc giảm W (code nhanh hơn)
+
+[Khi interrupt nhiều]
+  Tăng gracefulStop
+  Hoặc giảm rate (để iter cuối kịp xong)
+  Hoặc tối ưu code (giảm W)
+```
+
+### 6.4. Ký hiệu rút gọn
+
+```text
+λ        rate (iter/s)            timeUnit-aware
+W        iter_time hiệu dụng       max(iter_duration, minIterationDuration)
+T        tổng timeline             sum(stage.duration)
+T_run    thời gian thực tế chạy    [T, T + gracefulStop]
+M        số VU thực tế trong pool  preAllocatedVUs + spawned_unplanned
+C        capacity = M / W          iter/s
+N_sched  tổng slot dự kiến         tính từ config
+N_done   tổng iter hoàn thành      summary "iterations"
+N_drop   slot bị drop              summary "dropped_iterations"
+N_int    iter bị interrupt         progress/footer cuối run
+```
+
+### 6.5. Bộ 3 công thức "1 dòng" để giải mọi case
+
+```text
+1. Cần bao nhiêu VU?    M = ceil(λ_peak × W)
+2. Cao nhất chịu rate?   λ_max = M / W
+3. Thừa thiếu bao nhiêu? gap = λ(t) − M/W (dương = drop, âm = thừa VU)
 ```
