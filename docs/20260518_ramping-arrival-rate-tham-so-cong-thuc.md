@@ -327,6 +327,164 @@ hai field không tồn tại ở `ramping-vus`. Vì rate là mục tiêu, k6 ph�
 trước có bao nhiêu VU sẵn dùng (`preAllocatedVUs`) và được phép tạo thêm
 tối đa bao nhiêu (`maxVUs`) khi rate vượt năng lực.
 
+#### Không đủ VU thì slot xử lý ra sao? Có delay start time không?
+
+Câu hỏi tiếp theo hay gặp:
+
+```text
+"slot 100ms mà không có VU rảnh, k6 sẽ ĐỢI VU rảnh rồi start trễ?
+hay DROP luôn slot đó?"
+"có metric nào ghi 'delay từ slot dự kiến tới lúc thật sự start' không?"
+```
+
+Trả lời ngắn:
+
+```text
+KHÔNG có delay. Slot HOẶC start ĐÚNG giờ HOẶC bị DROP.
+Không có queue, không có retry, không có "bù slot" sau.
+Không có metric "start_delay" / "scheduling_delay".
+```
+
+**Vì sao? Đọc core (`ramping_arrival_rate.go:473-486`)**:
+
+```go
+if vusPool.TryRunIteration() {
+    continue   // có VU rảnh -> iter start NGAY tại slot này
+}
+
+// không có VU rảnh -> DROP iter, KHÔNG đợi
+metrics.PushIfNotDone(parentCtx, out, metrics.Sample{
+    Metric: ...DroppedIterations,
+    Time:   time.Now(),
+    Value:  1,
+})
+```
+
+Cụ thể `TryRunIteration` (`ramping_arrival_rate.go:527-534`):
+
+```go
+func (p *activeVUPool) TryRunIteration() bool {
+    select {
+    case p.iterations <- struct{}{}:
+        return true   // non-blocking send THÀNH CÔNG -> có VU đang đọc kênh
+    default:
+        return false  // không VU nào đang đọc -> drop NGAY, KHÔNG đợi
+    }
+}
+```
+
+`select default` nghĩa là **non-blocking**: nếu không có VU nào đang chờ
+ở `for range p.iterations` (line 552), send fail ngay lập tức và scheduler
+move tới slot kế tiếp.
+
+**Ví dụ minh họa với rate=10/s, preAllocated=2, code sleep(0.5)**:
+
+```text
+config: rate=10/s -> slot mỗi 100ms
+        preAllocated=2 -> chỉ 2 VU sẵn dùng
+        code sleep(0.5) -> mỗi VU bận 500ms
+        năng lực: 2 VU x 2 iter/s = 4 iter/s (cần 10 iter/s -> thiếu 6/s)
+
+Timeline (chưa spawn unplanned, hoặc maxVUs=preAllocated=2):
+
+t=0ms    slot#0 fire -> VU=1 rảnh, iter#0 start ở VU=1 (sẽ kết thúc t=500ms)
+                       -> __iterations__ +1 (sau khi VU=1 finish)
+
+t=100ms  slot#1 fire -> VU=2 rảnh, iter#1 start ở VU=2 (sẽ kết thúc t=600ms)
+
+t=200ms  slot#2 fire -> CẢ 2 VU đang bận
+                       -> TryRunIteration trả false
+                       -> dropped_iterations +1 (timestamp = 200ms)
+                       -> KHÔNG đợi, không bù slot
+
+t=300ms  slot#3 fire -> CẢ 2 VU vẫn bận
+                       -> dropped_iterations +1
+                       -> KHÔNG đợi
+
+t=400ms  slot#4 fire -> tương tự, dropped +1
+
+t=500ms  slot#5 fire -> VU=1 vừa finish iter#0, đang chờ ở channel
+                       -> TryRunIteration trả true
+                       -> iter#5 start ở VU=1 (KHÔNG phải iter#2 đã drop trước đó)
+                       -> các slot bị drop trước đó VĨNH VIỄN MẤT
+```
+
+Quan sát quan trọng:
+
+```text
+1) iter#5 start ĐÚNG tại t=500ms (slot 5), KHÔNG phải bù cho slot 2 đã drop
+2) k6 KHÔNG retry slot đã drop, không có queue chờ
+3) summary cuối cùng:
+   iterations         : 2 + 4 = 6 (slots 0,1,5,6,7,8 với rate 10/s trong 1s đầu)
+   dropped_iterations : 4 (slots 2,3,4 và một số sau peak)
+   start_delay        : KHÔNG TỒN TẠI metric này
+```
+
+**Nếu có quota unplanned (`maxVUs > preAllocated`)?**
+
+```text
+config: maxVUs=10, preAllocated=2, code sleep(0.5)
+
+t=200ms  slot#2 fire -> 2 VU bận, drop ngay, dropped_iterations +1
+                       -> background goroutine spawn unplanned VU
+                          (init JS context, mất ~10-50ms)
+
+t=300ms  slot#3 fire -> spawn vẫn đang chạy
+                       -> 2 VU bận -> drop, dropped +1
+
+t=~250ms VU#3 (unplanned) init xong, vào pool, sẵn sàng đọc channel
+
+t=300-500ms các slot tiếp theo: VU=3 rảnh -> TryRunIteration succeed
+                                -> các slot này KHÔNG bị drop
+                                -> nhưng slots ĐÃ DROP ở 200, 300ms VẪN MẤT
+
+Tóm gọn: unplanned VU CỨU các slot SẮP TỚI, không cứu slot ĐÃ DROP.
+```
+
+**Vì sao thiết kế "hoặc start đúng giờ hoặc drop"?**
+
+```text
+Mục đích test arrival-rate là MÔ PHỎNG TRAFFIC THỰC.
+Trong thực tế, nếu user gửi request mà server không xử lý kịp:
+- option A (đúng): server từ chối/timeout -> drop
+- option B (sai): xếp hàng và xử lý sau -> không phải đặc tính của open model
+
+k6 chọn option A để giữ tính chất "open model":
+- rate quyết định nhịp start
+- không có buffer/queue ở phía k6
+- nếu hệ thống không kịp -> tăng dropped_iterations
+- người đọc test result thấy "10000 iter expected, 100 dropped" -> biết hệ thống bị nghẽn
+```
+
+**Metrics có sẵn để chẩn đoán:**
+
+```text
+iterations            : Counter, số iter HOÀN THÀNH (rate thực tế)
+dropped_iterations    : Counter, số slot bị drop (chênh lệch so với target)
+iteration_duration    : Trend, thời gian 1 iter
+http_req_duration     : Trend, latency từng request
+
+KHÔNG có:
+- start_delay         : k6 không track delay vì delay = 0 hoặc drop
+- scheduling_jitter   : tương tự
+- queue_time          : không có queue ở k6 side
+```
+
+**So sánh với hệ thống có buffer (vd job queue Redis)**:
+
+```text
+k6 arrival-rate: open model, no buffer
+  -> rate target = 10/s, năng lực 4/s -> 6/s drop, k6 không xếp hàng
+  -> kết quả: "hệ thống nghẽn ngay 60% slot"
+
+Job queue Redis: có buffer
+  -> producer tạo 10 job/s, consumer xử lý 4 job/s
+  -> queue dài ra liên tục, latency từng job tăng dần
+  -> kết quả: "queue size = N, p99 delay = M"
+
+Hai mô hình khác nhau, k6 cố tình KHÔNG mô phỏng buffer để giữ open model thuần.
+```
+
 Cách dễ hiểu:
 
 ```text
