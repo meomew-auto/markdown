@@ -4413,6 +4413,99 @@ không chỉ nhìn rate trung bình của cả timeline.
 > đời thường, và "khi nào dùng". Đọc xong section này là dùng được ngay
 > mà không cần đọc 3.1-3.5 chi tiết.
 
+### 6.0. Config chung của `ramping-arrival-rate`
+
+Đây là **bộ config đầy đủ** cho executor `ramping-arrival-rate`. Đọc bảng
+này trước khi viết test, biết tham số nào BẮT BUỘC, tham số nào có default.
+
+#### Template config đầy đủ
+
+```js
+export const options = {
+  scenarios: {
+    my_scenario: {
+      // === BẮT BUỘC ===
+      executor: "ramping-arrival-rate",   // tên executor
+      stages: [                           // mảng stage, ít nhất 1 stage
+        { duration: "2s", target: 10 },
+        { duration: "5s", target: 10 },
+        { duration: "2s", target: 0 },
+      ],
+      preAllocatedVUs: 5,                 // số VU sẵn từ đầu
+
+      // === TUỲ CHỌN (có default) ===
+      startRate: 0,                       // default = 0 iter/timeUnit
+      timeUnit: "1s",                     // default = "1s"
+      maxVUs: 10,                         // default = preAllocatedVUs
+      gracefulStop: "30s",                // default = "30s" (từ BaseConfig)
+      startTime: "0s",                    // default = "0s"
+      exec: "default",                    // default = "default" function
+      tags: { test: "demo" },             // default = {}
+      env: { DEBUG: "1" },                // default = {}
+    },
+  },
+};
+
+export default function () {
+  // code chạy mỗi iter
+}
+```
+
+#### Bảng tham số chi tiết
+
+| Tham số | Required? | Default | Đơn vị | Ý nghĩa |
+| --- | --- | --- | --- | --- |
+| `executor` | **BẮT BUỘC** | — | string | Phải đặt là `"ramping-arrival-rate"` |
+| `stages` | **BẮT BUỘC** | — | array | Ít nhất 1 stage, mỗi stage có `duration` + `target` |
+| `stages[].duration` | **BẮT BUỘC** | — | duration | Thời gian stage (vd `"2s"`, `"1m"`) |
+| `stages[].target` | **BẮT BUỘC** | — | int | Rate đích ở cuối stage (số iter/timeUnit) |
+| `preAllocatedVUs` | **BẮT BUỘC** | — | int | Số VU sẵn sàng từ đầu test |
+| `startRate` | tuỳ chọn | `0` | int | Rate lúc bắt đầu scenario |
+| `timeUnit` | tuỳ chọn | `"1s"` | duration | Đơn vị của rate (vd `"1s"`, `"1m"`) |
+| `maxVUs` | tuỳ chọn | `= preAllocatedVUs` | int | Trần VU tối đa (cho phép spawn unplanned) |
+| `gracefulStop` | tuỳ chọn | `"30s"` | duration | Grace cuối scenario cho iter đang chạy |
+| `startTime` | tuỳ chọn | `"0s"` | duration | Trễ trước khi scenario bắt đầu |
+| `exec` | tuỳ chọn | `"default"` | string | Tên function JS chạy mỗi iter |
+| `tags` | tuỳ chọn | `{}` | object | Tag attach vào metric của scenario |
+| `env` | tuỳ chọn | `{}` | object | Biến môi trường riêng cho scenario |
+
+#### 4 quy tắc validate (đọc từ core)
+
+```text
+1. preAllocatedVUs phải có và >= 0
+   (nếu thiếu: lỗi "the number of preAllocatedVUs isn't specified")
+
+2. startRate >= 0
+   (nếu âm: lỗi "the startRate value can't be negative")
+
+3. timeUnit > 0
+   (nếu <= 0: lỗi "the timeUnit must be more than 0")
+
+4. maxVUs >= preAllocatedVUs
+   (nếu nhỏ hơn: lỗi "maxVUs can't be less than preAllocatedVUs")
+   (nếu không khai báo: tự động bằng preAllocatedVUs)
+```
+
+Code ref: `ramping_arrival_rate.go:87-114` (function `Validate()`).
+
+#### Config tối thiểu (chạy được)
+
+Nếu chỉ muốn config gọn nhất:
+
+```js
+export const options = {
+  scenarios: {
+    minimal: {
+      executor: "ramping-arrival-rate",
+      preAllocatedVUs: 5,
+      stages: [{ duration: "10s", target: 10 }],
+    },
+  },
+};
+```
+
+5 dòng đủ chạy. Các field khác lấy default.
+
 ### 6.1. 5 công thức TOP cần thuộc lòng
 
 #### Công thức 1: "Cần bao nhiêu nhân viên?" (Sizing VU)
