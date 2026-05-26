@@ -874,6 +874,104 @@ Diện tích = (đáy nhỏ + đáy lớn) / 2 × chiều cao
           = (2 + 4) / 2 × 2 = 6
 ```
 
+#### Vì sao rate giữa stage = 3/s? Cách tính rate(t) ở mọi thời điểm
+
+k6 ramp rate **tuyến tính** từ `lambda_prev` đến `lambda_next` trong
+`duration` (đường thẳng nối 2 điểm).
+
+Công thức đường thẳng đi qua 2 điểm `(t1, y1)` và `(t2, y2)`:
+
+```text
+y(t) = y1 + (y2 - y1) × (t - t1) / (t2 - t1)
+```
+
+Áp vào rate trong stage (gọn hơn dạng `y = mx + b`):
+
+```text
+slope    = (lambda_next - lambda_prev) / duration
+rate(t)  = lambda_prev + slope × (t - stageStart)
+```
+
+Áp vào ví dụ `ramp 2 → 4 trong 2s`:
+
+```text
+lambda_prev = 2 iter/s   (tại t=0s)
+lambda_next = 4 iter/s   (tại t=2s)
+duration    = 2s
+
+slope = (4 - 2) / 2 = 1   (mỗi giây rate tăng 1)
+rate(t) = 2 + 1 × t = 2 + t
+```
+
+Tính rate ở từng mốc:
+
+| t (s) | rate(t) = 2 + t | rate |
+| --- | --- | --- |
+| 0.0 | 2 + 0 | 2/s |
+| 0.5 | 2 + 0.5 | 2.5/s |
+| 1.0 | 2 + 1 | **3/s** |
+| 1.5 | 2 + 1.5 | 3.5/s |
+| 2.0 | 2 + 2 | 4/s |
+
+→ Tại `t=1s` (giữa stage) rate đúng bằng `3/s` vì là **trung điểm** của
+đường thẳng nối `(0, 2)` đến `(2, 4)`.
+
+Trên đồ thị:
+
+```text
+rate
+4 |              ●  (t=2, rate=4)
+3 |       ●        (t=1, rate=3) - giữa stage
+2 |●               (t=0, rate=2)
+0 +---------+---------+----► t
+  0        1s       2s
+
+đường thẳng (0, 2) → (2, 4), slope = 1
+```
+
+**Vì sao là đường thẳng, không phải curve?**
+
+Công thức diện tích `(lambda_prev + lambda_next) / 2 × duration` ở trên
+chính là **diện tích hình thang** — chỉ đúng với đường thẳng. Nếu k6 ramp
+cong (parabol, exponential), công thức tích phân sẽ khác hoàn toàn.
+
+k6 chọn tuyến tính vì:
+
+```text
+- đơn giản, dễ tính (chỉ cần 2 điểm đầu/cuối)
+- trực giác: user nghĩ "ramp đều" = tuyến tính
+- đủ cho mọi load test thực tế
+```
+
+Code ref: `cal()` trong `ramping_arrival_rate.go:234-282` dùng công thức
+nghiệm bậc 2 từ tích phân của hàm tuyến tính `rate(t) = a + bt` để tìm
+mốc fire của slot thứ n.
+
+**Ramp xuống cũng vẫn tuyến tính** — slope âm:
+
+```text
+ramp 4 → 1 trong 2s:
+  slope = (1 - 4) / 2 = -1.5   (âm vì giảm)
+  rate(t) = 4 - 1.5t
+
+t=0   : rate = 4/s
+t=0.5 : rate = 3.25/s
+t=1   : rate = 2.5/s   <- giữa stage = (4+1)/2 = 2.5
+t=1.5 : rate = 1.75/s
+t=2   : rate = 1/s
+```
+
+**Tóm gọn 4 công thức nhớ nhanh**:
+
+```text
+slope            = (lambda_next - lambda_prev) / duration
+rate(t)          = lambda_prev + slope × (t - stageStart)
+rate giữa stage  = (lambda_prev + lambda_next) / 2  (trung bình cộng)
+scheduled_slots  = duration × (lambda_prev + lambda_next) / 2
+                 = duration × rate giữa stage
+                 = diện tích hình thang
+```
+
 #### Các biến thể stage
 
 **Ramp xuống** — cùng công thức:
