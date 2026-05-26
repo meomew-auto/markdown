@@ -4409,108 +4409,284 @@ không chỉ nhìn rate trung bình của cả timeline.
 
 ## 6. Cheat sheet — Công thức cần nhớ nhất
 
-> Đây là tóm tắt công thức quan trọng dùng nhiều nhất. Ký hiệu đồng nhất
-> với bảng ký hiệu ở đầu Section 3 (`λ, W, T, M, N_*`).
+> Phần này dành cho người mới. Mỗi công thức có **tên tiếng Việt**, ví dụ
+> đời thường, và "khi nào dùng". Đọc xong section này là dùng được ngay
+> mà không cần đọc 3.1-3.5 chi tiết.
 
-### 6.1. TOP 5 công thức bắt buộc nhớ
+### 6.1. 5 công thức TOP cần thuộc lòng
 
-```text
-[1] Sizing VU (dùng Little's Law):
-    required_vus = ceil(λ_peak × W) × 1.2 (buffer 20%)
-    -> đặt preAllocatedVUs >= required_vus
-
-[2] λ_peak = max(startRate, mọi stage.target) / timeUnit
-    -> rate đỉnh để sizing, không dùng λ_avg
-
-[3] Tổng slot 1 stage (hình thang):
-    scheduled_slots = duration × (λ_prev + λ_next) / 2
-
-[4] rate(t) trong stage (đường thẳng):
-    rate(t) = λ_prev + slope × (t − stageStart)
-    slope = (λ_next − λ_prev) / duration
-
-[5] Quan hệ kết quả test:
-    N_done ≈ N_sched − N_drop − N_int
-    actual_rate = N_done / T_run
-```
-
-### 6.2. Công thức theo ngữ cảnh (dùng khi nào)
-
-#### Khi config scenario (trước khi chạy)
+#### Công thức 1: "Cần bao nhiêu nhân viên?" (Sizing VU)
 
 ```text
-T = sum(stage.duration)                        <- tổng timeline
-λ_peak = max(startRate, mọi stage.target) / timeUnit
-N_sched = Σ stage_i × (λ_prev_i + λ_next_i)/2  <- tổng slot dự kiến
-λ_avg = N_sched / T                            <- đối chiếu (KHÔNG sizing)
-
 required_vus = ceil(λ_peak × W) × 1.2
-preAllocatedVUs >= required_vus
-maxVUs >= preAllocatedVUs (mặc định bằng nhau)
 ```
 
-#### Khi tính capacity của setup hiện có
+**Tiếng Việt**: "Số nhân viên cần = (số khách đỉnh điểm/giây) × (thời
+gian phục vụ 1 khách) × 1.2 (dự phòng 20%)"
+
+**Ví dụ đời thường**:
 
 ```text
-capacity = M / W                               <- iter/s pool M VU làm được
-drop xảy ra khi λ(t) > capacity
-drop_rate(t) = max(0, λ(t) − capacity)
+Quán phở giờ cao điểm có 10 khách/phút vào.
+Mỗi khách ăn xong mất 5 phút.
+=> cần 10 × 5 = 50 chỗ ngồi (+20% dự phòng = 60 chỗ)
 ```
 
-#### Khi đọc summary sau test
+**Áp vào k6**:
 
 ```text
-T_run ∈ [T, T + gracefulStop]                  <- thời gian thực tế
-actual_rate = N_done / T_run                   <- rate thực
+rate đỉnh = 10 iter/giây
+1 iter chạy mất 0.5s
+=> cần 10 × 0.5 = 5 VU (+20% = 6 VU)
 
-Quan hệ thứ tự (luôn đúng):
-  λ_peak ≥ λ_avg ≥ actual_rate
-
-Verify drop/interrupt:
-  N_done + N_drop + N_int ≈ N_sched (xấp xỉ ±1)
-
-Phân biệt:
-  N_drop = slot CHƯA start được     -> do thiếu VU
-  N_int  = iter ĐÃ start nhưng cancel -> do hết grace
+preAllocatedVUs = 6
 ```
 
-### 6.3. Quy tắc nhanh
+**Khi nào dùng**: trước khi chạy test, để biết đặt `preAllocatedVUs`
+bao nhiêu cho đủ.
+
+#### Công thức 2: "Đỉnh rate là bao nhiêu?" (Tìm rate cao nhất)
 
 ```text
-[Sizing]
-  λ_peak (KHÔNG λ_avg) -> required_vus -> preAllocatedVUs
-
-[Khi drop nhiều]
-  Tăng preAllocatedVUs (cách an toàn nhất)
-  Hoặc tăng maxVUs (cho phép spawn unplanned, nhưng có window drop)
-  Hoặc giảm λ_peak (hạ stage.target)
-  Hoặc giảm W (code nhanh hơn)
-
-[Khi interrupt nhiều]
-  Tăng gracefulStop
-  Hoặc giảm rate (để iter cuối kịp xong)
-  Hoặc tối ưu code (giảm W)
+λ_peak = max(startRate, mọi stage.target) / timeUnit
 ```
 
-### 6.4. Ký hiệu rút gọn
+**Tiếng Việt**: "Rate đỉnh = lấy con số LỚN NHẤT trong số: startRate
+và tất cả stage.target, rồi chia cho timeUnit"
+
+**Ví dụ**:
 
 ```text
-λ        rate (iter/s)            timeUnit-aware
-W        iter_time hiệu dụng       max(iter_duration, minIterationDuration)
-T        tổng timeline             sum(stage.duration)
-T_run    thời gian thực tế chạy    [T, T + gracefulStop]
-M        số VU thực tế trong pool  preAllocatedVUs + spawned_unplanned
-C        capacity = M / W          iter/s
-N_sched  tổng slot dự kiến         tính từ config
-N_done   tổng iter hoàn thành      summary "iterations"
-N_drop   slot bị drop              summary "dropped_iterations"
-N_int    iter bị interrupt         progress/footer cuối run
+config:
+  startRate: 0
+  timeUnit: "1s"
+  stages:
+    - duration: "2s", target: 10
+    - duration: "5s", target: 4
+    - duration: "2s", target: 0
+
+số lớn nhất = max(0, 10, 4, 0) = 10
+λ_peak = 10 / 1s = 10 iter/giây
 ```
 
-### 6.5. Bộ 3 công thức "1 dòng" để giải mọi case
+**Khi nào dùng**: bước đầu tiên trước Công thức 1 — phải biết đỉnh
+rate trước thì mới sizing được.
+
+**Lưu ý**: KHÔNG dùng rate trung bình (`λ_avg`) để sizing. Vì giữa
+stage rate có thể vọt lên đỉnh, và VU phải đủ chịu lúc đỉnh đó.
+
+#### Công thức 3: "Tổng có bao nhiêu lượt start?" (Đếm slot 1 stage)
 
 ```text
-1. Cần bao nhiêu VU?    M = ceil(λ_peak × W)
-2. Cao nhất chịu rate?   λ_max = M / W
-3. Thừa thiếu bao nhiêu? gap = λ(t) − M/W (dương = drop, âm = thừa VU)
+scheduled_slots = duration × (rate_đầu + rate_cuối) / 2
 ```
+
+**Tiếng Việt**: "Tổng slot = thời gian stage × rate trung bình của
+stage (trung bình rate đầu và rate cuối)"
+
+**Vì sao là trung bình?** Vì rate ramp **đường thẳng** (tuyến tính):
+giữa stage rate là trung bình của 2 đầu.
+
+**Ví dụ**:
+
+```text
+stage: duration=2s, ramp 2/s -> 4/s
+rate trung bình = (2 + 4) / 2 = 3 iter/giây
+tổng slot = 2 × 3 = 6 lượt start
+```
+
+**Khi nào dùng**: ước lượng số iter scenario sẽ có (trước khi chạy),
+hoặc đối chiếu với `iterations` trong summary sau test.
+
+#### Công thức 4: "Rate ở giây thứ N là bao nhiêu?" (Đường thẳng nội suy)
+
+```text
+rate(t) = rate_đầu + slope × (t - thời_điểm_đầu_stage)
+slope = (rate_cuối - rate_đầu) / duration
+```
+
+**Tiếng Việt**: "Rate tại 1 thời điểm = rate đầu stage + (độ dốc) × (đã
+trôi bao lâu trong stage)"
+
+**Ví dụ**:
+
+```text
+stage: ramp 2/s -> 4/s trong 2s
+
+slope = (4 - 2) / 2 = 1 (mỗi giây tăng 1)
+
+rate tại t=0   : 2 + 1×0   = 2/s   (đầu)
+rate tại t=0.5 : 2 + 1×0.5 = 2.5/s
+rate tại t=1   : 2 + 1×1   = 3/s   (giữa)
+rate tại t=2   : 2 + 1×2   = 4/s   (cuối)
+```
+
+**Khi nào dùng**: muốn biết tại 1 thời điểm cụ thể trong scenario,
+rate đang là bao nhiêu (để debug, hoặc tính `λ_current` cho công thức
+drop).
+
+#### Công thức 5: "Hệ thống chịu nổi không?" (Verify drop/interrupt)
+
+```text
+N_done ≈ N_sched - N_drop - N_int
+actual_rate = N_done / T_run
+```
+
+**Tiếng Việt**:
+- "Số iter HOÀN THÀNH = tổng dự kiến − slot bị drop − iter bị cancel"
+- "Rate thực tế = số iter hoàn thành / thời gian thực tế chạy"
+
+**Ví dụ**:
+
+```text
+Trước test:    N_sched = 20 (tính từ Công thức 3)
+Sau test summary cho:
+  iterations          = 18
+  dropped_iterations  = 2
+
+verify: 18 + 2 + 0 = 20 ✓
+actual_rate = 18 / 7s ≈ 2.57 iter/s
+```
+
+**Khi nào dùng**: sau test, để biết hệ thống có chịu được rate config
+hay không. Drop nhiều = sizing thiếu, interrupt nhiều = code chậm.
+
+### 6.2. Bảng tra nhanh: gặp tình huống nào, dùng công thức nào
+
+#### Tình huống 1: "Sắp viết config, không biết đặt số bao nhiêu"
+
+```text
+Bước 1: Tính rate đỉnh (Công thức 2)
+   λ_peak = max(startRate, mọi stage.target) / timeUnit
+
+Bước 2: Đo iter_time (chạy thử 1 VU, xem iteration_duration)
+   W = iteration_duration của code
+
+Bước 3: Tính số VU cần (Công thức 1)
+   required_vus = ceil(λ_peak × W) × 1.2
+
+Bước 4: Đặt config
+   preAllocatedVUs = required_vus
+   maxVUs = required_vus  (hoặc lớn hơn nếu muốn cho phép spawn)
+```
+
+#### Tình huống 2: "Đã có sẵn N VU, hỏi chịu được rate cao nhất là bao nhiêu?"
+
+```text
+Bước 1: Đo iter_time
+   W = thời gian 1 iter
+
+Bước 2: Tính capacity
+   capacity = N / W  iter/giây
+
+Bước 3: So với rate config
+   nếu λ_peak ≤ capacity -> không drop
+   nếu λ_peak > capacity -> drop, rate dư = λ_peak − capacity
+```
+
+**Ví dụ**:
+
+```text
+Có 6 VU, code sleep(0.5)
+=> capacity = 6 / 0.5 = 12 iter/s
+=> chịu được scenario có λ_peak ≤ 12 iter/s
+=> nếu config rate = 15/s -> sẽ drop 3/s tại đỉnh
+```
+
+#### Tình huống 3: "Đã chạy xong, đọc summary"
+
+```text
+3 con số quan trọng:
+   iterations         = N_done   (số iter hoàn thành)
+   dropped_iterations = N_drop   (slot bị drop)
+   interrupted iter.  = N_int    (iter bị cancel ở cuối)
+
+3 câu hỏi cần trả lời:
+   1) Có drop nhiều không?           N_drop / N_sched > 5% là đáng lo
+   2) Có interrupt cuối không?       N_int > 0 là chưa kịp xong
+   3) Rate thực có gần target không? actual_rate = N_done / T_run
+                                      so với λ_avg = N_sched / T
+```
+
+### 6.3. Hành động khi gặp vấn đề
+
+#### "Drop nhiều quá!"
+
+Nguyên nhân: rate đỉnh vượt năng lực pool VU. Cách xử lý theo độ ưu tiên:
+
+```text
+1. (DỄ NHẤT) Tăng preAllocatedVUs
+   -> Pool có sẵn nhiều VU rảnh, không cần spawn
+   -> Tốt cho test ổn định
+
+2. Tăng maxVUs (cho phép spawn unplanned)
+   -> Cho k6 spawn thêm VU khi cần
+   -> Nhưng có window vài chục ms ban đầu vẫn drop (xem 3.16)
+
+3. Giảm rate đỉnh (hạ stage.target)
+   -> Đơn giản nhất nếu rate cao là không cần thiết
+
+4. Tối ưu code (giảm iter_time)
+   -> Bỏ sleep dư, tối ưu logic, giảm số HTTP request
+```
+
+#### "Có interrupted iterations cuối test!"
+
+Nguyên nhân: iter chưa kịp xong khi grace hết. Cách xử lý:
+
+```text
+1. Tăng gracefulStop
+   -> Cho iter cuối thêm thời gian
+   -> Vd: gracefulStop: "30s" thay vì default
+
+2. Đổi stage cuối thành rate giảm dần
+   -> stages: [..., { duration: "5s", target: 0 }]
+   -> Iter cuối ít hơn, ít kịp đè giờ kết thúc
+
+3. Tối ưu code (giảm iter_time)
+   -> Iter ngắn hơn -> ít có khả năng vắt qua mốc cuối
+```
+
+#### "Rate thực thấp hơn target nhiều!"
+
+```text
+1. Check N_drop trước  -> nếu drop nhiều, fix theo hướng dẫn trên
+2. Check N_int sau     -> nếu interrupt nhiều, tăng gracefulStop
+3. Check T_run         -> nếu T_run > T (dùng grace), divisor lớn hơn
+                         -> rate thực tự nhiên thấp hơn
+
+Nếu drop=0, int=0 mà rate vẫn thấp -> có thể là caveat slot biên
+                                       (xem 3.1 caveat 2: slot đầu lệch t=0)
+```
+
+### 6.4. Bảng từ vựng: ký hiệu nào nghĩa là gì?
+
+> Section 3.1-3.5 dùng nhiều ký hiệu rút gọn cho gọn. Đây là bảng tra
+> để bạn không phải lật lại đầu Section 3 mỗi lần.
+
+| Ký hiệu | Đọc là | Nghĩa | Đơn vị |
+| --- | --- | --- | --- |
+| `λ` (lambda) | "lam-da" | Rate, nhịp start | iter/giây |
+| `λ_peak` | "lam-da đỉnh" | Rate cao nhất scenario | iter/giây |
+| `λ_avg` | "lam-da trung bình" | Rate trung bình của cả timeline | iter/giây |
+| `λ(t)` | "lam-da tại t" | Rate ở 1 thời điểm cụ thể | iter/giây |
+| `W` | "đắp-bờ-liu" | Thời gian 1 iter chiếm 1 VU | giây/iter |
+| `T` | "ti" | Tổng thời gian timeline (sum stages) | giây |
+| `T_run` | "ti rần" | Thời gian thực tế chạy (có thể có grace) | giây |
+| `M` | "em" | Số VU thực tế trong pool | VU |
+| `C` | "xi" | Capacity (năng lực pool M VU) = M/W | iter/giây |
+| `N_sched` | "ren skét" | Tổng slot dự kiến | slot |
+| `N_done` | "ren đần" | Tổng iter HOÀN THÀNH | iter |
+| `N_drop` | "ren đờ-rốp" | Slot bị drop (chưa start) | slot |
+| `N_int` | "ren in-tờ" | Iter bị interrupt (đã start, không xong) | iter |
+
+### 6.5. 3 công thức "1 dòng" để giải mọi case (nhớ vĩnh viễn)
+
+```text
+Cần BAO NHIÊU VU?       VU = ceil(rate_đỉnh × thời_gian_1_iter)
+Pool CHỊU rate cao bao nhiêu?  rate_max = số_VU / thời_gian_1_iter
+THỪA hay THIẾU bao nhiêu?      thiếu = rate_đỉnh − pool_chịu_được
+                               (dương = drop, âm = thừa VU)
+```
+
+Học thuộc 3 dòng này là dùng được 80% nhu cầu thực tế.
