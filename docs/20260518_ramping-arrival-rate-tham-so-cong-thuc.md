@@ -28,11 +28,11 @@ docs/20260518_ramping_arrival_rate_worked_example.md
 - [2. Bảng tham số tiếng Việt](#2-bảng-tham-số-tiếng-việt)
   - [2.1. Biến phụ trong công thức](#21-biến-phụ-trong-công-thức)
 - [3. Công thức nền](#3-công-thức-nền)
-  - [3.1. Rate theo stage](#31-rate-theo-stage)
-  - [3.2. Nhịp cao nhất và nhịp bình quân](#32-nhịp-cao-nhất-và-nhịp-bình-quân)
-  - [3.3. Ước lượng VU](#33-ước-lượng-vu)
-  - [3.4. Rate của summary](#34-rate-của-summary)
-  - [3.5. dropped khác interrupted như nào?](#35-dropped-khác-interrupted-như-nào)
+  - [3.1. Đếm slot: tổng slot trong stage và rate(t)](#31-đếm-slot-tổng-số-slot-trong-1-stage-và-ratet-tại-mọi-thời-điểm)
+  - [3.2. Đỉnh rate cho sizing](#32-đỉnh-rate-dùng-cho-sizing-vu-lambda_peak-vs-average_target_rate)
+  - [3.3. Đếm VU cần (Little's Law)](#33-đếm-vu-cần-bao-nhiêu-vu-để-không-drop-littles-law)
+  - [3.4. Rate thực tế sau test](#34-rate-thực-tế-sau-test-vs-rate-target-trong-config)
+  - [3.5. dropped vs interrupted](#35-phân-biệt-dropped-vs-interrupted-chưa-start-vs-đã-start-nhưng-không-finish)
   - [3.6. Tổng thời gian timeline = sum(stage.duration)](#36-tổng-thời-gian-timeline--sumstageduration)
   - [3.7. Trần wall-clock = regular_duration + gracefulStop](#37-trần-wall-clock--regular_duration--gracefulstop)
   - [3.8. stage.target = rate target tại cuối stage](#38-stagetarget--rate-target-tại-cuối-stage)
@@ -1184,38 +1184,133 @@ lambda_peak = max(lambda_start, mọi lambda_i_end)
 average_target_rate = scheduled_iterations_total / total_regular_duration
 ```
 
-| Biến | Ý nghĩa | Vì sao max chỉ ở "đầu/cuối stage"? |
+| Biến | Ý nghĩa | Đơn vị |
 | --- | --- | --- |
-| `lambda_peak` | rate cao nhất scenario phải fire | rate ramp tuyến tính → cực trị nằm ở 2 đầu stage, không nằm giữa |
-| `average_target_rate` | rate trung bình của cả timeline | dùng đánh giá chung, không dùng để sizing VU |
+| `lambda_start` | rate ở đầu scenario (= `startRate / timeUnit_seconds`) | iter/s |
+| `lambda_i_end` | rate ở cuối stage i (= `stage[i].target / timeUnit_seconds`) | iter/s |
+| `lambda_peak` | rate cao nhất scenario phải fire ở bất kỳ thời điểm nào | iter/s |
+| `scheduled_iterations_total` | tổng slot trong cả timeline (xem `3.1`) | slot |
+| `total_regular_duration` | tổng thời gian timeline = `sum(stage.duration)` | seconds |
+| `average_target_rate` | rate trung bình tính theo tổng slot / tổng thời gian | iter/s |
+
+#### Vì sao `lambda_peak` chỉ cần xét điểm đầu/cuối stage?
+
+Vì rate ramp **tuyến tính** trong từng stage (xem `3.1`):
+
+```text
+rate(t) = lambda_prev + slope × (t - stageStart)
+```
+
+Đây là phương trình đường thẳng. Cực trị (max/min) của 1 đường thẳng
+trên đoạn `[stageStart, stageEnd]` chỉ có thể nằm tại **2 đầu mút**, không
+bao giờ nằm giữa.
+
+Chứng minh trực quan:
+
+```text
+Nếu slope > 0 (ramp lên):  rate tăng đều -> max ở stageEnd
+Nếu slope < 0 (ramp xuống): rate giảm đều -> max ở stageStart
+Nếu slope = 0 (hold):       rate cố định -> max ở mọi điểm (gồm cả 2 đầu)
+```
+
+→ Chỉ cần kiểm tra rate tại các điểm đầu/cuối stage, không cần quét cả
+timeline. Code:
+
+```text
+lambda_peak = max(
+    lambda_start,
+    lambda_0_end,    // = stage[0].target / timeUnit
+    lambda_1_end,    // = stage[1].target / timeUnit
+    ...
+    lambda_n_end
+)
+```
+
+#### Vì sao `average_target_rate` không dùng để sizing?
+
+Lấy lại config demo trên:
+
+```text
+λ_peak = 4/s         <- giữa stage 1 (hold), nhịp đỉnh
+average = 2.86/s     <- bình quân cả timeline
+```
+
+Nếu sizing theo average:
+
+```text
+required_vus = ceil(average × iter_time)
+            = ceil(2.86 × W)        <- W = iter_time
+
+Với W=0.4s: required = ceil(2.86 × 0.4) = 2 VU
+
+Tại stage 1 hold 4/s:
+  λ(t) = 4/s, cần ceil(4 × 0.4) = 2 VU ... vẫn vừa khít
+
+Nhưng nếu W = 0.5s:
+  required theo average = ceil(2.86 × 0.5) = 2 VU
+  required tại stage 1  = ceil(4 × 0.5)    = 2 VU ... vẫn ổn
+
+Nếu W = 1s:
+  required theo average = ceil(2.86 × 1) = 3 VU
+  required tại stage 1  = ceil(4 × 1)    = 4 VU ... THIẾU 1!
+  -> tại stage 1 sẽ drop 1/s
+```
+
+→ Càng W lớn, sai số càng lớn. Luôn dùng `lambda_peak` cho an toàn.
 
 #### Ví dụ áp dụng sizing
 
 ```text
-scenario lên 8/s rồi xuống 2/s:
+scenario lên 8/s rồi xuống 2/s, code sleep(0.5):
 
-nếu sizing theo average:  (8+2)/2 = 5/s -> chỉ đủ VU cho rate trung bình
-                          -> đoạn 8/s sẽ DROP nhiều
-nếu sizing theo peak:     8/s        -> đủ VU cho rate cao nhất
-                          -> không drop
+W = 0.5s
+λ_peak = 8/s
+required_vus = ceil(8 × 0.5) = 4 VU
+
+Verify từng đoạn:
+  đoạn 8/s: λ × W = 8 × 0.5 = 4 VU bận     <- đúng required
+  đoạn 5/s: λ × W = 5 × 0.5 = 2.5 VU bận   <- thừa 1.5 VU
+  đoạn 2/s: λ × W = 2 × 0.5 = 1 VU bận     <- thừa 3 VU
 ```
 
-→ luôn dùng `lambda_peak` cho sizing, không dùng `average_target_rate`.
+VU thừa ở các đoạn rate thấp là **chấp nhận được** — không tốn thêm
+tài nguyên đáng kể (VU rảnh chỉ chờ ở channel).
 
 #### Quan hệ với `drop_rate`
 
 ```text
-drop_rate ≈ max(0, lambda_current - capacity_with_M_vus)
+drop_rate(t) ≈ max(0, lambda_current(t) - capacity_with_M_vus)
 ```
 
-| Biến | Ý nghĩa |
-| --- | --- |
-| `lambda_current` | rate đang xảy ra **tại 1 thời điểm cụ thể** (đầu stage thấp, giữa stage cao hơn) |
-| `capacity_with_M_vus` | năng lực M VU = `M / iter_time` (xem `3.3`) |
-| `drop_rate` | rate slot bị drop tại thời điểm đó |
+| Biến | Ý nghĩa | Phụ thuộc |
+| --- | --- | --- |
+| `lambda_current(t)` | rate đang fire tại thời điểm t | timeline (xem `3.1`) |
+| `capacity_with_M_vus` | năng lực M VU = `M / W_effective` | M, W |
+| `drop_rate(t)` | rate slot bị drop tại thời điểm t | hiệu của 2 cái trên |
 
-Ý chính: nhìn `lambda_current` chứ không phải `average_target_rate`. Đoạn
-giữa stage có `lambda_current` cao hơn trung bình → đó là chỗ dễ drop.
+Áp vào ví dụ:
+
+```text
+M = 3 VU, W = 0.5s  -> capacity = 3/0.5 = 6 iter/s
+
+Tại đoạn 8/s: drop_rate = max(0, 8 - 6) = 2/s    <- drop 2 slot/giây
+Tại đoạn 5/s: drop_rate = max(0, 5 - 6) = 0       <- không drop
+Tại đoạn 2/s: drop_rate = max(0, 2 - 6) = 0       <- không drop
+
+Tổng dropped trong scenario = ∫ drop_rate(t) dt
+                            = "diện tích phần λ vượt capacity"
+```
+
+→ chỉ phần `λ(t) > capacity` mới drop. Đoạn nào λ thấp hơn capacity,
+VU thừa nhưng không drop.
+
+#### Tóm gọn 3.2
+
+```text
+lambda_peak                 -> dùng cho sizing VU (3.3)
+average_target_rate          -> dùng đánh giá rate trung bình (KHÔNG sizing)
+drop_rate(t)                 -> diễn biến drop theo thời gian
+```
 
 ### 3.3. Đếm VU: cần bao nhiêu VU để không drop (Little's Law)
 
@@ -1324,6 +1419,58 @@ Ví dụ:
 code mất 0.2s, minIterationDuration = 1s
 => W_effective = max(0.2, 1) = 1s
 => rate=10/s cần ceil(10 × 1) = 10 VU (không phải 2 VU)
+```
+
+#### Vì sao công thức là `λ × W` (chứng minh trực quan)
+
+Đây là **Little's Law** — định luật cơ bản của hệ thống hàng đợi
+(queueing theory). Phát biểu:
+
+```text
+L = λ × W
+
+L = số "items" trong hệ thống tại 1 thời điểm (steady-state)
+λ = arrival rate (items vào hệ thống / giây)
+W = thời gian 1 item ở trong hệ thống
+```
+
+Áp vào k6 arrival-rate:
+
+```text
+hệ thống = pool VU
+items = iteration
+L = số iteration đang chạy = số VU đang bận
+λ = rate slot fire (mục tiêu scheduler)
+W = iter_time (thời gian 1 iter chiếm 1 VU)
+```
+
+→ `số VU đang bận = rate × iter_time`.
+
+Chứng minh trực quan với `rate=10/s, iter_time=0.5s`:
+
+```text
+slot_interval = 1/10 = 100ms
+iter_time = 500ms = 5 × slot_interval
+
+Tại slot t=500ms (slot thứ 5), iter#0 vừa kết thúc.
+Trong khoảng [0, 500ms] đã fire: slot#0..#4 = 5 slot
+Mỗi slot chiếm 1 VU 500ms.
+=> 5 slot × 500ms = 5 × 0.5 = 2.5 VU-second tích lũy
+=> ÷ 0.5s window = 5 VU đang bận trung bình
+
+Đúng = rate × iter_time = 10 × 0.5 = 5 VU.
+```
+
+#### Tóm gọn 3.3
+
+```text
+required_vus = ceil(λ_peak × W_effective)            <- sizing
+capacity     = M / W_effective                        <- năng lực M VU
+drop_rate    = max(0, λ_current - capacity)           <- phần vượt
+
+Quy tắc:
+  preAllocatedVUs >= required_vus × 1.2 (buffer 20%)
+  maxVUs >= preAllocatedVUs (mặc định bằng nhau nếu không khai báo)
 ```
 
 ### 3.4. Rate thực tế sau test (vs rate target trong config)
@@ -1439,6 +1586,84 @@ summary_runtime_base    = thực tế khi chạy, có thể chênh ±1s
 Nếu thấy `(3) > (2)` → nhiều khả năng đo lệch, cần kiểm tra lại
 `summary_runtime_base` có đúng không.
 
+#### Vì sao actual_rate < average_target_rate?
+
+Mọi slot bị drop hoặc interrupt đều **không đếm** vào `iterations` summary:
+
+```text
+iterations summary = chỉ đếm iter HOÀN THÀNH
+                   = scheduled_total - dropped - interrupted
+
+Áp config demo:
+  scheduled_total = 20 (theo 3.1)
+  dropped+interrupt = 2
+  completed = 18
+
+actual_rate = 18 / runtime ≈ 18 / 7 ≈ 2.57/s   <- thực tế đạt được
+average_target_rate = 20 / 7 ≈ 2.86/s          <- mục tiêu config
+```
+
+Khoảng cách giữa 2 con số này = "khoảng thiếu hụt" của hệ thống. Càng
+gần nhau → hệ thống chịu được rate config tốt.
+
+#### Cách tính `summary_runtime_base` (gần đúng)
+
+Đây là hàm nội bộ của k6, công thức sát nhất:
+
+```text
+summary_runtime_base
+  ≈ max(0, scenario_end_time - scenario_start_time)
+
+Trong scenario thông thường:
+  start = startTime (mặc định 0)
+  end   = startTime + regular_duration + (grace nếu dùng)
+
+=> summary_runtime_base ≈ regular_duration + grace_thực_tế_dùng
+```
+
+Nếu scenario dùng grace ít (vì iter ngắn, kết thúc sớm):
+
+```text
+runtime ≈ regular_duration (~7s với demo)
+```
+
+Nếu scenario dùng hết grace (iter dài chưa xong):
+
+```text
+runtime ≈ regular_duration + gracefulStop
+```
+
+→ trong demo `3.4`, `runtime ≈ 7s` vì `iter=0.5s < grace mặc định`,
+không cần kéo dài.
+
+#### Phân biệt `iterations rate` vs `http_reqs rate`
+
+```text
+iterations rate   = số iter HOÀN THÀNH / runtime
+http_reqs rate    = số HTTP request đã gửi / runtime
+
+Quan hệ:
+  http_reqs ≈ iterations × số_request_per_iter (nếu code không có nhánh fail)
+
+Ví dụ với 2 request/iter:
+  iterations = 18 -> http_reqs = 36
+  rate iter = 2.57/s -> rate http = 5.14/s
+```
+
+→ rate http_reqs **không phải** rate slot, mà là rate request đã gửi
+thành công trong các iter HOÀN THÀNH.
+
+#### Tóm gọn 3.4
+
+```text
+actual_rate = completed / runtime    <- KPI thực tế
+< average_target_rate                  <- mục tiêu lý thuyết
+< lambda_peak                          <- đỉnh rate
+
+Càng sát nhau -> hệ thống chịu rate càng tốt
+Lệch xa -> kiểm tra dropped/interrupted
+```
+
 ### 3.5. Phân biệt `dropped` vs `interrupted`: chưa start vs đã start nhưng không finish
 
 #### Config demo
@@ -1499,6 +1724,22 @@ Trả lời:
 | Nguyên nhân thường gặp | preAllocated thiếu, code chậm hơn dự kiến | hết `gracefulStop`, scenario bị abort, error fatal |
 | Vị trí trong output | metric Counter `dropped_iterations` | số ở progress/footer cuối run, không có Counter riêng |
 | Code emit | `ramping_arrival_rate.go:479-486` | `helpers.go:80-113` (context cancel ở giữa iter) |
+
+#### Phân tích công thức
+
+```text
+dropped_iterations     = count of slots where TryRunIteration() returned false
+interrupted_iterations = count of iters where context cancelled mid-run
+
+scheduled_total = completed + dropped + interrupted   (xấp xỉ ±1 do biên slot)
+```
+
+| Biến | Ý nghĩa | Đơn vị | Nguồn |
+| --- | --- | --- | --- |
+| `dropped_iterations` | số slot fire mà không có VU rảnh | slot count | summary metric |
+| `interrupted_iterations` | số iter đã start mà bị cancel | iter count | progress/footer |
+| `completed_iterations` | số iter chạy xong sạch | iter count | summary `iterations` |
+| `scheduled_total` | tổng slot dự kiến (xem `3.1`) | slot | tự tính từ config |
 
 #### Tổng quan timeline minh họa
 
