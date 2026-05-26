@@ -4858,7 +4858,57 @@ dòng progress cuối cùng.
 
 ### 6.7. Quy trình 5 bước phân tích output
 
-Sau khi có đủ số liệu từ 6.6, làm 5 bước theo thứ tự:
+Sau khi có đủ số liệu từ 6.6, làm 5 bước theo thứ tự.
+
+#### Output mẫu để phân tích (dùng xuyên suốt 5 bước)
+
+**Config đã chạy**:
+
+```js
+export const options = {
+  scenarios: {
+    demo_analyze: {
+      executor: "ramping-arrival-rate",
+      startRate: 0,
+      timeUnit: "1s",
+      preAllocatedVUs: 5,
+      maxVUs: 10,
+      gracefulStop: "30s",
+      stages: [
+        { duration: "2s", target: 4 },
+        { duration: "3s", target: 4 },
+        { duration: "2s", target: 0 },
+      ],
+    },
+  },
+};
+
+import { sleep } from "k6";
+export default function () { sleep(0.5); }
+```
+
+**Output đầy đủ k6 in ra**:
+
+```text
+scenarios: (100.00%) 1 scenario, 6 max VUs, 37s max duration (incl. graceful stop):
+         * demo_analyze: Up to 4.00 iterations/s for 7s over 3 stages (maxVUs: 5-10)
+
+running (07.6s), 0/6 VUs, 18 complete and 0 interrupted iterations
+
+  █ TOTAL RESULTS
+
+    EXECUTION
+    iteration_duration...: avg=505ms min=500ms max=520ms p(95)=515ms
+    iterations...........: 18    2.368421/s
+    dropped_iterations...: 2     0.263157/s
+    vus..................: 4     min=2  max=4
+    vus_max..............: 6     min=6  max=6
+
+  EXECUTION
+  scenarios: 1 scenarios completed
+```
+
+Áp 5 bước dưới đây vào đúng output này.
 
 #### Bước 1: Verify config có chạy đúng không
 
@@ -4869,8 +4919,13 @@ Header in:    "Up to 4.00 iterations/s"
 Config có:    startRate=0, max stage.target=4, timeUnit=1s
               -> λ_peak = 4 / 1 = 4 iter/s ✓
 
-Nếu khớp -> config OK, đi tiếp Bước 2
-Nếu lệch -> kiểm tra timeUnit, parse error, hoặc shortcut bị derive sai
+Header in:    "for 7s"
+Config có:    sum(stage.duration) = 2 + 3 + 2 = 7s ✓
+
+Header in:    "maxVUs: 5-10"
+Config có:    preAllocatedVUs=5, maxVUs=10 ✓
+
+KẾT LUẬN: config đã parse đúng -> sang Bước 2
 ```
 
 #### Bước 2: Tính N_sched (số slot dự kiến)
@@ -4891,6 +4946,7 @@ stage 2: 2 × (4+0)/2 = 4 slot
 
 ```text
 Summary cho:  iterations = 18
+Tính từ Bước 2: N_sched = 20
 
 So sánh:
   N_done / N_sched = 18 / 20 = 90%
@@ -4899,7 +4955,7 @@ So sánh:
 Phân loại:
   >= 99%     : test "hoàn hảo"
   95-99%     : nhỏ giọt drop ở biên slot, OK
-  80-95%     : có vấn đề, kiểm tra Bước 4
+  80-95%     : có vấn đề, kiểm tra Bước 4    <- DEMO RƠI VÀO ĐÂY
   < 80%      : sizing sai nghiêm trọng
 ```
 
@@ -4907,19 +4963,20 @@ Phân loại:
 
 ```text
 Summary cho:  dropped_iterations = 2
-Footer cho:   interrupted = 0
+Footer cho:   "0 interrupted iterations" -> N_int = 0
 
 Verify cộng số:
   N_done + N_drop + N_int = 18 + 2 + 0 = 20 = N_sched ✓
+  (khớp tuyệt đối, không lệch)
 
 Diagnose:
-  N_drop > 0  -> sizing VU thiếu
-                  -> tăng preAllocatedVUs (xem 6.3)
-  N_int > 0   -> code chậm hơn dự kiến
-                  -> tăng gracefulStop hoặc giảm rate
+  N_drop = 2 (> 0)  -> sizing VU thiếu vào lúc đỉnh rate
+                       -> Bước 5 sẽ tính cụ thể thiếu bao nhiêu
+
+  N_int = 0          -> code đủ kịp grace, không có vấn đề
 ```
 
-#### Bước 5: Tính capacity thực tế từ output
+#### Bước 5: Tính capacity thực tế từ output (suy ngược)
 
 Đây là bước **suy ngược công thức** từ output để biết hệ thống thật sự
 chịu được rate cao nhất bao nhiêu.
@@ -4929,17 +4986,25 @@ chịu được rate cao nhất bao nhiêu.
   iteration_duration avg = 505ms = 0.505s
 
 Đo M_peak từ summary:
-  vus max = 4
+  vus max = 4    (số VU bận cao nhất trong test)
 
 Tính capacity thực tế:
-  C_thực = M_peak / W
-        = 4 / 0.505
-        ≈ 7.92 iter/s
+  C_thực = M_peak / W = 4 / 0.505 ≈ 7.92 iter/s
 
-So với rate config:
-  λ_peak config = 4 iter/s
-  C_thực = 7.92 iter/s
-  
-  -> hệ thống dư sức (gấp đôi rate config)
-  -> có thể tăng λ_peak lên 7-8 iter/s mà không drop
+WAIT! capacity 7.92 mà λ_peak chỉ 4? Vậy sao có drop?
+=> Vì preAllocated=5, maxVUs=10, NHƯNG vus max chỉ đạt 4
+=> Có lẽ k6 chưa kịp spawn VU thứ 5 trước khi rate đạt đỉnh
+=> Drop xảy ra trong window spawn (~10-50ms ban đầu)
+
+Sizing đúng:
+  required_vus = ceil(λ_peak × W) × 1.2
+              = ceil(4 × 0.505) × 1.2
+              = ceil(2.02) × 1.2
+              = 3 × 1.2 ≈ 4 VU
+
+Kết luận:
+  - Cần 4 VU đỉnh, preAllocated=5 đáng lẽ đủ
+  - Nhưng spawn không kịp -> drop 2 slot ở giây đầu
+  - Cách fix: đặt preAllocatedVUs = required_vus + 1 = 5 (đã làm)
+              hoặc tăng buffer (1.5x thay vì 1.2x)
 ```
