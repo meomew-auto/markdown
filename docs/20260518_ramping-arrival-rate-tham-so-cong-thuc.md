@@ -836,7 +836,7 @@ JS sandbox). Nếu quan tâm tới tail latency của hệ thống, phải set `
 >
 > Cấu trúc mỗi mục: **ví dụ cụ thể → phân tích từng biến**.
 
-### 3.1. Tổng số slot trong 1 stage
+### 3.1. Đếm slot: tổng số slot trong 1 stage và rate(t) tại mọi thời điểm
 
 #### Config demo
 
@@ -1125,7 +1125,7 @@ giữa stage ramp xuống: slot_interval DÃN RA (rate giảm -> slot thưa)
 `tickerPeriod` trong `Run()` chỉ là khoảng cách hiện tại giữa 2 slot
 liên tiếp để update progress UI, không phải hằng số toàn run.
 
-### 3.2. Nhịp cao nhất và nhịp bình quân
+### 3.2. Đỉnh rate: dùng cho sizing VU (`lambda_peak` vs `average_target_rate`)
 
 #### Config demo
 
@@ -1217,7 +1217,7 @@ drop_rate ≈ max(0, lambda_current - capacity_with_M_vus)
 Ý chính: nhìn `lambda_current` chứ không phải `average_target_rate`. Đoạn
 giữa stage có `lambda_current` cao hơn trung bình → đó là chỗ dễ drop.
 
-### 3.3. Ước lượng VU cần chuẩn bị
+### 3.3. Đếm VU: cần bao nhiêu VU để không drop (Little's Law)
 
 #### Config demo
 
@@ -1326,7 +1326,7 @@ code mất 0.2s, minIterationDuration = 1s
 => rate=10/s cần ceil(10 × 1) = 10 VU (không phải 2 VU)
 ```
 
-### 3.4. Rate của summary thực tế
+### 3.4. Rate thực tế sau test (vs rate target trong config)
 
 #### Config demo
 
@@ -1439,7 +1439,7 @@ summary_runtime_base    = thực tế khi chạy, có thể chênh ±1s
 Nếu thấy `(3) > (2)` → nhiều khả năng đo lệch, cần kiểm tra lại
 `summary_runtime_base` có đúng không.
 
-### 3.5. `dropped` khác `interrupted` như nào?
+### 3.5. Phân biệt `dropped` vs `interrupted`: chưa start vs đã start nhưng không finish
 
 #### Config demo
 
