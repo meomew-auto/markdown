@@ -1246,18 +1246,19 @@ Vì rate ramp **tuyến tính** trong từng stage (xem `3.1`):
 trên đoạn `[stageStart, stageEnd]` chỉ có thể nằm tại **2 đầu mút**, không
 bao giờ nằm giữa.
 
-**Chứng minh chặt (giải tích)**:
+**Giải thích trực quan**:
 
 ```text
-Đạo hàm: dλ/dt = slope = (λ_next − λ_prev) / d_i = const trên cả stage
+Đường thẳng có hệ số góc (slope) cố định trong cả stage.
+=> λ(t) chỉ tăng đều, giảm đều, hoặc giữ nguyên — không đổi xu hướng.
 
-→ λ(t) là hàm đơn điệu (monotonic) trên [stageStart, stageEnd]:
-  - slope > 0 (ramp lên):    λ tăng đều  → max ở t = stageEnd
-  - slope < 0 (ramp xuống):  λ giảm đều  → max ở t = stageStart
-  - slope = 0 (hold):         λ const    → max = const (cả 2 đầu)
+3 trường hợp:
+  - slope > 0 (ramp lên):    λ tăng đều  → max ở cuối stage (stageEnd)
+  - slope < 0 (ramp xuống):  λ giảm đều  → max ở đầu stage (stageStart)
+  - slope = 0 (hold):         λ const    → max = const (cả 2 đầu bằng nhau)
 
-Hàm đơn điệu trên đoạn đóng đạt cực trị tại đầu mút (định lý cực trị).
-→ λ_peak của 1 stage = max(λ_prev, λ_next) (chỉ 2 điểm).
+→ Trong mọi case, λ_peak của 1 stage = max(λ_prev, λ_next) — chỉ cần
+   so 2 điểm, không cần quét cả stage.
 ```
 
 **Mở rộng cho cả timeline** (n stage):
@@ -1272,40 +1273,46 @@ Vì λ_prev_i = λ_(i-1)_end (rate cuối stage trước = rate đầu stage sau
 → chỉ cần xét n+1 điểm rời rạc, không cần quét cả timeline liên tục.
 ```
 
-#### Tính `λ_avg` bằng tích phân
+#### Tính `λ_avg` bằng cách đơn giản
 
-`λ_avg` là rate trung bình theo nghĩa tích phân (mean value của hàm
-liên tục trên đoạn):
-
-```text
-λ_avg = (1/T) × ∫₀ᵀ λ(t) dt
-```
-
-`∫₀ᵀ λ(t) dt` chính là **diện tích dưới đường rate(t)** = tổng slot
-fire trong toàn timeline = `N_sched` (đã chứng minh ở 3.1 qua hình thang).
+`λ_avg` là **rate trung bình** = tổng slot fire / tổng thời gian:
 
 ```text
 λ_avg = N_sched / T
 ```
 
+Giải thích trực quan:
+
+```text
+N_sched = tổng slot toàn timeline (đã tính ở 3.1)
+T       = tổng thời gian timeline = sum(stage.duration)
+
+λ_avg = "nếu rải đều N_sched slot trong T giây thì rate là bao nhiêu"
+      = N_sched / T
+```
+
 **Áp config demo `3.2`**:
 
 ```text
-N_sched = 4 + 12 + 4 = 20 slot
+N_sched = 4 + 12 + 4 = 20 slot   (tính từng stage theo công thức 3.1)
 T       = 2 + 3 + 2 = 7s
 λ_avg   = 20 / 7 ≈ 2.857 iter/s
 ```
 
-So với cách tính theo tổng diện tích từng stage:
+Cách kiểm tra cho người ưa toán: vì rate ramp tuyến tính, có thể tính
+trực tiếp từng stage bằng công thức hình thang ở `3.1`:
 
 ```text
-∫₀ᵀ λ(t) dt = ∫₀² (0 + 2t) dt + ∫₂⁵ 4 dt + ∫₅⁷ (4 − 2(t−5)) dt
-            = [t²]₀² + [4t]₂⁵ + [4(t−5) − (t−5)²]₅⁷
-            = 4 + 12 + (8 − 4)
-            = 4 + 12 + 4 = 20 slot ✓
+stage 0 (ramp 0→4 trong 2s): slot = 2 × (0+4)/2 = 4
+stage 1 (hold 4 trong 3s):    slot = 3 × 4       = 12
+stage 2 (ramp 4→0 trong 2s): slot = 2 × (4+0)/2 = 4
+                              ----------------------
+                              N_sched = 20 slot ✓
 
-→ λ_avg = 20 / 7 ≈ 2.857/s (khớp với công thức nhanh).
+λ_avg = 20 / 7 ≈ 2.857/s
 ```
+
+→ Khớp với công thức nhanh `λ_avg = N_sched / T`.
 
 #### Vì sao `λ_avg` không dùng để sizing?
 
@@ -1401,8 +1408,9 @@ Tại đoạn λ=8/s: drop(t) = max(0, 8 − 6) = 2/s    <- drop 2 slot/giây
 Tại đoạn λ=5/s: drop(t) = max(0, 5 − 6) = 0       <- không drop
 Tại đoạn λ=2/s: drop(t) = max(0, 2 − 6) = 0       <- không drop
 
-Tổng dropped trong scenario = ∫ drop(t) dt
-                            = "diện tích phần λ vượt capacity"
+Tổng dropped = cộng dồn drop(t) qua thời gian
+             = "diện tích phần λ vượt capacity trên đồ thị"
+             = "rate vượt × thời gian vượt"
 ```
 
 → chỉ phần `λ(t) > C` mới drop. Đoạn nào λ thấp hơn capacity, VU
@@ -1599,22 +1607,21 @@ W        = iter_time (thời gian 1 iter chiếm 1 VU)
 Steady-state: L = λ × W
 ```
 
-**Chứng minh chặt từ định nghĩa "throughput"**:
+**Chứng minh trực quan từ "đếm số iter đang chạy"**:
 
-Đặt window quan sát `[t − W, t]` (1 cửa sổ rộng W giây kết thúc tại t).
+Tại 1 thời điểm `t`, đếm số VU đang bận = số iter đang chạy.
 
 ```text
-Số iter ĐÃ START trong window này:
-  N_started = ∫_{t−W}^{t} λ(τ) dτ
+Mỗi iter mất W giây để hoàn thành.
+=> 1 iter đang chạy tại t = nó được start trong window [t − W, t].
 
-Tại thời điểm t, mỗi iter đã start trong window này VẪN CÒN BẬN
-(vì iter mất W giây để hoàn thành, và iter sớm nhất start tại t−W
-sẽ kết thúc đúng tại t).
+Số iter start trong window [t − W, t]:
+  = rate × thời gian window
+  = λ × W
 
-→ L(t) = N_started ≈ λ_avg_window × W
+(giả sử λ ổn định trong window, đây là điều kiện steady-state)
 
-Nếu λ ổn định (≈ const = λ trong window):
-  L(t) = λ × W ✓
+=> L(t) = λ × W
 ```
 
 **Chứng minh bằng số (rate=10/s, W=0.5s)**:
@@ -1875,44 +1882,48 @@ T ≤ T_run ≤ T + gracefulStop
 3) actual_rate  [iter/s, completed thực tế = N_done/T_run] - KPI cuối cùng
 ```
 
-#### Bất đẳng thức `λ_peak ≥ λ_avg ≥ actual_rate` (chứng minh)
+#### Vì sao `λ_peak ≥ λ_avg ≥ actual_rate`?
 
-**Bổ đề 1: `λ_peak ≥ λ_avg`** (peak luôn ≥ average)
+**Phần 1: `λ_peak ≥ λ_avg`** (đỉnh luôn ≥ trung bình)
+
+Trực quan: λ_avg là trung bình của λ(t), nên không thể vượt giá trị
+lớn nhất λ_peak.
 
 ```text
-Theo định nghĩa: λ_avg = (1/T) × ∫₀ᵀ λ(t) dt
+λ_avg = N_sched / T = trung bình của λ(t) trên đoạn [0, T]
+λ_peak = max của λ(t)
 
-Vì λ(t) ≤ λ_peak với mọi t (peak là max):
-  ∫₀ᵀ λ(t) dt ≤ ∫₀ᵀ λ_peak dt = λ_peak × T
+Trung bình ≤ max → λ_avg ≤ λ_peak ✓
 
-→ λ_avg = (1/T) × ∫₀ᵀ λ(t) dt ≤ (1/T) × λ_peak × T = λ_peak ✓
-
-Đẳng thức xảy ra khi λ(t) = const = λ_peak (timeline phẳng).
+Đẳng thức xảy ra khi λ(t) = const = λ_peak (timeline phẳng,
+1 stage hold suốt scenario).
 ```
 
-**Bổ đề 2: `λ_avg ≥ actual_rate`** (target ≥ thực tế)
+**Phần 2: `λ_avg ≥ actual_rate`** (target ≥ thực tế)
+
+Trực quan: completed luôn ≤ scheduled, vì có drop và interrupt.
 
 ```text
-Quan hệ: N_done ≈ N_sched − N_drop − N_int
-(xấp xỉ vì biên slot, xem 3.1 caveat)
+N_done = N_sched − N_drop − N_int   (đã trừ drop và interrupt)
 
 → N_done ≤ N_sched (luôn)
 
 actual_rate = N_done / T_run
 λ_avg       = N_sched / T
 
-Trường hợp T_run = T (không dùng grace):
+Trường hợp đơn giản T_run = T (không dùng grace):
   actual_rate = N_done / T ≤ N_sched / T = λ_avg ✓
 
 Trường hợp T_run > T (dùng grace):
-  T_run > T và N_done < N_sched
-  → 2 cái cùng ép actual_rate xuống → vẫn ≤ λ_avg ✓
+  N_done vẫn ≤ N_sched
+  T_run > T → mẫu số lớn hơn → actual_rate càng nhỏ
+  → vẫn ≤ λ_avg ✓
 ```
 
 **Đẳng thức xảy ra khi nào?**
 
 ```text
-λ_peak = λ_avg ⟺ rate phẳng (timeline 1 stage hold)
+λ_peak = λ_avg ⟺ rate phẳng (1 stage hold suốt scenario)
 λ_avg = actual_rate ⟺ N_drop = N_int = 0 và T_run = T
                     ⟺ test "hoàn hảo" (đủ VU, không grace)
 ```
