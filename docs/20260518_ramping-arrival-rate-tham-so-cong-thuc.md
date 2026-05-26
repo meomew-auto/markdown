@@ -4783,3 +4783,163 @@ THỪA hay THIẾU bao nhiêu?      thiếu = rate_đỉnh − pool_chịu_đư�
 ```
 
 Học thuộc 3 dòng này là dùng được 80% nhu cầu thực tế.
+
+### 6.6. Đọc output sau test: tìm số ở đâu?
+
+Sau khi `k6 run` xong, bạn sẽ thấy 3 nhóm số liệu. Phải biết tìm từng
+con số ở đâu để áp công thức.
+
+#### Nhóm 1: Header (in ra ngay đầu test)
+
+```text
+scenarios: (100.00%) 1 scenario, 6 max VUs, 9s max duration (incl. graceful stop):
+         * my_scenario: Up to 4.00 iterations/s for 7s over 3 stages (maxVUs: 5-10)
+```
+
+Đọc các con số:
+
+```text
+"6 max VUs"                   <- vus_max (số instance VU sẽ init)
+"9s max duration"              <- T + gracefulStop
+"Up to 4.00 iterations/s"      <- λ_peak (rate cao nhất config)
+"for 7s"                        <- T = sum(stage.duration)
+"3 stages"                     <- số stage trong config
+"maxVUs: 5-10"                 <- preAllocatedVUs (5) - maxVUs (10)
+```
+
+**Khi nào đọc**: ngay đầu để verify config đã parse đúng.
+
+#### Nhóm 2: Summary cuối test (block "TOTAL RESULTS")
+
+```text
+EXECUTION
+iteration_duration...: avg=505ms min=500ms max=520ms p(95)=515ms
+iterations...........: 18    2.571428/s
+dropped_iterations...: 5     0.714285/s
+vus..................: 4     min=2  max=4
+vus_max..............: 6     min=6  max=6
+
+NETWORK
+http_req_duration....: avg=200ms ...
+http_reqs............: 36    5.142857/s
+```
+
+Đọc các con số:
+
+```text
+iteration_duration avg     <- W (iter_time hiệu dụng)
+iterations (count)         <- N_done (iter hoàn thành)
+iterations (rate)          <- actual_rate
+dropped_iterations (count) <- N_drop (slot bị drop)
+vus (max)                  <- M_peak (số VU bận cao nhất)
+vus_max                    <- preAllocated (instance đã init)
+http_reqs (count)          <- nếu code có HTTP, ÷ N_done = req per iter
+```
+
+**Khi nào đọc**: sau khi test xong, để đánh giá kết quả.
+
+#### Nhóm 3: Progress/footer (ngay trước summary)
+
+```text
+running (07.6s), 0/6 VUs, 18 complete and 2 interrupted iterations
+```
+
+Đọc các con số:
+
+```text
+"07.6s"                          <- T_run (thời gian thực tế chạy)
+"0/6 VUs"                        <- VU đang bận / tổng VU init
+"18 complete"                    <- N_done (khớp với summary)
+"2 interrupted iterations"       <- N_int (KHÔNG có metric Counter riêng)
+```
+
+**Lưu ý**: `N_int` chỉ xuất hiện ở đây, không có trong summary. Phải đọc
+dòng progress cuối cùng.
+
+### 6.7. Quy trình 5 bước phân tích output
+
+Sau khi có đủ số liệu từ 6.6, làm 5 bước theo thứ tự:
+
+#### Bước 1: Verify config có chạy đúng không
+
+```text
+Câu hỏi: λ_peak header có khớp với config?
+
+Header in:    "Up to 4.00 iterations/s"
+Config có:    startRate=0, max stage.target=4, timeUnit=1s
+              -> λ_peak = 4 / 1 = 4 iter/s ✓
+
+Nếu khớp -> config OK, đi tiếp Bước 2
+Nếu lệch -> kiểm tra timeUnit, parse error, hoặc shortcut bị derive sai
+```
+
+#### Bước 2: Tính N_sched (số slot dự kiến)
+
+Áp Công thức 3 cho từng stage rồi cộng lại:
+
+```text
+config 3 stage: 0->4/s trong 2s, hold 4 trong 3s, 4->0 trong 2s
+
+stage 0: 2 × (0+4)/2 = 4 slot
+stage 1: 3 × (4+4)/2 = 12 slot
+stage 2: 2 × (4+0)/2 = 4 slot
+                       ----------
+                       N_sched = 20 slot
+```
+
+#### Bước 3: So với N_done (đã hoàn thành)
+
+```text
+Summary cho:  iterations = 18
+
+So sánh:
+  N_done / N_sched = 18 / 20 = 90%
+  -> hệ thống chịu được 90% rate target
+
+Phân loại:
+  >= 99%     : test "hoàn hảo"
+  95-99%     : nhỏ giọt drop ở biên slot, OK
+  80-95%     : có vấn đề, kiểm tra Bước 4
+  < 80%      : sizing sai nghiêm trọng
+```
+
+#### Bước 4: Tách rõ drop vs interrupt
+
+```text
+Summary cho:  dropped_iterations = 2
+Footer cho:   interrupted = 0
+
+Verify cộng số:
+  N_done + N_drop + N_int = 18 + 2 + 0 = 20 = N_sched ✓
+
+Diagnose:
+  N_drop > 0  -> sizing VU thiếu
+                  -> tăng preAllocatedVUs (xem 6.3)
+  N_int > 0   -> code chậm hơn dự kiến
+                  -> tăng gracefulStop hoặc giảm rate
+```
+
+#### Bước 5: Tính capacity thực tế từ output
+
+Đây là bước **suy ngược công thức** từ output để biết hệ thống thật sự
+chịu được rate cao nhất bao nhiêu.
+
+```text
+Đo W từ summary:
+  iteration_duration avg = 505ms = 0.505s
+
+Đo M_peak từ summary:
+  vus max = 4
+
+Tính capacity thực tế:
+  C_thực = M_peak / W
+        = 4 / 0.505
+        ≈ 7.92 iter/s
+
+So với rate config:
+  λ_peak config = 4 iter/s
+  C_thực = 7.92 iter/s
+  
+  -> hệ thống dư sức (gấp đôi rate config)
+  -> có thể tăng λ_peak lên 7-8 iter/s mà không drop
+```
