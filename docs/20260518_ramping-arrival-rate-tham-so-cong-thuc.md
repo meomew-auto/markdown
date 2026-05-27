@@ -4693,6 +4693,24 @@ scheduled_slots = duration × (rate_đầu + rate_cuối) / 2
 **Tiếng Việt**: "Tổng slot = thời gian stage × rate trung bình của
 stage (trung bình rate đầu và rate cuối)"
 
+**Đây là công thức diện tích hình thang** đã thấy ở Section 3.1
+(`scheduled_iterations_i = d_i × (λ_prev + λ_next) / 2`).
+Cả 2 công thức GIỐNG NHAU, chỉ khác cách viết:
+
+```text
+Section 3.1 (technical):
+  scheduled_iterations_i = d_i × (λ_prev + λ_next) / 2
+
+Section 6.1 (beginner):
+  scheduled_slots = duration × (rate_đầu + rate_cuối) / 2
+
+Cùng nội dung:
+  d_i                    ≡ duration
+  λ_prev                 ≡ rate_đầu
+  λ_next                 ≡ rate_cuối
+  scheduled_iterations_i ≡ scheduled_slots
+```
+
 **Trước hết — "lượt start" / "slot" là gì?**
 
 Trong open model, scheduler hoạt động như **người bấm chuông gọi món**:
