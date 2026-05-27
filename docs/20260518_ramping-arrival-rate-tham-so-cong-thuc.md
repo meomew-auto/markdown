@@ -4693,6 +4693,51 @@ scheduled_slots = duration × (rate_đầu + rate_cuối) / 2
 **Tiếng Việt**: "Tổng slot = thời gian stage × rate trung bình của
 stage (trung bình rate đầu và rate cuối)"
 
+**Trước hết — "lượt start" / "slot" là gì?**
+
+Trong open model, scheduler hoạt động như **người bấm chuông gọi món**:
+
+```text
+Cứ mỗi slot_interval, scheduler "bấm chuông" 1 lần
+mỗi tiếng chuông = 1 LƯỢT START = 1 SLOT
+nghe chuông xong, có VU rảnh thì VU đó nhận order, bắt đầu chạy iter
+nếu không có VU rảnh -> drop slot đó (chuông kêu vô ích)
+```
+
+Đời thường: nếu rate=10 khách/phút thì cứ 6 giây cửa quán "đẩy 1 khách
+vào". Mỗi lần đẩy = 1 lượt start. Khách có vào ngồi ăn được hay không
+phụ thuộc có chỗ trống không, nhưng "lượt đẩy khách" thì cứ đều đặn.
+
+```text
+Lưu ý: 1 SLOT (lượt start) ≠ 1 ITER (lượt hoàn thành)
+  - Slot là LỊCH gọi, do scheduler quyết định
+  - Iter là VIỆC ĐÃ XONG, do VU thực sự chạy
+
+Quan hệ:
+  iter_hoàn_thành (N_done) ≤ slot_dự_kiến (N_sched)
+  Phần thiếu = slot bị drop hoặc iter bị interrupt
+```
+
+**Vì sao cần đếm slot trước khi chạy?**
+
+3 lý do thực tế:
+
+```text
+1. ƯỚC LƯỢNG TẢI HỆ THỐNG SẼ CHỊU
+   vd: scheduled_total = 1000 slot, mỗi slot 2 HTTP request
+       -> hệ thống sẽ nhận 2000 request
+       -> để biết DB, cache, log có chứa nổi không
+
+2. TÍNH CHI PHÍ TEST (khi chạy trên cloud)
+   vd: k6 cloud tính tiền theo VUh + iter count
+       -> biết trước scheduled_total để dự trù budget
+
+3. ĐỐI CHIẾU SAU TEST (kiểm tra hệ thống có "chịu" được không)
+   vd: scheduled = 1000, completed = 850
+       -> drop 15%, sizing thiếu hoặc server chậm
+       -> không có scheduled thì không biết đáng lẽ là 1000
+```
+
 **Vì sao là trung bình?** Vì rate ramp **đường thẳng** (tuyến tính):
 giữa stage rate là trung bình của 2 đầu.
 
@@ -4703,6 +4748,21 @@ stage: duration=2s, ramp 2/s -> 4/s
 rate trung bình = (2 + 4) / 2 = 3 iter/giây
 tổng slot = 2 × 3 = 6 lượt start
 ```
+
+Diễn giải: trong 2 giây này, scheduler "bấm chuông" 6 lần. Phân bố không
+đều (đầu thưa, cuối dày), nhưng tổng vẫn là 6:
+
+```text
+slot 1: ~ t=0.4s   (rate ~2.4/s, gap ~0.4s)
+slot 2: ~ t=0.8s   (rate ~2.8/s, gap ~0.36s)
+slot 3: ~ t=1.1s   (rate ~3.1/s, gap ~0.32s)
+slot 4: ~ t=1.4s   (rate ~3.4/s, gap ~0.29s)
+slot 5: ~ t=1.7s   (rate ~3.7/s, gap ~0.27s)
+slot 6: ~ t=1.95s  (rate ~3.95/s, gap ~0.25s)
+```
+
+→ Đầu stage chuông kêu thưa (0.4s/lần), cuối stage chuông kêu nhặt
+(0.25s/lần), tổng vẫn 6 lượt.
 
 **Khi nào dùng**: ước lượng số iter scenario sẽ có (trước khi chạy),
 hoặc đối chiếu với `iterations` trong summary sau test.
