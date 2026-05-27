@@ -5431,8 +5431,21 @@ t=9.0s     |  2    |  --  | Hết stage 2 (rate=0, không slot)
 
 #### Stage interval — mốc chuyển giữa các stage
 
-"Stage interval" = thời điểm trên timeline mà 1 stage kết thúc và stage
-kế tiếp bắt đầu. Tính bằng cách **cộng dồn duration** của các stage trước.
+Phần trước đã có **slot_interval** (= khoảng cách giữa 2 slot, đo bằng
+ms). Phần này có **stage interval** (= mốc chuyển stage trên timeline,
+đo bằng giây) — đừng nhầm 2 khái niệm này.
+
+```text
+slot_interval  = gap giữa 2 SLOT liên tiếp     (đo theo ms, ngắn)
+                 do rate quyết định (1/rate)
+                 vd: 100ms, 250ms
+
+stage interval = thời điểm 1 STAGE chuyển sang stage kế tiếp
+                 do duration quyết định (cộng dồn)
+                 vd: t=2s, t=7s, t=9s
+```
+
+"Stage interval" tính bằng cách **cộng dồn duration** của các stage trước.
 
 **Áp dụng vào config 3 stage**:
 
@@ -5448,6 +5461,24 @@ Mốc chuyển stage (cộng dồn duration):
   stage 2: t=7s   →  t=9s    (duration 2s, mốc end = 7 + 2)
 
 Tổng T = 2 + 5 + 2 = 9s
+```
+
+**Quan hệ giữa stage interval và slot interval tại biên**:
+
+```text
+Tại biên t=2s (stage 0 -> stage 1):
+  Cuối stage 0:    rate = 10/s -> slot_interval = 100ms
+  Đầu stage 1:     rate = 10/s -> slot_interval = 100ms
+  => slot_interval CÙNG GIÁ TRỊ ở 2 bên biên (nối liên tục)
+
+Tại biên t=7s (stage 1 -> stage 2):
+  Cuối stage 1:    rate = 4/s  -> slot_interval = 250ms
+  Đầu stage 2:     rate = 4/s  -> slot_interval = 250ms
+  => slot_interval CÙNG GIÁ TRỊ ở 2 bên biên
+
+=> Stage chuyển KHÔNG làm slot_interval "nhảy bậc"
+=> Người đọc log không thể biết chính xác lúc nào stage chuyển
+   chỉ qua mật độ slot — phải nhìn timeline tổng
 ```
 
 **Tại biên stage, rate có "nhảy bậc" không?**
