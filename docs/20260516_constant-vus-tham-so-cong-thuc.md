@@ -2942,6 +2942,17 @@ data), hoặc check log xem có VU nào tụt hậu so với expected.
 
 ### 9.2. Bảng tra nhanh: gặp tình huống nào, dùng công thức nào
 
+4 tình huống hay gặp, mỗi tình huống dùng công thức nào:
+
+```text
+| Tình huống                              | Công thức chính | Phụ trợ |
+| --------------------------------------- | --------------- | ------- |
+| 1. Sắp viết config, sizing VU           | CT 1 đảo        | CT 3    |
+| 2. Đã có target throughput, cần bao nhiêu VU | CT 1 đảo   | -       |
+| 3. Đã có sẵn N VU, hỏi throughput được bao nhiêu | CT 1   | CT 3    |
+| 4. Đã chạy xong, đọc summary            | CT 5            | CT 3    |
+```
+
 #### Tình huống 1: "Sắp viết config, không biết đặt số bao nhiêu"
 
 ```text
@@ -3168,7 +3179,26 @@ Học thuộc 3 dòng này là dùng được 80% nhu cầu thực tế với `c
 
 ### 9.6. Đọc output sau test: tìm số ở đâu?
 
-Sau `k6 run`, output có 3 nhóm số liệu cần đọc.
+Sau `k6 run`, output có 3 nhóm số liệu cần đọc. Phải biết tìm từng con
+số ở đâu để **áp vào đúng công thức** đã học ở 9.1.
+
+**Bảng mapping nhanh: số ở đâu → dùng cho công thức nào**:
+
+```text
+| Số liệu                  | Đọc ở đâu                   | Dùng cho công thức |
+| ------------------------ | --------------------------- | ------------------ |
+| vus (config)             | Header "X looping VUs"      | CT 1, 3 (verify)   |
+| duration                 | Header "for Xs"             | CT 3, 4 (verify)   |
+| max_wall_time            | Header "max duration"       | CT 4 (verify)      |
+| W (iter_time)            | Summary iteration_duration  | CT 1, 2, 3, 5      |
+| N_done                   | Summary iterations count    | CT 5 (verify)      |
+| actual_rate              | Summary iterations rate     | CT 1 verify (peak) |
+| M (vus min/max)          | Summary vus                 | CT 1 verify        |
+| T_run                    | Footer "running (X.Xs)"     | CT 5 (mẫu số)      |
+| N_int                    | Footer "X interrupted"      | CT 5 (verify)      |
+```
+
+Lưu ý: `constant-vus` KHÔNG có `dropped_iterations` (closed model).
 
 #### Nhóm 1: Header (đầu test)
 
@@ -3228,7 +3258,20 @@ running (10.0s), 0/5 VUs, 100 complete and 0 interrupted iterations
 
 ### 9.7. Quy trình 5 bước phân tích output
 
-Sau khi có đủ số liệu từ 9.6, làm 5 bước theo thứ tự.
+Sau khi có đủ số liệu từ 9.6, làm 5 bước theo thứ tự. Mỗi bước **dùng
+đúng 1 công thức từ 9.1**.
+
+**Bảng mapping nhanh: Bước → Công thức → Số liệu cần**:
+
+```text
+| Bước | Công thức dùng       | Input cần              | Output                |
+|------|----------------------|------------------------|-----------------------|
+| 1    | CT verify            | Header + config        | Verify config OK      |
+| 2    | CT 3 (total)         | vus, duration, W       | total dự kiến         |
+| 3    | CT 5 (so N_done)     | N_done từ summary      | Tỷ lệ N_done/total    |
+| 4    | CT 5 (interrupt)     | N_int từ footer        | Diagnose interrupted  |
+| 5    | CT 1 đảo (suy ngược) | actual_rate + W        | Verify peak thực tế   |
+```
 
 #### Output mẫu để phân tích (dùng xuyên suốt 5 bước)
 
@@ -3272,7 +3315,7 @@ running (10.0s), 0/2 VUs, 40 complete and 0 interrupted iterations
 
 Áp 5 bước dưới đây vào đúng output này.
 
-#### Bước 1: Verify config có chạy đúng không
+#### Bước 1: Verify config có chạy đúng không [verify Header]
 
 ```text
 Câu hỏi: header có khớp với config?
@@ -3292,7 +3335,7 @@ Config có:    vus = 2 (constant-vus init đúng vus VU) ✓
 KẾT LUẬN: config đã parse đúng -> sang Bước 2
 ```
 
-#### Bước 2: Tính total ước lượng
+#### Bước 2: Tính total ước lượng [dùng CT 3]
 
 Áp Công thức 3 với iter_time chưa biết, dùng `sleep(0.5)` ≈ 0.5s:
 
@@ -3302,7 +3345,7 @@ total ≈ vus × duration / iter_time
      = 40 iter
 ```
 
-#### Bước 3: So với N_done (đã hoàn thành)
+#### Bước 3: So với N_done (đã hoàn thành) [dùng CT 5: ratio]
 
 ```text
 Summary cho:  iterations = 40

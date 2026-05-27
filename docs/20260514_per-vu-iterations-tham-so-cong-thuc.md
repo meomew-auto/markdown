@@ -3787,104 +3787,250 @@ CT 5 = T_max + grace -> test chạy trọn, có thể có interrupted ở grace
 
 ### 8.2. Bảng tra nhanh: gặp tình huống nào, dùng công thức nào
 
+5 tình huống hay gặp với `per-vu-iterations`, mỗi tình huống dùng công
+thức nào:
+
+```text
+| Tình huống                                | Công thức chính | Phụ trợ      |
+| ----------------------------------------- | --------------- | ------------ |
+| 1. Sắp viết config, sizing iter mỗi VU    | CT 1, 2         | CT 3 verify  |
+| 2. Có sẵn N VU, hỏi total iter chịu được  | CT 1 (đảo)      | CT 3, 5      |
+| 3. Muốn biết VU nào chậm nhất kéo scenario| CT 2, 3         | -            |
+| 4. Thiết kế ngược từ T_max mong muốn      | CT 2, 3         | CT 5         |
+| 5. Đã chạy xong, đọc summary              | CT 5            | CT 1, 3 verify |
+```
+
 #### Tình huống 1: "Sắp viết config, không biết đặt số bao nhiêu"
 
 ```text
-Bước 1: Quyết định total_iter cần
-   total = số test case × số user
-   vd: 50 test case × 4 user = 200
+Bước 1: Quyết định total_iter cần                          [Công thức 1]
+   total_iter = số_user × số_test_case_mỗi_user
+   vd: 4 user × 50 test case = 200
 
-Bước 2: Phân chia
-   vus = 4 (số user)
-   iterations = total / vus = 200 / 4 = 50
+Bước 2: Phân chia (per-vu mapping)                         [Công thức 1]
+   vus = số_user = 4
+   iterations = số_test_case_mỗi_user = 50
+   verify: vus × iterations = 4 × 50 = 200 ✓
 
-Bước 3: Ước lượng T_max
-   T_max ≈ iterations × iter_time
-       ≈ 50 × 0.5s = 25s
+Bước 3: Đo iter_time (chạy thử 1 VU, xem iteration_duration)
+   W = iter_time = 0.5s (giả sử)
 
-Bước 4: Đặt maxDuration
-   maxDuration >= T_max + buffer
-   vd: maxDuration = "1m" (60s, dư cho VU chậm)
+Bước 4: Ước lượng T_max                                    [Công thức 2 + 3]
+   T_vu_i ≈ iterations × iter_time = 50 × 0.5 = 25s
+   T_max ≈ T_vu_i (giả định các VU iter_time gần nhau)
+   T_max ≈ 25s
+
+Bước 5: Đặt maxDuration                                    [Công thức 5]
+   maxDuration >= T_max × 1.2 (buffer cho VU chậm)
+                = 25 × 1.2 = 30s
+   vd: maxDuration = "1m" (60s, rất dư)
 ```
 
-#### Tình huống 2: "Cần test bao nhiêu test case mỗi user?"
+#### Tình huống 2: "Đã có sẵn N VU, hỏi total iter chịu được trong T phút?"
+
+Câu hỏi điển hình: "Có 10 VU, muốn test trong 5 phút, đặt iterations
+bao nhiêu để vừa thời lượng?"
 
 ```text
-Đây là use case ĐIỂN HÌNH của per-vu-iterations:
-  - Mỗi user thực hiện scenarios riêng (login, browse, checkout)
-  - 1 user = 1 VU
-  - mỗi user làm N test cases = iterations = N
+Bước 1: Đo iter_time
+   W = 0.5s (chạy thử)
 
-Ví dụ:
-  - 10 user, mỗi user kiểm tra 20 sản phẩm
-  -> vus=10, iterations=20, total=200 lượt kiểm tra
+Bước 2: Tính iterations tối đa mỗi VU                      [Công thức 2 đảo]
+   T_max <= maxDuration
+   iterations × iter_time <= maxDuration
+   iterations <= maxDuration / iter_time
+              = (5 × 60) / 0.5 = 600
+
+Bước 3: Áp buffer (đề phòng VU chậm)
+   iterations_an_toàn = floor(600 × 0.83) ≈ 500
+   (chừa 17% buffer = 1.2 nghịch đảo)
+
+Bước 4: Tính total_iter                                    [Công thức 1]
+   total_iter = vus × iterations = 10 × 500 = 5000 iter
+
+Bước 5: Verify peak_rate                                   [Công thức 4]
+   peak_rate ≈ vus / iter_time = 10 / 0.5 = 20 iter/s
+   -> server có chịu được 20/s không? Nếu không, giảm iterations.
 ```
 
-#### Tình huống 3: "Đã chạy xong, đọc summary"
+#### Tình huống 3: "Muốn biết VU nào chậm nhất kéo scenario"
+
+Câu hỏi: "Sau test thấy `running 8s` mà tính trung bình chỉ 5s, vì
+sao?"
 
 ```text
-3 con số quan trọng:
-   iterations (count)  = N_done   (iter hoàn thành)
-   dropped_iterations  = N_drop   (iter bị cắt do maxDuration)
-   interrupted (footer) = N_int   (iter đang chạy thì grace hết)
+Bước 1: Đo iter_time TRUNG BÌNH (avg) và CỰC ĐẠI (max)
+   avg = 0.5s (Summary iteration_duration avg)
+   max = 0.8s (Summary iteration_duration max)
 
-3 câu hỏi:
-   1) N_done == total_iter?     -> hoàn hảo
-   2) N_done < total_iter?       -> bị cắt bớt, kiểm tra dropped
-   3) Có interrupt cuối?          -> tăng gracefulStop
+Bước 2: Tính T_vu_avg và T_vu_max                          [Công thức 2]
+   T_vu_avg = iterations × avg = 10 × 0.5 = 5s
+   T_vu_max = iterations × max = 10 × 0.8 = 8s
+
+Bước 3: T_max thực tế = T_vu của VU CHẬM NHẤT             [Công thức 3]
+   T_max = max(T_vu_i) ≈ T_vu_max = 8s
+   (Khớp với footer "running 8s")
+
+Bước 4: Tính tỷ lệ IDLE
+   T_idle_avg = T_max - T_vu_avg = 8 - 5 = 3s
+   -> VU trung bình ngồi không 3s (= 37.5% thời gian)
+   -> Đây là cost của closed model với jitter cao.
+
+Bước 5: Quyết định
+   Nếu IDLE chấp nhận được -> giữ per-vu-iterations
+   Nếu muốn giảm IDLE      -> chuyển sang shared-iterations
+                              (VU nhanh "lấy việc" của VU chậm)
+```
+
+#### Tình huống 4: "Thiết kế ngược từ T_max mong muốn"
+
+Câu hỏi: "Muốn test chạy đúng 1 phút, đặt iterations bao nhiêu?"
+
+```text
+Bước 1: Đo iter_time (chạy thử)
+   W = 0.5s
+
+Bước 2: Tính iterations từ T_max target                    [Công thức 2 đảo]
+   T_max = 60s (target)
+   iterations = T_max / iter_time = 60 / 0.5 = 120
+
+Bước 3: Trừ buffer cho jitter
+   iterations_an_toàn = 120 / 1.2 = 100
+   (T_vu_avg = 50s, để VU chậm nhất xong trong 60s)
+
+Bước 4: Tính total_iter dự kiến                            [Công thức 1]
+   total_iter = vus × iterations
+   vd vus=5: total = 5 × 100 = 500 iter
+
+Bước 5: Đặt maxDuration đủ dư                              [Công thức 5]
+   maxDuration = T_max × 1.2 = 60 × 1.2 = 72s
+   vd: maxDuration = "1m20s"
+```
+
+#### Tình huống 5: "Đã chạy xong, đọc summary"
+
+```text
+Bước 1: Đọc 3 con số từ Summary + Footer
+   N_done = iterations count            (Summary)
+   N_drop = dropped_iterations           (Summary)
+   N_int  = "X interrupted iterations"   (Footer)
+
+Bước 2: Tính total_iter dự kiến                            [Công thức 1]
+   total_iter = vus × iterations (config)
+
+Bước 3: Verify quan hệ                                     [Công thức 5]
+   N_done + N_drop + N_int = total_iter (chính xác trong closed model)
+
+Bước 4: 3 câu hỏi diagnose
+   1) N_done == total_iter?           -> hoàn hảo, dừng
+   2) N_drop > 0?                     -> maxDuration ngắn (CT 5)
+                                          → tăng maxDuration hoặc giảm
+                                            iterations
+   3) N_int > 0?                      -> grace ngắn (CT 5)
+                                          → tăng gracefulStop
+
+Bước 5: So actual_rate với peak_rate                       [Công thức 4]
+   actual_rate = N_done / T_run (footer "running X.Xs")
+   peak_rate   = vus / iter_time (CT 4)
+   actual_rate / peak_rate gần 100% -> không có VU IDLE đáng kể
+   actual_rate << peak_rate         -> VU jitter cao, có IDLE nhiều
 ```
 
 ### 8.3. Hành động khi gặp vấn đề
 
 #### "Có dropped_iterations!"
 
-Nguyên nhân: `maxDuration` quá ngắn so với `T_max` thực tế.
+Nguyên nhân: `maxDuration` quá ngắn so với `T_max` thực tế (CT 5: scenario
+bị cắt trước khi VU chậm nhất xong).
 
 ```text
-1. (DỄ NHẤT) Tăng maxDuration
+1. (DỄ NHẤT) Tăng maxDuration                              [verify CT 5]
    -> Cho VU đủ thời gian chạy hết iterations
    -> vd: từ "30s" lên "1m"
+   -> Verify: maxDuration > T_max + buffer 20%
 
-2. Giảm iterations
-   -> Mỗi VU chạy ít iter hơn
-   -> Total giảm theo, nhưng đảm bảo xong trong maxDuration
+2. Giảm iterations                                         [verify CT 1, 2]
+   -> Mỗi VU chạy ít iter hơn, T_vu_i giảm theo
+   -> Total iter (CT 1) cũng giảm theo
+   -> Tính lại T_max = iterations_mới × iter_time
 
-3. Tối ưu code (giảm iter_time)
+3. Tối ưu code (giảm iter_time)                            [verify CT 2]
    -> Bỏ sleep dư, giảm số HTTP request
+   -> T_vu_i = iterations × iter_time_mới (CT 2) -> nhỏ đi
+
+4. Tăng vus, giữ iterations                                [verify CT 1]
+   -> Đây là CÁCH SAI nếu mục đích chỉ là né drop
+   -> Tăng vus chỉ tăng peak_rate (CT 4), KHÔNG giảm T_max
+   -> Vì T_vu_i không phụ thuộc vus (mỗi VU chạy độc lập)
+   -> total_iter SẼ TĂNG (vus × iterations) -> không phải fix tốt
 ```
 
-#### "VU chậm kéo dài scenario"
+#### "VU chậm kéo dài scenario" (T_max lớn hơn dự kiến)
 
-Đây là behavior bình thường của closed model. Nếu khó chịu:
+Đây là behavior bình thường của closed model: scenario PHẢI đợi VU chậm
+nhất xong (CT 3: `T_max = max(T_vu_i)`). Nếu khó chịu vì IDLE time:
 
 ```text
-1. Cho phép sớm dừng: dùng shared-iterations thay thế
-   -> VU nhanh sẽ "lấy việc" của VU chậm
-   -> shared-iterations chia chung thay vì đếm riêng từng VU
+1. Chuyển sang shared-iterations (FIX TRIỆT ĐỂ)            [thay đổi CT 1]
+   -> per-vu-iterations: total_iter = vus × iterations (CT 1)
+                          T_max = max(T_vu_i)            (CT 3)
+   -> shared-iterations: total_iter = iterations         (1 con số)
+                          VU nhanh "lấy việc" của VU chậm
+                          -> không có IDLE time
 
-2. Giảm iterations
-   -> VU chậm cũng xong nhanh hơn
+2. Giảm iterations                                         [verify CT 2]
+   -> VU chậm cũng xong nhanh hơn -> T_max nhỏ đi
 
-3. Tối ưu code
+3. Tối ưu code (giảm jitter iter_time)                     [verify CT 2]
+   -> Sleep ngẫu nhiên thay vì cố định -> giảm worst-case
+   -> Cache token/connection -> latency ổn định hơn
+
+4. Chấp nhận IDLE                                          [-]
+   -> Đây là "giá phải trả" để đảm bảo MỖI VU chạy đúng N iter
+   -> Use case: mỗi user N test case, không thể chia chung
 ```
 
 #### "Có interrupted iterations cuối"
 
-```text
-1. Tăng gracefulStop
-   -> Cho iter đang chạy cuối thêm thời gian
-   -> Default 30s, có thể tăng lên "1m"
+Nguyên nhân: iter cuối VU đang chạy thì grace hết (CT 5: cuối T_total_max
+rơi vào giữa iter).
 
-2. Đảm bảo iter_time < maxDuration / iterations
-   -> Iter cuối kịp xong trước maxDuration
+```text
+1. (DỄ NHẤT) Tăng gracefulStop                             [verify CT 5]
+   -> Default 30s, có thể tăng lên "1m" hoặc "2m"
+   -> Iter đang chạy có thêm thời gian xong sạch
+
+2. Đảm bảo iter_time × iterations < maxDuration            [verify CT 2 + 5]
+   -> Tức là T_vu_i < maxDuration
+   -> Iter cuối kịp xong trước maxDuration, không cần grace
+
+3. Tối ưu iter cuối                                        [verify CT 2]
+   -> iter_time nhỏ hơn -> iter cuối xong nhanh hơn
+   -> Đặc biệt quan trọng nếu iter có HTTP timeout dài
 ```
 
-#### "Tăng throughput trong cùng thời gian"
+#### "Tăng throughput đỉnh trong cùng iter_time"
+
+Câu hỏi: "Đang có peak=10/s, muốn lên 20/s. Đổi config gì?"
 
 ```text
-Tăng vus -> peak_rate tăng theo
-   -> Mỗi VU vẫn chạy đủ N iter, không phụ thuộc VU khác
-   -> Khác shared-iterations: shared chia chung, tăng VU không tăng total
+1. (CHỦ ĐẠO) Tăng vus                                      [áp CT 4]
+   -> peak_rate = vus / iter_time (CT 4)
+   -> Để peak=20/s, iter_time=0.5s -> vus = 10
+   -> Tăng vus 2x -> peak_rate 2x
+
+2. Giảm iter_time                                          [áp CT 4]
+   -> peak_rate = vus / iter_time
+   -> vus=5, iter_time=0.25s -> peak=20/s
+   -> Tối ưu code, bỏ sleep dư
+
+3. KHÁC shared-iterations                                  [-]
+   -> per-vu-iterations: tăng vus -> total_iter TĂNG (vus × iter)
+                          mỗi VU vẫn chạy đủ N iter
+                          peak_rate tăng theo
+   -> shared-iterations: tăng vus -> total_iter KHÔNG ĐỔI
+                          chỉ chia nhỏ iter cho nhiều VU hơn
+                          peak_rate tăng tới giới hạn iterations / iter_time
 ```
 
 ### 8.4. Bảng từ vựng: ký hiệu nào nghĩa là gì?
@@ -3907,18 +4053,40 @@ Tăng vus -> peak_rate tăng theo
 ### 8.5. 3 công thức "1 dòng" để giải mọi case (nhớ vĩnh viễn)
 
 ```text
-Tổng iter?           total = vus × iterations
-Hết bao lâu?         T ≈ iterations × iter_time   (VU chậm nhất)
-Throughput đỉnh?     peak ≈ vus / iter_time
+Tổng việc?         total iter = số VU × số iter mỗi VU
+Hết bao lâu?       thời gian ≈ số iter × thời gian 1 iter (VU chậm nhất)
+Throughput đỉnh?   tốc độ đỉnh ≈ số VU / thời gian 1 iter
 ```
 
-Học thuộc 3 dòng này là dùng được 80% nhu cầu thực tế.
+Học thuộc 3 dòng này là dùng được 80% nhu cầu thực tế. KHÁC
+shared-iterations: ở đó "tổng việc" = `iterations` (1 con số chia chung),
+không phải phép nhân.
 
 ### 8.6. Đọc output sau test: tìm số ở đâu?
 
-Sau `k6 run`, output có 3 nhóm số liệu.
+Sau khi `k6 run` xong, output có 3 nhóm số liệu. Phải biết tìm từng con
+số ở đâu để **áp vào đúng công thức** đã học ở 8.1.
 
-#### Nhóm 1: Header (đầu test)
+**Bảng mapping nhanh: số ở đâu → dùng cho công thức nào**:
+
+```text
+| Số liệu                    | Đọc ở đâu                     | Dùng cho công thức |
+| -------------------------- | ----------------------------- | ------------------ |
+| vus                        | Header "X max VUs"            | CT 1, 4 (verify)   |
+| iterations (mỗi VU)        | Header "N iterations for each"| CT 1, 2 (verify)   |
+| total_iter dự kiến         | (tính: vus × iterations)      | CT 1               |
+| maxDuration                | Header "(maxDuration: ...)"   | CT 5 (verify)      |
+| gracefulStop               | Header "(gracefulStop: ...)"  | CT 5 (verify)      |
+| W (iter_time avg)          | Summary iteration_duration avg| CT 2, 4 (sizing)   |
+| W (iter_time max)          | Summary iteration_duration max| CT 2, 3 (worst-case)|
+| N_done                     | Summary iterations count      | CT 5 (verify total)|
+| N_drop                     | Summary dropped_iterations    | CT 5 (verify total)|
+| actual_rate                | Summary iterations rate (X/s) | CT 4 (so peak)     |
+| T_run                      | Footer "running (X.Xs)"       | CT 3 (T_max thực)  |
+| N_int                      | Footer "X interrupted"        | CT 5 (verify total)|
+```
+
+#### Nhóm 1: Header (in ra ngay đầu test)
 
 ```text
 scenarios: (100.00%) 1 scenario, 3 max VUs, 40s max duration (incl. graceful stop):
@@ -3928,13 +4096,20 @@ scenarios: (100.00%) 1 scenario, 3 max VUs, 40s max duration (incl. graceful sto
 Đọc các con số:
 
 ```text
-"3 max VUs"               <- vus
-"40s max duration"        <- maxDuration + gracefulStop
-"5 iterations for each"    <- iterations (mỗi VU)
-"of 3 VUs"                <- vus
+| Output                          | Biến         | Dùng để                              |
+|---------------------------------|--------------|--------------------------------------|
+| "3 max VUs"                     | vus          | INPUT cho CT 1 (total_iter), CT 4    |
+| "40s max duration"              | T_total_max  | verify CT 5 = maxDuration + grace    |
+| "5 iterations for each"         | iterations   | INPUT cho CT 1 (total), CT 2 (T_vu)  |
+| "of 3 VUs"                      | vus          | trùng với "3 max VUs", verify config |
+| "(maxDuration: 10s)"            | maxDuration  | INPUT cho CT 5 (so với T_max)        |
+| "(gracefulStop: 30s)"           | gracefulStop | INPUT cho CT 5 (cộng vào T_total_max)|
 ```
 
-#### Nhóm 2: Summary cuối test
+**Khi nào đọc**: ngay đầu để verify config đã parse đúng. Đây là input
+cho CT 1, 5 (chuẩn bị tính total_iter và T_total_max).
+
+#### Nhóm 2: Summary cuối test (block "TOTAL RESULTS")
 
 ```text
 EXECUTION
@@ -3948,14 +4123,27 @@ vus_max..............: 3     min=3  max=3
 Đọc các con số:
 
 ```text
-iteration_duration avg     <- iter_time thực tế
-iterations (count)         <- N_done
-iterations (rate)          <- actual_rate
-dropped_iterations         <- N_drop (iter chưa kịp xong khi maxDuration)
-vus                        <- VU active (= preAllocated với per-vu)
+| Output                  | Biến         | Dùng để                              |
+|-------------------------|--------------|--------------------------------------|
+| iteration_duration avg  | W (avg)      | INPUT CT 2 (T_vu_avg), CT 4 (peak)   |
+| iteration_duration max  | W (max)      | INPUT CT 2, 3 (T_vu của VU chậm nhất)|
+| iterations (count)      | N_done       | OUTPUT CT 5 (verify với total_iter)  |
+| iterations (rate)       | actual_rate  | OUTPUT CT 4 (so với peak_rate)       |
+| dropped_iterations      | N_drop       | OUTPUT CT 5 (iter bị cắt)            |
+| vus (max)               | M_active     | verify = vus config (per-vu pin VU)  |
+| vus_max                 | preAllocated | verify pool init đúng config         |
 ```
 
-#### Nhóm 3: Progress/footer
+**Khi nào đọc**: sau test xong, áp công thức ngược:
+
+```text
+- W từ Summary -> verify Bước 2 (T_vu_i = iterations × W)
+- N_done so với total_iter (CT 1) -> tính tỷ lệ thành công (CT 5)
+- W max / W avg cao hơn 1.5x -> báo VU jitter cao -> IDLE nhiều
+- N_drop > 0 -> maxDuration ngắn -> tăng (xem 8.3)
+```
+
+#### Nhóm 3: Progress/footer (ngay trước summary)
 
 ```text
 running (10.0s), 0/3 VUs, 15 complete and 0 interrupted iterations
@@ -3964,9 +4152,30 @@ running (10.0s), 0/3 VUs, 15 complete and 0 interrupted iterations
 Đọc các con số:
 
 ```text
-"10.0s"                       <- T_run thực tế
-"15 complete"                 <- N_done
-"0 interrupted iterations"    <- N_int
+| Output                      | Biến      | Dùng để                          |
+|-----------------------------|-----------|----------------------------------|
+| "10.0s"                     | T_run     | OUTPUT CT 3 (T_max thực tế)      |
+| "0/3 VUs"                   | -         | snapshot lúc test xong (cosmetic)|
+| "15 complete"               | N_done    | trùng với Summary, dùng CT 5     |
+| "0 interrupted iterations"  | N_int     | OUTPUT CT 5 (iter bị cancel)     |
+```
+
+**Lưu ý**: `N_int` CHỈ xuất hiện ở footer, KHÔNG có metric Counter riêng
+trong Summary. Phải đọc dòng progress cuối cùng.
+
+**Tổng hợp luồng đọc số → áp công thức**:
+
+```text
+Header   -> vus, iterations, maxDuration, gracefulStop  [INPUT cho CT 1, 5]
+Summary  -> W (avg/max), N_done, N_drop, actual_rate    [OUTPUT cho CT 1, 2, 4, 5]
+Footer   -> T_run, N_int                                [OUTPUT cho CT 3, 5]
+
+Áp công thức theo thứ tự:
+   CT 1: total_iter = vus × iterations (từ Header)
+   CT 2: T_vu_avg = iterations × W_avg, T_vu_max = iterations × W_max
+   CT 3: T_max ≈ T_vu_max ≈ T_run (footer)
+   CT 4: peak_rate = vus / W_avg, so với actual_rate (Summary)
+   CT 5: N_done + N_drop + N_int = total_iter (kiểm tra đẳng thức)
 ```
 
 ### 8.7. Quy trình 5 bước phân tích output
