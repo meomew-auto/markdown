@@ -4762,7 +4762,24 @@ Cách tính 6s từ rate=10 khách/phút:
   - rate=10/phút  -> slot_interval = 60s / 10 = 6 giây
   - rate=10/giây  -> slot_interval = 1s / 10  = 0.1 giây = 100ms
   - rate=100/giây -> slot_interval = 1s / 100 = 0.01s = 10ms
-``` Khách có vào ngồi ăn được hay không
+```
+
+> **Lưu ý**: 3 ví dụ trên dùng rate **CỐ ĐỊNH** cho dễ hiểu (như trong
+> stage hold hoặc `constant-arrival-rate`). Khi rate **THAY ĐỔI** (stage
+> ramp), `slot_interval` cũng thay đổi:
+>
+> ```text
+> slot_interval(t) = 1 / rate(t)
+>
+> Stage ramp 2 → 4 iter/s trong 2s:
+>   t=0s   : rate=2/s -> slot_interval = 1/2 = 500ms (đầu stage thưa)
+>   t=1s   : rate=3/s -> slot_interval = 1/3 ≈ 333ms (giữa stage)
+>   t=2s   : rate=4/s -> slot_interval = 1/4 = 250ms (cuối stage nhặt)
+> ```
+>
+> Bảng "slot 1: ~t=0.4s, slot 2: ~t=0.8s..." ở dưới chính là minh họa
+> slot_interval co lại dần khi rate tăng. Xem chi tiết ở Section 3.1
+> "Bước nhảy của rate trong 1 stage". Khách có vào ngồi ăn được hay không
 phụ thuộc có chỗ trống không, nhưng "lượt đẩy khách" thì cứ đều đặn.
 
 ```text
