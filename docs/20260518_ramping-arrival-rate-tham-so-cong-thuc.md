@@ -4767,8 +4767,8 @@ Tóm gọn cho dễ nhớ:
 "1 slot = 1 LỊCH GỌI default()"      -> ĐÚNG cho cả 3 trường hợp ✓
 ```
 
-Đời thường: nếu rate=10 khách/phút thì cứ 6 giây cửa quán "đẩy 1 khách
-vào". Mỗi lần đẩy = 1 lượt start.
+Đời thường (giả định rate **CỐ ĐỊNH** cho dễ hiểu): nếu rate=10 khách/phút
+thì cứ 6 giây cửa quán "đẩy 1 khách vào". Mỗi lần đẩy = 1 lượt start.
 
 ```text
 Cách tính 6s từ rate=10 khách/phút:
@@ -4782,23 +4782,49 @@ Cách tính 6s từ rate=10 khách/phút:
   - rate=100/giây -> slot_interval = 1s / 100 = 0.01s = 10ms
 ```
 
-> **Lưu ý**: 3 ví dụ trên dùng rate **CỐ ĐỊNH** cho dễ hiểu (như trong
-> stage hold hoặc `constant-arrival-rate`). Khi rate **THAY ĐỔI** (stage
-> ramp), `slot_interval` cũng thay đổi:
->
-> ```text
-> slot_interval(t) = 1 / rate(t)
->
-> Stage ramp 2 → 4 iter/s trong 2s:
->   t=0s   : rate=2/s -> slot_interval = 1/2 = 500ms (đầu stage thưa)
->   t=1s   : rate=3/s -> slot_interval = 1/3 ≈ 333ms (giữa stage)
->   t=2s   : rate=4/s -> slot_interval = 1/4 = 250ms (cuối stage nhặt)
-> ```
->
-> Bảng "slot 1: ~t=0.4s, slot 2: ~t=0.8s..." ở dưới chính là minh họa
-> slot_interval co lại dần khi rate tăng. Xem chi tiết ở Section 3.1
-> "Bước nhảy của rate trong 1 stage". Khách có vào ngồi ăn được hay không
-phụ thuộc có chỗ trống không, nhưng "lượt đẩy khách" thì cứ đều đặn.
+**CẢNH BÁO QUAN TRỌNG**: 3 ví dụ trên CHỈ ĐÚNG với rate **CỐ ĐỊNH**
+(stage hold hoặc `constant-arrival-rate`). Vì doc này là về
+**`ramping-arrival-rate`** với stages biến thiên, công thức `1/rate` ở
+trên KHÔNG áp được trực tiếp cho stage ramp.
+
+Ví dụ với config thực tế hơn (giống đầu doc):
+
+```text
+stages:
+  - duration: "2s", target: 10    <- ramp 0 → 10/s
+  - duration: "5s", target: 4     <- ramp 10 → 4/s
+  - duration: "2s", target: 0     <- ramp 4 → 0/s
+
+Trong stage 0 (ramp 0 → 10):
+  t=0s    : rate=0/s    -> slot_interval = ∞ (chưa fire slot nào)
+  t=1s    : rate=5/s    -> slot_interval = 200ms
+  t=2s    : rate=10/s   -> slot_interval = 100ms (cuối stage, slot dày nhất)
+
+=> slot ĐẦU stage thưa, slot CUỐI stage nhặt
+=> KHÔNG có slot_interval cố định cho cả stage
+```
+
+Khi rate **THAY ĐỔI** (stage ramp), `slot_interval` cũng thay đổi theo:
+
+```text
+slot_interval(t) = 1 / rate(t)
+
+Stage ramp 2 → 4 iter/s trong 2s:
+  t=0s   : rate=2/s -> slot_interval = 1/2 = 500ms (đầu stage thưa)
+  t=1s   : rate=3/s -> slot_interval = 1/3 ≈ 333ms (giữa stage)
+  t=2s   : rate=4/s -> slot_interval = 1/4 = 250ms (cuối stage nhặt)
+```
+
+Bảng "slot 1: ~t=0.4s, slot 2: ~t=0.8s..." ở dưới chính là minh họa
+slot_interval co lại dần khi rate tăng.
+
+**Công thức chính xác cho slot biến thiên** (dùng nghiệm bậc 2 từ core):
+xem **Section 3.14 "Bước nhảy của rate trong 1 stage"** — đây là chỗ
+giải thích cách `cal()` trong core tính mốc fire của từng slot khi rate
+ramp tuyến tính.
+
+Khách có vào ngồi ăn được hay không phụ thuộc có chỗ trống không, nhưng
+"lượt đẩy khách" thì cứ đều đặn theo curve rate(t).
 
 ```text
 Lưu ý: 1 SLOT (lượt start) ≠ 1 ITER (lượt hoàn thành)
