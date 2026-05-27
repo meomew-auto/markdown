@@ -4704,8 +4704,65 @@ nghe chuông xong, có VU rảnh thì VU đó nhận order, bắt đầu chạy 
 nếu không có VU rảnh -> drop slot đó (chuông kêu vô ích)
 ```
 
+**Vậy 1 SLOT có phải = 1 lần `default()` chạy không?**
+
+Câu hỏi rất hay. Trả lời ngắn:
+
+```text
+1 SLOT = 1 LỊCH GỌI default()
+       (lịch có thể thực hiện, có thể bỏ, có thể dở dang)
+```
+
+3 trường hợp khi 1 slot fire:
+
+```text
+Trường hợp 1: chuông kêu + có VU rảnh + default() chạy XONG SẠCH
+  -> 1 SLOT = 1 lần default() chạy hoàn chỉnh = 1 ITER COMPLETE
+  Đời thường: chuông kêu, có bàn, khách ăn xong sạch sẽ
+
+Trường hợp 2: chuông kêu + KHÔNG có VU rảnh
+  -> 1 SLOT = 0 lần default() chạy = 1 DROPPED
+  default() KHÔNG được gọi
+  Đời thường: chuông kêu, hết bàn, đuổi khách về
+
+Trường hợp 3: chuông kêu + có VU rảnh + default() đã start NHƯNG bị cancel
+  -> 1 SLOT = 1 lần default() ĐƯỢC GỌI nhưng KHÔNG XONG = 1 INTERRUPTED
+  Đời thường: chuông kêu, có bàn, khách vào ăn dở thì quán đóng cửa
+```
+
+Vì vậy, cách diễn đạt CHÍNH XÁC nhất:
+
+```text
+N_sched = số LỊCH GỌI default() (số chuông kêu = số slot)
+N_done  = số default() chạy XONG SẠCH (= summary "iterations")
+N_drop  = số lịch bị BỎ — default() KHÔNG được gọi
+N_int   = số default() chạy DỞ DANG — bị cancel giữa chừng
+
+N_sched = N_done + N_drop + N_int
+```
+
+Tóm gọn cho dễ nhớ:
+
+```text
+"1 slot = 1 lần default() được gọi" -> CHỈ ĐÚNG ở trường hợp 1 + 3
+"1 slot = 1 lần default() chạy xong" -> CHỈ ĐÚNG ở trường hợp 1
+"1 slot = 1 LỊCH GỌI default()"      -> ĐÚNG cho cả 3 trường hợp ✓
+```
+
 Đời thường: nếu rate=10 khách/phút thì cứ 6 giây cửa quán "đẩy 1 khách
-vào". Mỗi lần đẩy = 1 lượt start. Khách có vào ngồi ăn được hay không
+vào". Mỗi lần đẩy = 1 lượt start.
+
+```text
+Cách tính 6s từ rate=10 khách/phút:
+  1 phút = 60 giây
+  rate = 10 khách / phút
+  -> mỗi khách cách nhau = 60 / 10 = 6 giây
+
+Đây chính là công thức slot_interval = 1 / rate (Section 1.3):
+  - rate=10/phút  -> slot_interval = 60s / 10 = 6 giây
+  - rate=10/giây  -> slot_interval = 1s / 10  = 0.1 giây = 100ms
+  - rate=100/giây -> slot_interval = 1s / 100 = 0.01s = 10ms
+``` Khách có vào ngồi ăn được hay không
 phụ thuộc có chỗ trống không, nhưng "lượt đẩy khách" thì cứ đều đặn.
 
 ```text
