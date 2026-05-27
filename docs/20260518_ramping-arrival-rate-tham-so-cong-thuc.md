@@ -4693,6 +4693,39 @@ scheduled_slots = duration × (rate_đầu + rate_cuối) / 2
 **Tiếng Việt**: "Tổng slot = thời gian stage × rate trung bình của
 stage (trung bình rate đầu và rate cuối)"
 
+**TRƯỚC KHI ĐỌC TIẾP — "rate" trong section này là gì?**
+
+Khi nói "rate = 10/s" trong context `ramping-arrival-rate`, ý là:
+
+```text
+rate = TARGET RATE của scheduler
+     = số slot scheduler MUỐN fire mỗi giây (mục tiêu)
+     = stage.target / timeUnit_seconds
+
+KHÔNG phải:
+  - rate iter HOÀN THÀNH (= actual throughput, đo từ summary)
+  - rate HTTP request gửi đi (= http_reqs/s)
+  - rate VU đang bận
+```
+
+Ví dụ:
+
+```text
+Config: stage.target = 10, timeUnit = "1s"
+=> rate = 10/s
+=> nghĩa là "scheduler có nhiệm vụ fire 10 slot/giây" (mục tiêu)
+=> KHÔNG nghĩa "10 iter hoàn thành/giây"
+   (số iter hoàn thành phụ thuộc VU có rảnh không)
+```
+
+Trong section này, tất cả "rate" đều là **target rate của scheduler**:
+
+```text
+rate_đầu  = rate target ở đầu stage  (= λ_prev = stage trước.target / timeUnit)
+rate_cuối = rate target ở cuối stage (= λ_next = stage này.target / timeUnit)
+rate(t)   = rate target tại thời điểm t (đường thẳng nội suy)
+```
+
 **Đây là công thức diện tích hình thang** đã thấy ở Section 3.1
 (`scheduled_iterations_i = d_i × (λ_prev + λ_next) / 2`).
 Cả 2 công thức GIỐNG NHAU, chỉ khác cách viết:
@@ -5000,6 +5033,99 @@ t=9.0s     |  2    |  --  | Hết stage 2 (rate=0, không slot)
 4. Verify với kỳ vọng:
    - Test hoàn hảo (preAlloc đủ): N_done = 49
    - Có drop (preAlloc thiếu): N_done < 49, drop xảy ra ở stage 1 (rate đỉnh)
+```
+
+#### Stage interval — mốc chuyển giữa các stage
+
+"Stage interval" = thời điểm trên timeline mà 1 stage kết thúc và stage
+kế tiếp bắt đầu. Tính bằng cách **cộng dồn duration** của các stage trước.
+
+**Áp dụng vào config 3 stage**:
+
+```text
+stages:
+  - duration: "2s", target: 10    <- stage 0
+  - duration: "5s", target: 4     <- stage 1
+  - duration: "2s", target: 0     <- stage 2
+
+Mốc chuyển stage (cộng dồn duration):
+  stage 0: t=0s   →  t=2s    (duration 2s)
+  stage 1: t=2s   →  t=7s    (duration 5s, mốc end = 2 + 5)
+  stage 2: t=7s   →  t=9s    (duration 2s, mốc end = 7 + 2)
+
+Tổng T = 2 + 5 + 2 = 9s
+```
+
+**Tại biên stage, rate có "nhảy bậc" không?**
+
+KHÔNG. Rate luôn nối liên tục giữa 2 stage:
+
+```text
+Tại biên t=2s (giữa stage 0 và stage 1):
+  Cuối stage 0: rate = 10/s  (đạt target stage 0)
+  Đầu stage 1: rate = 10/s  (= rate cuối stage 0, nối liên tục)
+
+Tại biên t=7s (giữa stage 1 và stage 2):
+  Cuối stage 1: rate = 4/s   (target stage 1)
+  Đầu stage 2: rate = 4/s    (nối liên tục)
+
+=> Rate KHÔNG nhảy bậc, luôn liên tục giữa 2 stage.
+```
+
+Đây là quy tắc của ramping: `λ_prev của stage i+1` = `λ_next của stage i`.
+Nhờ vậy đường rate(t) là **đường gấp khúc liên tục** (zigzag), không có
+"đứt gãy".
+
+**Vẽ hình rate(t) cho config 3 stage**:
+
+```text
+rate (iter/s)
+  10 |     /‾‾\
+   8 |    /    \
+   6 |   /      \
+   4 |  /        ‾‾\
+   2 | /           \
+   0 |/_____________\______
+     0  2          7   9    t (giây)
+        ↑          ↑
+        biên       biên
+        stage 0/1  stage 1/2
+
+stage 0: ramp 0 → 10  (slope dương = +5/s²)
+stage 1: ramp 10 → 4  (slope âm = -1.2/s²)
+stage 2: ramp 4 → 0   (slope âm = -2/s²)
+```
+
+**Cách dùng stage interval khi đọc log/timeline**:
+
+```text
+Wall-clock t  Stage   Đang làm gì?
+0.0s          stage 0 ramp up từ 0
+0.6s          stage 0 slot 1 fire (đã tích đủ 1 đơn vị)
+2.0s          biên    stage 0 hết, stage 1 bắt đầu
+                      rate = 10/s (đỉnh)
+4.5s          stage 1 đang giảm dần (~7/s)
+7.0s          biên    stage 1 hết, stage 2 bắt đầu
+                      rate = 4/s
+8.59s         stage 2 slot CUỐI fire
+9.0s          biên    scenario hết (rate=0)
+9.0-39.0s     grace   gracefulStop=30s, không slot mới, iter cuối kịp xong
+```
+
+**Tại sao cần biết stage interval?**
+
+```text
+1. Đọc log debug
+   - Log in [iter] t=4.5s -> biết đang ở stage 1 (giữa)
+   - Không cần đoán mò "stage nào"
+
+2. Đối chiếu drop với stage
+   - Nếu drop tăng vọt từ t=2..7s -> drop ở stage 1 (rate đỉnh)
+   - Biết để fix sizing đúng đoạn đó
+
+3. Tính grace cuối
+   - T = 9s, gracefulStop = 30s -> max wall-clock = 39s
+   - Iter cuối (start t=8.59s) có 30.41s để xong -> rất dư
 ```
 
 Khách có vào ngồi ăn được hay không phụ thuộc có chỗ trống không, nhưng
