@@ -3825,7 +3825,26 @@ ramping-vus (closed model):           <- doc này
 ### 9.6. Đọc output sau test: tìm số ở đâu?
 
 Sau khi `k6 run` xong, bạn sẽ thấy 3 nhóm số liệu. Phải biết tìm từng
-con số ở đâu để áp công thức.
+con số ở đâu để **áp vào đúng công thức** đã học ở 9.1.
+
+**Bảng mapping nhanh: số ở đâu → dùng cho công thức nào**:
+
+```text
+| Số liệu                  | Đọc ở đâu                       | Dùng cho công thức |
+| ------------------------ | ------------------------------- | ------------------ |
+| stages target max        | Header "Up to N looping VUs"    | CT 1 (verify peak) |
+| total duration           | Header "for Xs over N stages"   | CT 5 (verify)      |
+| max_wall                 | Header "max duration"           | CT 5 (verify)      |
+| W (iter_time)            | Summary iteration_duration      | CT 2 (peak rate)   |
+| N_done                   | Summary iterations count        | CT 5 (verify)      |
+| actual_rate              | Summary iterations rate         | CT 2 verify        |
+| M_peak (vus max)         | Summary vus max                 | CT 2 đảo (suy ngược)|
+| vus_max                  | Summary vus_max                 | verify init phase  |
+| T_run                    | Footer "running (X.Xs)"         | CT 5 (mẫu số rate) |
+| N_int                    | Footer "X interrupted"          | CT 5               |
+```
+
+Lưu ý: `ramping-vus` KHÔNG có `dropped_iterations` (closed model).
 
 #### Nhóm 1: Header (in ra ngay đầu test)
 

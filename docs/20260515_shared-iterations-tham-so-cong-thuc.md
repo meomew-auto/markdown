@@ -2467,7 +2467,23 @@ Học thuộc 3 dòng này là dùng được 80% nhu cầu thực tế với
 ### 8.6. Đọc output sau test: tìm số ở đâu?
 
 Sau khi `k6 run` xong, bạn sẽ thấy 3 nhóm số liệu. Phải biết tìm từng
-con số ở đâu để áp công thức.
+con số ở đâu để **áp vào đúng công thức** đã học ở 8.1.
+
+**Bảng mapping nhanh: số ở đâu → dùng cho công thức nào**:
+
+```text
+| Số liệu                  | Đọc ở đâu                      | Dùng cho công thức |
+| ------------------------ | ------------------------------ | ------------------ |
+| vus, iterations          | Header "X iterations / Y VUs"  | CT 1, 4 (verify)   |
+| maxDuration              | Header "maxDuration: ..."      | CT 5 (verify)      |
+| W (iter_time)            | Summary iteration_duration     | CT 1, 2, 4         |
+| N_done                   | Summary iterations count       | CT 5 (verify)      |
+| actual_rate              | Summary iterations rate        | CT 2 verify (peak) |
+| dropped_iterations       | Summary dropped (nếu có)       | CT 5               |
+| T_run                    | Footer "running (X.Xs)"        | CT 1, 5 (so T_est) |
+| N_int                    | Footer "X interrupted"         | CT 5               |
+| __ITER per VU            | Log custom (đọc trong code)    | CT 3 (phân phối)   |
+```
 
 #### Nhóm 1: Header (in ra ngay đầu test)
 
@@ -2559,7 +2575,20 @@ N_done + N_drop + N_int = iterations (config)
 
 ### 8.7. Quy trình 5 bước phân tích output
 
-Sau khi có đủ số liệu từ 8.6, làm 5 bước theo thứ tự với output mẫu.
+Sau khi có đủ số liệu từ 8.6, làm 5 bước theo thứ tự. Mỗi bước **dùng
+đúng 1 công thức từ 8.1**.
+
+**Bảng mapping nhanh: Bước → Công thức → Số liệu cần**:
+
+```text
+| Bước | Công thức dùng       | Input cần              | Output                |
+|------|----------------------|------------------------|-----------------------|
+| 1    | verify Header        | Header + config        | Verify config OK      |
+| 2    | CT 1 (T_est)         | iterations, vus, W     | T_est dự kiến         |
+| 3    | CT 5 (so T_run)      | T_run từ footer        | Tỷ lệ T_run/T_est     |
+| 4    | CT 5 (drop/int)      | N_drop, N_int          | Diagnose drop/int     |
+| 5    | CT 3 (phân phối)     | __ITER per VU (log)    | Verify VU nhanh/chậm  |
+```
 
 #### Output mẫu để phân tích (dùng xuyên suốt 5 bước)
 

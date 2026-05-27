@@ -4111,7 +4111,24 @@ Học thuộc 3 dòng này là dùng được 80% nhu cầu thực tế.
 ### 11.6. Đọc output sau test: tìm số ở đâu?
 
 Sau khi `k6 run` xong, bạn sẽ thấy 3 nhóm số liệu. Phải biết tìm từng
-con số ở đâu để áp công thức.
+con số ở đâu để **áp vào đúng công thức** đã học ở 11.1.
+
+**Bảng mapping nhanh: số ở đâu → dùng cho công thức nào**:
+
+```text
+| Số liệu                  | Đọc ở đâu                   | Dùng cho công thức |
+| ------------------------ | --------------------------- | ------------------ |
+| rate (config)            | Header "X.XX iterations/s"  | CT 2 (verify)      |
+| duration                 | Header "for Xs"             | CT 3 (verify)      |
+| preAllocatedVUs, maxVUs  | Header "maxVUs: A-B"        | CT 1 (verify)      |
+| W (iter_time)            | Summary iteration_duration  | CT 1, 2 (sizing)   |
+| N_done                   | Summary iterations count    | CT 5 (verify)      |
+| N_drop                   | Summary dropped_iterations  | CT 5               |
+| actual_rate              | Summary iterations rate     | CT 5 (so target)   |
+| M_peak (vus max)         | Summary vus max             | CT 1 đảo (suy ngược)|
+| T_run                    | Footer "running (X.Xs)"     | CT 5 (mẫu số)      |
+| N_int                    | Footer "X interrupted"      | CT 5               |
+```
 
 #### Nhóm 1: Header (in ra ngay đầu test)
 
@@ -4185,7 +4202,20 @@ block "TOTAL RESULTS" summary. Phải đọc dòng này riêng.
 
 ### 11.7. Quy trình 5 bước phân tích output
 
-Sau khi có đủ số liệu từ 11.6, làm 5 bước theo thứ tự để diagnose test.
+Sau khi có đủ số liệu từ 11.6, làm 5 bước theo thứ tự. Mỗi bước **dùng
+đúng 1 công thức từ 11.1**.
+
+**Bảng mapping nhanh: Bước → Công thức → Số liệu cần**:
+
+```text
+| Bước | Công thức dùng       | Input cần              | Output                |
+|------|----------------------|------------------------|-----------------------|
+| 1    | CT 2 (verify rate)   | Header + config        | Verify config OK      |
+| 2    | CT 3 (N_sched)       | rate, duration         | N_sched dự kiến       |
+| 3    | CT 5 (so N_done)     | N_done từ summary      | Tỷ lệ N_done/N_sched  |
+| 4    | CT 5 (drop/int)      | N_drop, N_int          | Diagnose drop/int     |
+| 5    | CT 1 đảo (suy ngược) | M_peak + W từ summary  | Capacity thực tế      |
+```
 
 #### Output mẫu để phân tích (dùng xuyên suốt 5 bước)
 
