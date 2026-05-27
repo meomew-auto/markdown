@@ -5658,8 +5658,36 @@ slot 5: ~ t=1.7s   (rate ~3.7/s, gap ~0.27s)
 slot 6: ~ t=1.95s  (rate ~3.95/s, gap ~0.25s)
 ```
 
-→ Đầu stage chuông kêu thưa (0.4s/lần), cuối stage chuông kêu nhặt
-(0.25s/lần), tổng vẫn 6 lượt.
+Cách tính 2 cột "rate" và "gap" trong bảng:
+
+```text
+Cột rate(t) — áp công thức đường thẳng nội suy (Công thức 4):
+  rate(t) = rate_đầu + slope × (t - stageStart)
+  slope   = (rate_cuối - rate_đầu) / duration = (4-2)/2 = 1
+  => rate(t) = 2 + 1×t = 2 + t
+
+  rate tại t=0.4s  : 2 + 0.4   = 2.4/s
+  rate tại t=0.8s  : 2 + 0.8   = 2.8/s
+  rate tại t=1.1s  : 2 + 1.1   = 3.1/s
+  rate tại t=1.4s  : 2 + 1.4   = 3.4/s
+  rate tại t=1.7s  : 2 + 1.7   = 3.7/s
+  rate tại t=1.95s : 2 + 1.95  = 3.95/s
+
+Cột gap — áp công thức xấp xỉ 1/rate(t):
+  gap tại slot k ≈ 1 / rate(t_k)
+
+  gap tại t=0.4s  : 1/2.4   ≈ 0.42s ≈ 0.4s
+  gap tại t=0.8s  : 1/2.8   ≈ 0.36s
+  gap tại t=1.1s  : 1/3.1   ≈ 0.32s
+  ...
+  gap tại t=1.95s : 1/3.95  ≈ 0.25s
+```
+
+→ Cả 2 cột đều suy ra từ rate_đầu/rate_cuối + công thức nội suy đường
+thẳng + công thức xấp xỉ slot_interval. Không có gì "ngoài kế hoạch".
+
+→ Đầu stage chuông kêu cách quãng (0.4s/lần), cuối stage chuông kêu liên
+tục (0.25s/lần), tổng vẫn 6 lượt.
 
 **Khi nào dùng**: ước lượng số iter scenario sẽ có (trước khi chạy),
 hoặc đối chiếu với `iterations` trong summary sau test.
