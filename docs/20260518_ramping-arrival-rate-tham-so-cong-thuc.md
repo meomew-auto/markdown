@@ -4871,6 +4871,74 @@ slot 6: ~ t=1.95s  (rate ~3.95/s, gap ~0.25s)
 **Khi nào dùng**: ước lượng số iter scenario sẽ có (trước khi chạy),
 hoặc đối chiếu với `iterations` trong summary sau test.
 
+**Vì sao cần đếm slot/iter cho TỪNG STAGE riêng (không chỉ tổng)?**
+
+4 lý do thực tế:
+
+```text
+1. SIZING VU CHO STAGE ĐỈNH
+   Mỗi stage rate khác nhau -> VU cần khác nhau:
+     Stage 1: rate=4/s,  sleep(0.5) -> cần 2 VU
+     Stage 2: rate=10/s, sleep(0.5) -> cần 5 VU  <- đỉnh
+     Stage 3: rate=4/s,  sleep(0.5) -> cần 2 VU
+   preAllocatedVUs = max(2, 5, 2) = 5
+   -> phải biết stage nào ĐỈNH để chuẩn bị đủ VU lúc đó
+
+2. PHÂN BỔ CHI PHÍ TEST (cloud k6)
+   Cloud k6 tính tiền theo iter count:
+     Stage 1: 8 iter   (rẻ)
+     Stage 2: 100 iter (đỉnh, đắt nhất)
+     Stage 3: 8 iter   (rẻ)
+   -> biết stage nào tốn tiền nhất để tối ưu/cắt giảm nếu cần
+
+3. ĐỐI CHIẾU DROP THEO TỪNG GIAI ĐOẠN
+   Summary chỉ cho TỔNG dropped, không phân theo stage.
+   Nhưng nếu tự đếm slot/stage:
+     Stage 1: 8 slot dự kiến, complete 8     -> OK
+     Stage 2: 100 slot dự kiến, complete 90  -> drop 10!
+     Stage 3: 8 slot dự kiến, complete 8     -> OK
+   -> biết drop xảy ra ở stage 2, fix sizing đúng đoạn đó
+
+4. THIẾT KẾ NGƯỢC TỪ MỤC TIÊU TEST
+   Muốn 100 iter ở giai đoạn cao điểm:
+     - cách A: stage hold rate=4/s trong 25s   -> 100 iter
+     - cách B: stage hold rate=10/s trong 10s -> 100 iter
+   -> đếm slot/stage để chọn cách phù hợp với SLA
+```
+
+**Lưu ý — slot có thể "vắt qua" biên stage**
+
+Đời thường — quán phở chuyển ca:
+
+```text
+Slot fire lúc 17:59:55 (cuối ca trưa, còn 5s trước ca tối)
+-> khách vào ngồi xuống lúc 17:59:55
+-> ăn xong lúc 18:00:25 (đã sang ca tối)
+
+Khách này thuộc ca trưa hay ca tối?
+  -> Tính theo LÚC VÀO QUÁN (= slot fire) -> ca trưa
+```
+
+Áp vào k6:
+
+```text
+k6 đếm slot theo MỐC FIRE TIME, không theo mốc default() xong:
+  Slot fire t=1.95s (cuối stage 0) -> đếm vào stage 0
+  default() xong t=2.45s (đã sang stage 1) -> KHÔNG đếm sang stage 1
+
+=> 1 stage có thể có iter "tràn" thời gian sang stage sau
+   nhưng vẫn được đếm vào stage cũ
+```
+
+**Quy tắc nhớ nhanh**:
+
+```text
+"Số slot dự kiến mỗi stage" = áp công thức diện tích hình thang cho stage đó
+"Số iter complete mỗi stage" ≤ số slot (do drop/interrupt)
+
+Test hoàn hảo (drop=0, int=0): số iter complete = số slot dự kiến
+```
+
 #### Công thức 4: "Rate ở giây thứ N là bao nhiêu?" (Đường thẳng nội suy)
 
 ```text
