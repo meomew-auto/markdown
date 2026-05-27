@@ -4831,6 +4831,83 @@ Lưu ý: `rate_cuối stage 0` = `rate_đầu stage 1` = `10/s` (giá trị gi�
 nhau ở 2 chỗ). Đây là cách k6 đảm bảo rate **không nhảy bậc** giữa các
 stage — đường rate(t) trên đồ thị là đường gấp khúc liên tục.
 
+**Biết rate_đầu/rate_cuối → tính được slot_interval ra sao?**
+
+Có công thức nối liền:
+
+```text
+slot_interval(t) = 1 / rate(t)
+
+=> slot_interval BIÊN của stage:
+   slot_interval đầu stage  = 1 / rate_đầu
+   slot_interval cuối stage = 1 / rate_cuối
+```
+
+Áp vào 3 stage:
+
+```text
+Stage 0 (rate_đầu=0, rate_cuối=10, dur=2s):
+  slot_interval đầu  = 1/0  = ∞     (chưa fire slot)
+  slot_interval cuối = 1/10 = 100ms (slot đầy nhất stage 0)
+  -> CO LẠI dần (∞ → 100ms) khi rate tăng
+
+Stage 1 (rate_đầu=10, rate_cuối=4, dur=5s):
+  slot_interval đầu  = 1/10 = 100ms
+  slot_interval cuối = 1/4  = 250ms
+  -> GIÃN RA dần (100ms → 250ms) khi rate giảm
+
+Stage 2 (rate_đầu=4, rate_cuối=0, dur=2s):
+  slot_interval đầu  = 1/4 = 250ms
+  slot_interval cuối = 1/0 = ∞       (slot cuối có thể KHÔNG fire)
+  -> GIÃN RA dần (250ms → ∞)
+```
+
+Bảng tóm tắt:
+
+```text
+| Stage | rate range  | slot_interval range | Pattern              |
+|-------|-------------|---------------------|----------------------|
+| 0     | [0, 10]     | [100ms, ∞]          | THƯA → NHẶT (warm)   |
+| 1     | [10, 4]     | [100ms, 250ms]      | NHẶT → THƯA (giảm)   |
+| 2     | [4, 0]      | [250ms, ∞]          | THƯA → RẤT THƯA (cool)|
+```
+
+**Ý nghĩa thực tế của quan hệ này**:
+
+```text
+1. Biết "tốc độ fire" tại biên stage
+   - Stage 1 đầu: fire 100ms/slot -> hệ thống nhận burst nhặt
+   - Stage 1 cuối: fire 250ms/slot -> hệ thống được "thở"
+
+2. So với iter_time để dự đoán drop
+   - Nếu slot_interval < iter_time/M (M = số VU rảnh)
+   - Slot fire nhanh hơn năng lực VU xử lý -> DROP
+
+   vd: stage 1 đầu, slot=100ms, iter_time=500ms, có 4 VU rảnh
+       -> mỗi VU làm 1 iter trong 500ms = 5 slot
+       -> 4 VU = 20 slot/giây, ngang với rate=10/s -> OK
+       -> nếu chỉ có 3 VU: 15 slot/s capacity, vẫn OK
+       -> nếu chỉ có 2 VU: 10 slot/s capacity, sát đỉnh -> dễ drop
+
+3. Hiểu pattern slot khác nhau giữa stage qua/không qua biên 0
+   - Stage 0, 2 (qua rate=0): slot_interval lệch về ∞ ở 1 đầu
+   - Stage 1 (không qua 0): slot_interval thay đổi tuyến tính êm
+```
+
+Đây là **mạch logic xuyên suốt Công thức 3**:
+
+```text
+config: stages, target, timeUnit
+  ↓ chia cho timeUnit_seconds
+rate_đầu, rate_cuối của từng stage    (vừa tính ở trên)
+  ↓ nghịch đảo (1/rate)
+slot_interval đầu/cuối stage           (mới tính)
+  ↓ áp công thức diện tích hình thang
+tổng slot N_sched mỗi stage            (sẽ tính ở phần dưới)
+  ↓ sizing với Little's Law
+required_vus + drop diagnose           (dùng cuối cùng)
+```
+
 **Có rate từng stage rồi, dùng để LÀM GÌ?**
 
 5 mục đích chính:
