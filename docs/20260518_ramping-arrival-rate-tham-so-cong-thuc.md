@@ -4832,9 +4832,66 @@ Lưu ý quan trọng: trong `ramping-arrival-rate`, **không có 1 con số
 slot_interval cố định** — phải đọc theo từng thời điểm.
 
 **Khoảng cách thật giữa 2 slot liên tiếp** (chính xác hơn `1/rate(t)`):
-core dùng nghiệm bậc 2 từ công thức diện tích hình thang để tính mốc
-fire của từng slot. Xem Section 3.14 "Bước nhảy của rate trong 1 stage"
-cho công thức đầy đủ.
+
+Core dùng công thức nghiệm bậc 2 để tính mốc fire chính xác của từng
+slot. Công thức trông phức tạp nhưng ý tưởng đơn giản:
+
+```text
+Slot thứ k được fire khi "diện tích tích lũy dưới đường rate(t)
+tính từ đầu stage" đạt giá trị k.
+
+Tức là: slot 1 fire khi đã "tích đủ 1 lượt", slot 2 khi tích đủ 2, ...
+
+Công thức nghiệm bậc 2 (đọc từ ramping_arrival_rate.go:253-282):
+  x_k = (from × dur − sqrt(dur × (from² × dur + 2 × k × (to − from))))
+        ───────────────────────────────────────────────────────────────
+                              (from − to)
+
+Trong đó:
+  x_k  = thời điểm slot k fire (tính từ stageStart)
+  from = rate đầu stage (= λ_prev)
+  to   = rate cuối stage (= λ_next)
+  dur  = duration stage
+  k    = slot thứ k (k=1, 2, 3, ...)
+```
+
+Ví dụ thực tế — stage `ramp 2 → 4 iter/s trong 2s`:
+
+```text
+from=2, to=4, dur=2 -> tổng slot = 2 × (2+4)/2 = 6 slot
+
+Áp công thức cho từng slot:
+  slot 1: x = (2×2 − sqrt(2×(2²×2 + 2×1×2))) / (2−4)
+            = (4 − sqrt(24)) / −2
+            ≈ 0.449s
+
+  slot 2: x ≈ 0.828s   (gap với slot 1: 0.379s)
+  slot 3: x ≈ 1.162s   (gap: 0.334s)
+  slot 4: x ≈ 1.464s   (gap: 0.302s)
+  slot 5: x ≈ 1.742s   (gap: 0.278s)
+  slot 6: x = 2.000s   (gap: 0.258s)
+
+Nhận xét:
+  - Đầu stage gap LỚN (0.45s) vì rate đầu thấp (2/s)
+  - Cuối stage gap NHỎ (0.26s) vì rate cuối cao (4/s)
+  - KHÔNG đều như chia trung bình (0.333s/slot)
+```
+
+Quy tắc nhớ nhanh:
+
+```text
+gap_k ≈ 1 / rate(t_k)
+
+Tại slot k:
+  rate(t_k) = từ công thức đường thẳng (Công thức 4)
+  gap đến slot tiếp theo ≈ 1 / rate hiện tại
+
+=> Rate cao -> gap nhỏ -> chuông kêu liên tục
+=> Rate thấp -> gap lớn -> chuông kêu cách quãng
+```
+
+Xem **Section 3.14 "Bước nhảy của rate trong 1 stage"** cho derivation
+chi tiết từ phương trình bậc 2.
 
 Khách có vào ngồi ăn được hay không phụ thuộc có chỗ trống không, nhưng
 "lượt đẩy khách" thì cứ đều đặn theo curve rate(t).
