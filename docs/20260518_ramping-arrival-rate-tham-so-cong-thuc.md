@@ -4893,6 +4893,115 @@ Tại slot k:
 Xem **Section 3.14 "Bước nhảy của rate trong 1 stage"** cho derivation
 chi tiết từ phương trình bậc 2.
 
+#### Áp dụng cho config 3 stage thực tế
+
+Quay lại config đầu doc (đã thấy nhiều lần):
+
+```text
+stages:
+  - duration: "2s", target: 10    <- ramp 0 → 10/s   (stage 0)
+  - duration: "5s", target: 4     <- ramp 10 → 4/s   (stage 1)
+  - duration: "2s", target: 0     <- ramp 4 → 0/s    (stage 2)
+```
+
+**Bước 1: Tính tổng slot mỗi stage** (công thức hình thang):
+
+```text
+stage 0: 2 × (0 + 10) / 2 = 10 slot
+stage 1: 5 × (10 + 4) / 2 = 35 slot
+stage 2: 2 × (4 + 0) / 2  = 4  slot
+                            -----
+                  N_sched = 49 slot
+```
+
+**Bước 2: Tính mốc fire từng slot trong từng stage**
+
+Stage 0 (ramp 0 → 10/s, dur=2s, from=0):
+```text
+Vì from=0, công thức rút gọn: x_k = sqrt(0.4 × k)
+
+slot 1:  x = sqrt(0.4)  ≈ 0.632s   (gap đầu lớn vì rate=0/s)
+slot 2:  x = sqrt(0.8)  ≈ 0.894s   (gap 0.262s)
+slot 3:  x = sqrt(1.2)  ≈ 1.095s   (gap 0.201s)
+slot 4:  x = sqrt(1.6)  ≈ 1.265s   (gap 0.170s)
+slot 5:  x = sqrt(2.0)  ≈ 1.414s   (gap 0.149s)
+slot 6:  x = sqrt(2.4)  ≈ 1.549s   (gap 0.135s)
+slot 7:  x = sqrt(2.8)  ≈ 1.673s   (gap 0.124s)
+slot 8:  x = sqrt(3.2)  ≈ 1.789s   (gap 0.116s)
+slot 9:  x = sqrt(3.6)  ≈ 1.897s   (gap 0.108s)
+slot 10: x = sqrt(4.0)  = 2.000s   (gap 0.103s, đúng cuối stage)
+
+Đầu stage gap LỚN (~0.6s) vì rate khởi đầu 0
+Cuối stage gap NHỎ (~0.1s) vì rate đỉnh 10/s
+```
+
+Stage 1 (ramp 10 → 4/s, dur=5s, from=10, to=4, doneSoFar=10):
+```text
+Slot k (k=11..45) tính từ công thức bậc 2 đầy đủ:
+  x_k = (10×5 − sqrt(5×(100×5 − 12×(k−10)))) / 6
+
+slot 11: x ≈ 0.101s  (gap với slot 10: 0.101s — slot 10 cuối stage 0)
+slot 12: x ≈ 0.203s  (gap 0.102s — rate vẫn cao gần 10/s)
+slot 13: x ≈ 0.306s  (gap 0.103s)
+...
+slot 25: x ≈ 1.667s  (gap ~0.13s — rate giảm xuống ~7.6/s)
+...
+slot 45: x ≈ 5.000s  (gap ~0.20s — đúng cuối stage, rate=4/s)
+
+Đầu stage gap NHỎ (~0.1s) vì rate vẫn cao 10/s
+Cuối stage gap LỚN dần (~0.2s) vì rate giảm về 4/s
+```
+
+Stage 2 (ramp 4 → 0/s, dur=2s, from=4, to=0, doneSoFar=45):
+```text
+Slot k (k=46..49):
+slot 46: x ≈ 0.268s  (gap ~0.27s — rate ~3.5/s)
+slot 47: x ≈ 0.586s  (gap 0.318s — rate ~3/s)
+slot 48: x ≈ 0.978s  (gap 0.392s — rate ~2/s)
+slot 49: x ≈ 1.591s  (gap 0.613s — rate ~1/s, slot cuối)
+
+Đầu stage gap NHỎ (~0.27s) vì rate đầu 4/s
+Cuối stage gap LỚN (~0.6s) vì rate giảm về gần 0
+
+Lưu ý: stage 2 KHÔNG fire slot tại t=2s (rate=0/s, không có slot ở rate 0)
+```
+
+**Bước 3: Tổng hợp timeline cả scenario**
+
+```text
+Wall-clock | Stage | Slot | Diễn giải
+-----------|-------|------|--------------------------------
+t=0.6s     |  0    |  1   | Slot đầu tiên (rate 0 -> ramp lên)
+t=2.0s     |  0    |  10  | Cuối stage 0, slot 10
+t=2.1s     |  1    |  11  | Bắt đầu stage 1 (rate 10/s)
+t=4.0s     |  1    |  ~28 | Giữa stage 1 (rate ~7/s)
+t=7.0s     |  1    |  45  | Cuối stage 1 (rate 4/s)
+t=7.27s    |  2    |  46  | Bắt đầu stage 2
+t=8.59s    |  2    |  49  | Slot cuối cùng (rate ~1/s)
+t=9.0s     |  2    |  --  | Hết stage 2 (rate=0, không slot)
+                          | Tổng: 49 slot
+```
+
+**Quan sát quan trọng**:
+
+```text
+1. Slot đầu tiên KHÔNG fire tại t=0
+   -> phải đợi rate tích lũy đủ 1 đơn vị (xem caveat 3.1)
+   -> demo này: slot 1 fire tại t=0.632s
+
+2. Mật độ slot KHÔNG đều cả scenario
+   -> stage 0: rare -> dense (đầu thưa, cuối nhặt)
+   -> stage 1: dense -> medium (đầu nhặt, cuối thưa hơn)
+   -> stage 2: medium -> rare (đầu thưa, cuối rất thưa)
+
+3. Tổng slot N_sched = 49 (không phải 50 dù tổng diện tích = 49)
+   -> số nguyên do core tính theo "tích đủ k đơn vị"
+
+4. Verify với kỳ vọng:
+   - Test hoàn hảo (preAlloc đủ): N_done = 49
+   - Có drop (preAlloc thiếu): N_done < 49, drop xảy ra ở stage 1 (rate đỉnh)
+```
+
 Khách có vào ngồi ăn được hay không phụ thuộc có chỗ trống không, nhưng
 "lượt đẩy khách" thì cứ đều đặn theo curve rate(t).
 
