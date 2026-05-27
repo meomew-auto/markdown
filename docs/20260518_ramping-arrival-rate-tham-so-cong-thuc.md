@@ -4833,14 +4833,35 @@ stage — đường rate(t) trên đồ thị là đường gấp khúc liên t�
 
 **Biết rate_đầu/rate_cuối → tính được slot_interval ra sao?**
 
-Có công thức nối liền:
+Có **2 cách tính** với độ chính xác khác nhau:
 
 ```text
-slot_interval(t) = 1 / rate(t)
+Cách 1 (xấp xỉ trực giác):  slot_interval(t) ≈ 1 / rate(t)
+Cách 2 (chính xác từ core): nghiệm bậc 2 (xem phần "Khoảng cách thật
+                             giữa 2 slot liên tiếp" ở trên)
+```
 
-=> slot_interval BIÊN của stage:
-   slot_interval đầu stage  = 1 / rate_đầu
-   slot_interval cuối stage = 1 / rate_cuối
+Cách 1 dễ tính nhẩm trong đầu, đủ chính xác cho ƯỚC LƯỢNG ban đầu.
+Cách 2 đúng tuyệt đối, dùng khi cần biết MỐC FIRE chính xác từng slot.
+
+So sánh số bằng ví dụ stage `ramp 2→4 trong 2s`:
+
+```text
+| Slot | Mốc thực (nghiệm bậc 2) | Gap thực | 1/rate(t) tại slot | Sai số |
+|------|-------------------------|----------|--------------------|----|
+| 1    | 0.449s                  | 0.449s   | 1/2.45 ≈ 408ms     | ~10% |
+| 3    | 1.162s                  | 0.334s   | 1/3.16 ≈ 316ms     | ~5%  |
+| 6    | 2.000s                  | 0.258s   | 1/4.00  = 250ms    | ~3%  |
+```
+
+→ `1/rate(t)` là XẤP XỈ ĐỦ TỐT cho ước lượng nhanh, sai vài % so với
+mốc thực từ nghiệm bậc 2.
+
+**Áp công thức xấp xỉ `1/rate` để ước lượng slot_interval BIÊN**:
+
+```text
+slot_interval đầu stage  ≈ 1 / rate_đầu
+slot_interval cuối stage ≈ 1 / rate_cuối
 ```
 
 Áp vào 3 stage:
