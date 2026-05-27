@@ -6208,7 +6208,20 @@ Footer   -> T_run, N_int           [OUTPUT cho CT 5 - hoàn tất verify]
 
 ### 6.7. Quy trình 5 bước phân tích output
 
-Sau khi có đủ số liệu từ 6.6, làm 5 bước theo thứ tự.
+Sau khi có đủ số liệu từ 6.6, làm 5 bước theo thứ tự. Mỗi bước **dùng
+đúng 1 công thức từ 6.1**.
+
+**Bảng mapping nhanh: Bước → Công thức → Số liệu cần**:
+
+```text
+| Bước | Công thức dùng    | Input cần              | Output                |
+|------|-------------------|------------------------|-----------------------|
+| 1    | CT 2 (λ_peak)     | Header + config        | Verify config OK      |
+| 2    | CT 3 (N_sched)    | rate_đầu, rate_cuối, dur | N_sched mỗi stage   |
+| 3    | CT 5 (verify)     | N_done từ summary      | Tỷ lệ N_done/N_sched  |
+| 4    | CT 5 (phân tích)  | N_drop + N_int         | Diagnose drop/int     |
+| 5    | CT 1 đảo (suy ngược)| W + M_peak từ summary | Capacity thực tế      |
+```
 
 #### Output mẫu để phân tích (dùng xuyên suốt 5 bước)
 
@@ -6260,106 +6273,171 @@ running (07.0s), 0/10 VUs, 20 complete and 0 interrupted iterations
 
 Áp 5 bước dưới đây vào đúng output này.
 
-#### Bước 1: Verify config có chạy đúng không
+#### Bước 1: Verify config có chạy đúng không [dùng CT 2: λ_peak]
+
+**Mục đích**: Kiểm tra k6 đã parse config đúng. Nếu sai → fix config
+trước khi đi tiếp.
+
+**Cách làm**: So Header (đọc từ 6.6 Nhóm 1) với config gốc:
 
 ```text
-Câu hỏi: λ_peak header có khớp với config?
+Header k6 in:                    Config gốc:
+  "Up to 4.00 iterations/s"      startRate=0, max stage.target=4, timeUnit="1s"
+                                 -> Áp CT 2: λ_peak = max(0, 4) / 1 = 4 iter/s ✓
 
-Header in:    "Up to 4.00 iterations/s"
-Config có:    startRate=0, max stage.target=4, timeUnit=1s
-              -> λ_peak = 4 / 1 = 4 iter/s ✓
+  "for 7s"                       sum(stage.duration) = 2+3+2 = 7s ✓
 
-Header in:    "for 7s"
-Config có:    sum(stage.duration) = 2 + 3 + 2 = 7s ✓
+  "maxVUs: 5-10"                 preAllocatedVUs=5, maxVUs=10 ✓
 
-Header in:    "maxVUs: 5-10"
-Config có:    preAllocatedVUs=5, maxVUs=10 ✓
-
-KẾT LUẬN: config đã parse đúng -> sang Bước 2
+  "10 max VUs"                   pool init đủ 10 instance ✓
 ```
 
-#### Bước 2: Tính N_sched (số slot dự kiến)
-
-Áp Công thức 3 cho từng stage rồi cộng lại:
+**Quyết định**:
 
 ```text
-config 3 stage: 0->4/s trong 2s, hold 4 trong 3s, 4->0 trong 2s
-
-stage 0: 2 × (0+4)/2 = 4 slot
-stage 1: 3 × (4+4)/2 = 12 slot
-stage 2: 2 × (4+0)/2 = 4 slot
-                       ----------
-                       N_sched = 20 slot
+- Tất cả khớp -> config OK, sang Bước 2
+- Có lệch     -> dừng, fix config, chạy lại
 ```
 
-#### Bước 3: So với N_done (đã hoàn thành)
+#### Bước 2: Tính N_sched (số slot dự kiến) [dùng CT 3]
+
+**Mục đích**: Biết "đáng lẽ chạy được bao nhiêu iter" để so với thực tế.
+
+**Cách làm**: Áp Công thức 3 cho TỪNG STAGE rồi cộng lại.
 
 ```text
-Summary cho:  iterations = 20
-Tính từ Bước 2: N_sched = 20
+Bước 2.1: Tính rate_đầu, rate_cuối mỗi stage
+  Stage 0: rate_đầu = startRate/timeUnit  = 0/1  = 0/s
+           rate_cuối = stages[0].target/timeUnit = 4/1 = 4/s
+  Stage 1: rate_đầu = rate_cuối stage 0   = 4/s
+           rate_cuối = stages[1].target/timeUnit = 4/1 = 4/s (hold)
+  Stage 2: rate_đầu = rate_cuối stage 1   = 4/s
+           rate_cuối = stages[2].target/timeUnit = 0/1 = 0/s
 
-So sánh:
+Bước 2.2: Áp công thức diện tích hình thang [CT 3]
+  N_sched_i = duration_i × (rate_đầu_i + rate_cuối_i) / 2
+
+  Stage 0: 2 × (0 + 4) / 2 = 4 slot
+  Stage 1: 3 × (4 + 4) / 2 = 12 slot
+  Stage 2: 2 × (4 + 0) / 2 = 4 slot
+                            ----------
+                            N_sched = 20 slot
+```
+
+**Tại sao tách stage**: nếu Bước 4 phát hiện drop, biết drop xảy ra ở
+stage nào (xem 6.1 Công thức 3 / "Vì sao cần đếm slot từng stage").
+
+#### Bước 3: So với N_done (đã hoàn thành) [dùng CT 5: verify]
+
+**Mục đích**: Tính tỷ lệ "hệ thống chịu được rate target". Càng gần 100%
+càng tốt.
+
+**Cách làm**: Lấy `N_done` từ Summary (xem 6.6 Nhóm 2), so với `N_sched`
+từ Bước 2:
+
+```text
+Lấy số liệu:
+  N_done = 20 (Summary "iterations" count)
+  N_sched = 20 (vừa tính từ Bước 2)
+
+Áp CT 5:
   N_done / N_sched = 20 / 20 = 100%
-  -> hệ thống chịu được toàn bộ rate target
-
-Phân loại:
-  >= 99%     : test "hoàn hảo"             <- DEMO RƠI VÀO ĐÂY
-  95-99%     : nhỏ giọt drop ở biên slot, OK
-  80-95%     : có vấn đề, kiểm tra Bước 4
-  < 80%      : sizing sai nghiêm trọng
+  -> hệ thống chịu được TOÀN BỘ rate target
 ```
 
-#### Bước 4: Tách rõ drop vs interrupt
+**Phân loại tỷ lệ và quyết định**:
 
 ```text
-Summary cho:  dropped_iterations = 0
-Footer cho:   "0 interrupted iterations" -> N_int = 0
+| Tỷ lệ N_done/N_sched | Đánh giá          | Hành động       |
+|----------------------|-------------------|-----------------|
+| >= 99%               | hoàn hảo          | OK, dừng phân tích nếu không cần stress test thêm |
+| 95-99%               | drop biên slot    | OK, ignore slot lẻ ở biên stage (xem CT 3 caveat) |
+| 80-95%               | có vấn đề        | Bắt buộc Bước 4 + 5 để tìm nguyên nhân |
+| < 80%                | sizing sai nặng  | Tăng preAllocated mạnh, chạy lại |
 
-Verify cộng số:
-  N_done + N_drop + N_int = 20 + 0 + 0 = 20 = N_sched ✓
-
-Diagnose:
-  N_drop = 0  -> sizing VU đủ, không thiếu lúc đỉnh
-  N_int = 0   -> code đủ kịp grace, không có vấn đề
-
-KẾT LUẬN: test "hoàn hảo", scenario chạy đúng như thiết kế
+DEMO này: 100% -> rơi vào nhóm "hoàn hảo"
 ```
 
-#### Bước 5: Tính capacity thực tế từ output (suy ngược)
+#### Bước 4: Tách rõ drop vs interrupt [dùng CT 5: phân tích]
 
-Đây là bước **suy ngược công thức** từ output để biết hệ thống thật sự
-chịu được rate cao nhất bao nhiêu, và pool VU có dư hay không.
+**Mục đích**: Nếu có thiếu hụt (Bước 3 < 100%), xác định **chính xác**
+là do drop (sizing thiếu) hay interrupt (code chậm).
+
+**Cách làm**: Đọc 2 con số từ output (xem 6.6):
 
 ```text
-Đo W từ summary:
-  iteration_duration avg = 505ms = 0.505s
+Lấy số liệu:
+  N_drop = 0 (Summary "dropped_iterations")
+  N_int  = 0 (Footer "0 interrupted iterations")
 
-Đo M_peak từ summary:
-  vus max = 2    (số VU bận cao nhất trong test)
+Áp CT 5 (verify đẳng thức):
+  N_done + N_drop + N_int ≈ N_sched
+  20 + 0 + 0 = 20 = N_sched ✓ (khớp tuyệt đối)
+```
 
-Tính capacity thực tế:
-  C_thực = M_peak / W = 2 / 0.505 ≈ 3.96 iter/s
-  -> Đúng bằng λ_peak (~4 iter/s), pool vừa khít
+**Diagnose theo 4 case**:
 
-Verify Little's Law:
-  required_vus = ceil(λ_peak × W) = ceil(4 × 0.505) = ceil(2.02) = 3 VU
-  vus max thực tế = 2 VU
-  -> Sai số nhỏ vì k6 dùng số VU integer dao động giữa 1-2 VU
-     (đỉnh chỉ cần 2 VU bận đồng thời)
+```text
+| N_drop | N_int  | Diagnose                          | Fix                       |
+|--------|--------|-----------------------------------|---------------------------|
+| 0      | 0      | hoàn hảo                          | không cần fix             |
+| > 0    | 0      | sizing thiếu lúc đỉnh rate       | tăng preAllocated (CT 1)  |
+| 0      | > 0    | code chậm hơn duration            | tăng gracefulStop         |
+| > 0    | > 0    | cả 2 vấn đề: thiếu VU + code chậm | fix cả 2 hướng            |
 
-Đánh giá pool config:
-  preAllocatedVUs = 5  (config)
-  vus max thực tế = 2  (chỉ dùng 2/5)
-  -> dư 3 VU không dùng tới
-  -> có thể giảm preAllocatedVUs xuống 3 (vẫn an toàn với buffer)
+DEMO này: N_drop=0, N_int=0 -> không cần fix
+```
 
-Cao nhất chịu được rate nào?
-  capacity với 5 VU = 5 / 0.505 ≈ 9.9 iter/s
+#### Bước 5: Tính capacity thực tế từ output [dùng CT 1 đảo: suy ngược]
+
+**Mục đích**: Biết hệ thống thật sự chịu được rate cao nhất bao nhiêu →
+quyết định có thể tăng load hay nên giảm preAllocated.
+
+**Cách làm**: Áp CT 1 đảo `capacity = M / W`:
+
+```text
+Bước 5.1: Lấy W và M từ Summary (xem 6.6 Nhóm 2)
+  W = iteration_duration avg = 505ms = 0.505s
+  M_peak = vus max = 2 (số VU bận cao nhất trong test)
+
+Bước 5.2: Tính capacity THỰC TẾ với M_peak
+  C_peak = M_peak / W = 2 / 0.505 ≈ 3.96 iter/s
+  -> Đúng bằng λ_peak (~4 iter/s) -> pool dùng VỪA KHÍT
+
+Bước 5.3: Tính capacity NẾU DÙNG HẾT preAllocated
+  C_max = preAllocatedVUs / W = 5 / 0.505 ≈ 9.9 iter/s
   -> có thể tăng λ_peak lên ~9 iter/s mà vẫn không drop
-  -> hoặc giảm preAllocated nếu chỉ cần test 4/s
 
-Kết luận:
-  - Test thành công 100% (N_done = N_sched = 20)
-  - Pool VU dư (5 cấp, dùng 2)
-  - Có thể tối ưu: giảm preAllocated xuống 3, hoặc tăng λ_peak để stress hơn
+Bước 5.4: Verify với CT 1 (sizing forward)
+  required_vus theo CT 1 = ceil(λ_peak × W) × 1.2
+                         = ceil(4 × 0.505) × 1.2
+                         = ceil(2.02) × 1.2
+                         ≈ 3 VU
+  vus max thực tế = 2 VU (sai số nhỏ vì k6 dùng số nguyên)
+  -> sizing CT 1 đúng (cần 3, dùng 2)
 ```
+
+**Đánh giá pool config**:
+
+```text
+preAllocatedVUs = 5 (config)
+vus max thực tế = 2 (chỉ dùng 2/5)
+-> DƯ 3 VU không dùng tới
+
+Có 2 hướng tối ưu:
+  A. Giảm preAllocated xuống 3 -> tiết kiệm RAM, vẫn an toàn (buffer 50%)
+  B. Tăng λ_peak lên 8-9/s    -> stress test hệ thống nặng hơn
+```
+
+**Tóm tắt 5 bước thành 1 dòng** (dùng cho audit nhanh):
+
+```text
+[Bước 1] Header     -> verify config OK
+[Bước 2] CT 3       -> N_sched = 20 slot
+[Bước 3] CT 5 ratio -> 100%, hoàn hảo
+[Bước 4] CT 5 diag  -> N_drop=0, N_int=0
+[Bước 5] CT 1 đảo   -> C_thực=3.96/s vừa khít, pool dư 60%
+```
+
+Tiếp theo: Section 7+ áp dụng quy trình này vào các edge case (drop nhiều,
+interrupt cuối, VU spawn không kịp, ...) — xem Section 4 "Edge cases".
