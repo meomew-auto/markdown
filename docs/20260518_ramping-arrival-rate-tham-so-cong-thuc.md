@@ -4717,11 +4717,30 @@ Trong open model với rate biến thiên (ramping), scheduler hoạt động nh
 **người bấm chuông gọi món**, nhưng **nhịp chuông thay đổi theo timeline**:
 
 ```text
-- Lúc rate thấp (đầu stage ramp): chuông kêu thưa
-- Lúc rate cao (đỉnh stage):       chuông kêu nhặt
+- Lúc rate thấp (đầu stage ramp): chuông kêu CÁCH QUÃNG (gap dài)
+- Lúc rate cao (đỉnh stage):       chuông kêu LIÊN TỤC (gap ngắn)
 - Mỗi tiếng chuông = 1 LƯỢT START = 1 SLOT
 - Có VU rảnh -> VU đó nhận, chạy iter
 - Không VU rảnh -> drop slot (chuông kêu vô ích)
+```
+
+**Lưu ý — đừng nhầm "nhịp slot" với "số VU"**:
+
+```text
+Nhịp slot (slot_interval) = quyết định bởi RATE
+  - Rate CAO  -> slot_interval NHỎ (chuông kêu liên tục)
+  - Rate THẤP -> slot_interval LỚN (chuông kêu cách quãng)
+
+Số VU đang bận = quyết định bởi rate × iter_time (Little's Law)
+  - Rate CAO  -> nhiều VU bận đồng thời
+  - Rate THẤP -> ít VU bận đồng thời
+
+=> Đỉnh stage có RATE CAO:
+   - Nhịp chuông LIÊN TỤC (gap ngắn) ← do rate
+   - NHIỀU VU bận đồng thời           ← do rate × iter_time
+
+=> Số VU KHÔNG quyết định nhịp chuông. Scheduler fire slot theo rate(t),
+   ĐỘC LẬP với VU. VU chỉ là người NHẬN slot, không TẠO slot.
 ```
 
 Đời thường: quán phở giờ cao điểm có lễ tân đẩy khách vào, nhưng tần
