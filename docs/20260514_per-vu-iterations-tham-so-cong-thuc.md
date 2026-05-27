@@ -3342,99 +3342,516 @@ Ghi chú quan trọng:
 - nó chỉ phản ánh các sample đã được ghi nhận
 - muốn nhìn timeline trực quan hơn thì xem progress lines hoặc tự `console.log()`
 
-## 8. Cheat sheet ngắn
+## 8. Cheat sheet — Công thức cần nhớ nhất
 
-```text
-iterations_per_vu
-  = options.scenarios.<name>.iterations
+> Phần này dành cho người mới. Mỗi công thức có **tên tiếng Việt**, ví dụ
+> đời thường, và "khi nào dùng". Đọc xong section này là dùng được ngay
+> mà không cần đọc 3-7 chi tiết.
 
-total_iterations
-  = vus * iterations_per_vu
+### 8.0. Config chung của `per-vu-iterations`
 
-js_iteration_time_i
-  = code JS + HTTP + check + sleep() trong function
+Đây là **bộ config đầy đủ** cho executor `per-vu-iterations`. Đọc bảng
+này trước khi viết test, biết tham số nào BẮT BUỘC, tham số nào có default.
 
-t_i
-  = js_iteration_time_i
-  hoặc max(js_iteration_time_i, minIterationDuration)
+#### Template config đầy đủ
 
-vu_runtime_i
-  = iterations_per_vu * t_i
+```js
+export const options = {
+  scenarios: {
+    my_scenario: {
+      // === BẮT BUỘC ===
+      executor: "per-vu-iterations",   // tên executor
+      vus: 5,                          // số VU
+      iterations: 10,                  // số iter MỖI VU phải chạy
 
-actual_scenario_runtime
-  ≈ max(vu_runtime_i)
+      // === TUỲ CHỌN (có default) ===
+      maxDuration: "10m",              // default = "10m"
+      gracefulStop: "30s",             // default = "30s" (BaseConfig)
+      startTime: "0s",                 // default = "0s"
+      exec: "default",                 // default = "default" function
+      tags: { test: "demo" },          // default = {}
+      env: { DEBUG: "1" },             // default = {}
+    },
+  },
+};
 
-peak_iteration_rate_if_all_vus_active
-  = sum(1 / t_i)
-
-per_vu_rate
-  ≈ 1 / effective_iteration_time
-
-peak_total_rate
-  ≈ active_vus * per_vu_rate
-
-average_iteration_rate
-  = completed_iterations / summary_runtime_base
-
-summary iterations/s
-  = average_iteration_rate, không phải peak
-
-Không làm:
-
-  lấy summary iterations/s rồi nhân thêm vus
-
-vì summary iterations/s đã là throughput trung bình của toàn scenario.
+export default function () {
+  // code chạy mỗi iter
+}
 ```
 
-Ví dụ kiểu Grafana docs:
+#### Bảng tham số chi tiết
+
+| Tham số | Required? | Default | Đơn vị | Ý nghĩa |
+| --- | --- | --- | --- | --- |
+| `executor` | **BẮT BUỘC** | — | string | Phải đặt là `"per-vu-iterations"` |
+| `vus` | **BẮT BUỘC** | — | int | Số Virtual Users |
+| `iterations` | **BẮT BUỘC** | — | int | Số iter MỖI VU phải chạy (KHÔNG phải tổng) |
+| `maxDuration` | tuỳ chọn | `"10m"` | duration | Trần thời gian, hết thì không start iter mới |
+| `gracefulStop` | tuỳ chọn | `"30s"` | duration | Grace cuối scenario cho iter đang chạy |
+| `startTime` | tuỳ chọn | `"0s"` | duration | Trễ trước khi scenario bắt đầu |
+| `exec` | tuỳ chọn | `"default"` | string | Tên function JS chạy mỗi iter |
+| `tags` | tuỳ chọn | `{}` | object | Tag attach vào metric của scenario |
+| `env` | tuỳ chọn | `{}` | object | Biến môi trường riêng cho scenario |
+
+#### 3 quy tắc validate (đọc từ core)
 
 ```text
-1 iteration ≈ 515ms = 0.515s
+1. vus > 0
+   (nếu <= 0: lỗi "the number of VUs must be more than 0")
 
-per_vu_rate
-  ≈ 1 / 0.515
-  ≈ 1.94 iter/s
-  ≈ 2 iter/s
+2. iterations > 0
+   (nếu <= 0: lỗi "the number of iterations must be more than 0")
 
-10 VUs active
-
-peak_total_rate
-  ≈ 10 * 1.94
-  ≈ 19.4 iter/s
-  ≈ 20 iter/s
+3. maxDuration >= minDuration (1s)
+   (nếu nhỏ hơn: lỗi "the maxDuration must be at least 1s")
 ```
 
-Nhưng nếu summary đã in:
+Code ref: `lib/executor/per_vu_iterations.go:71-88` (function `Validate()`).
+
+#### Khác `shared-iterations` ở đâu?
+
+Đây là điểm dễ nhầm nhất. Cùng `vus=5, iterations=10`:
 
 ```text
-iterations.........: 12      2.317275/s
+per-vu-iterations:
+  MỖI VU chạy ĐÚNG 10 iter
+  -> tổng = 5 × 10 = 50 iter
+  -> VU nhanh xong sớm thì IDLE, KHÔNG lấy việc của VU chậm
+
+shared-iterations:
+  TỔNG TOÀN SCENARIO = 10 iter
+  -> 5 VU CHIA NHAU 10 iter
+  -> VU nào rảnh thì lấy iter tiếp theo
 ```
 
-thì:
+Code ref: `lib/executor/per_vu_iterations.go:55-61` (comment trong `GetIterations()`):
+"per-VU iteration executor affects only the number of VUs. If we also
+scaled the iterations, scaling would have quadratic effects".
 
-```text
-average_total_rate = 2.317275 iter/s
+#### Config tối thiểu (chạy được)
+
+Nếu chỉ muốn config gọn nhất:
+
+```js
+export const options = {
+  scenarios: {
+    minimal: {
+      executor: "per-vu-iterations",
+      vus: 3,
+      iterations: 5,
+    },
+  },
+};
 ```
 
-không nhân thêm `vus` nữa.
+5 dòng đủ chạy. Các field khác lấy default. Tổng iter = 3 × 5 = 15.
 
-Nhớ nhanh:
+### 8.1. 5 công thức TOP cần thuộc lòng
+
+#### Công thức 1: "Tổng iter scenario" (Total iterations)
 
 ```text
-config-known:
-  vus
-  iterations_per_vu
-  total_iterations
-  maxDuration
-  gracefulStop
-  scenario_max_end
+total_iter = vus × iterations
+```
 
-run-known / estimate-after-run:
-  t_i
-  per_vu_rate_i
-  vu_runtime_i
-  actual_scenario_runtime
-  peak_iteration_rate_if_all_vus_active
-  average_iteration_rate
+**Tiếng Việt**: "Tổng số iter = số VU × số iter mỗi VU"
+
+**Ví dụ đời thường**:
+
+```text
+3 nhân viên kiểm tra hàng, mỗi người kiểm tra 10 đơn:
+  tổng đơn được kiểm = 3 × 10 = 30 đơn
+```
+
+**Áp vào k6**:
+
+```text
+vus=4, iterations=5
+=> total_iter = 4 × 5 = 20 iter
+```
+
+**Khi nào dùng**: ước lượng số request hệ thống sẽ chịu (vd test
+QA: mỗi user 5 test case, có 4 user → 20 test case tổng).
+
+#### Công thức 2: "Thời gian chạy mỗi VU" (Per-VU runtime)
+
+```text
+T_vu_i = iterations × iter_time_i
+```
+
+**Tiếng Việt**: "Thời gian VU thứ i chạy = số iter × thời gian 1 iter
+của VU đó"
+
+**Ví dụ**:
+
+```text
+iterations = 5, iter_time = 0.5s
+T_vu = 5 × 0.5 = 2.5s
+```
+
+Nếu các VU có iter_time khác nhau (vd VU=1 chạy 0.4s, VU=2 chạy 0.6s):
+
+```text
+T_vu_1 = 5 × 0.4 = 2.0s   <- xong sớm hơn
+T_vu_2 = 5 × 0.6 = 3.0s   <- xong muộn hơn
+```
+
+**Khi nào dùng**: ước lượng từng VU mất bao lâu, để biết scenario tổng
+sẽ chờ VU chậm nhất.
+
+#### Công thức 3: "Thời gian scenario" (Scenario duration)
+
+```text
+T_max = max(T_vu_i)
+```
+
+**Tiếng Việt**: "Scenario chỉ kết thúc khi VU CHẬM NHẤT xong → lấy max
+trong các T_vu"
+
+**Ví dụ**:
+
+```text
+T_vu_1 = 2.0s, T_vu_2 = 3.0s, T_vu_3 = 2.5s
+T_max = max(2.0, 3.0, 2.5) = 3.0s
+
+=> scenario chạy 3.0s (chờ VU=2 hoàn thành 5 iter)
+```
+
+**Khi nào dùng**: biết scenario thực tế dài bao nhiêu, để đặt
+`maxDuration` đủ lớn.
+
+#### Công thức 4: "Throughput đỉnh" (Peak rate)
+
+```text
+peak_rate ≈ vus / iter_time
+```
+
+**Tiếng Việt**: "Số iter hoàn thành mỗi giây ≈ số VU / thời gian 1 iter"
+
+**Ví dụ**:
+
+```text
+vus=5, iter_time=0.5s
+=> peak_rate = 5 / 0.5 = 10 iter/s
+```
+
+**Khi nào dùng**: ước lượng load lên hệ thống đỉnh điểm bao nhiêu request/s.
+
+#### Công thức 5: "Trần wall-clock" (Maximum runtime)
+
+```text
+T_total_max = min(maxDuration, T_max) + gracefulStop
+```
+
+**Tiếng Việt**: "Thời gian tối đa scenario (kể cả grace) = nhỏ hơn giữa
+maxDuration và T_max thực tế, cộng grace"
+
+**Ví dụ**:
+
+```text
+maxDuration = 10m (default), T_max = 3s, gracefulStop = 30s
+T_total_max = min(10m, 3s) + 30s = 3s + 30s = 33s
+
+Nếu maxDuration = 2s (cố tình ngắn):
+T_total_max = min(2s, 3s) + 30s = 2s + 30s = 32s
+=> bị cắt sớm, có thể có dropped iterations
+```
+
+**Khi nào dùng**: biết test sẽ tốn bao lâu trên CI, hoặc khi nào k6 sẽ
+hard-stop.
+
+### 8.2. Bảng tra nhanh: gặp tình huống nào, dùng công thức nào
+
+#### Tình huống 1: "Sắp viết config, không biết đặt số bao nhiêu"
+
+```text
+Bước 1: Quyết định total_iter cần
+   total = số test case × số user
+   vd: 50 test case × 4 user = 200
+
+Bước 2: Phân chia
+   vus = 4 (số user)
+   iterations = total / vus = 200 / 4 = 50
+
+Bước 3: Ước lượng T_max
+   T_max ≈ iterations × iter_time
+       ≈ 50 × 0.5s = 25s
+
+Bước 4: Đặt maxDuration
+   maxDuration >= T_max + buffer
+   vd: maxDuration = "1m" (60s, dư cho VU chậm)
+```
+
+#### Tình huống 2: "Cần test bao nhiêu test case mỗi user?"
+
+```text
+Đây là use case ĐIỂN HÌNH của per-vu-iterations:
+  - Mỗi user thực hiện scenarios riêng (login, browse, checkout)
+  - 1 user = 1 VU
+  - mỗi user làm N test cases = iterations = N
+
+Ví dụ:
+  - 10 user, mỗi user kiểm tra 20 sản phẩm
+  -> vus=10, iterations=20, total=200 lượt kiểm tra
+```
+
+#### Tình huống 3: "Đã chạy xong, đọc summary"
+
+```text
+3 con số quan trọng:
+   iterations (count)  = N_done   (iter hoàn thành)
+   dropped_iterations  = N_drop   (iter bị cắt do maxDuration)
+   interrupted (footer) = N_int   (iter đang chạy thì grace hết)
+
+3 câu hỏi:
+   1) N_done == total_iter?     -> hoàn hảo
+   2) N_done < total_iter?       -> bị cắt bớt, kiểm tra dropped
+   3) Có interrupt cuối?          -> tăng gracefulStop
+```
+
+### 8.3. Hành động khi gặp vấn đề
+
+#### "Có dropped_iterations!"
+
+Nguyên nhân: `maxDuration` quá ngắn so với `T_max` thực tế.
+
+```text
+1. (DỄ NHẤT) Tăng maxDuration
+   -> Cho VU đủ thời gian chạy hết iterations
+   -> vd: từ "30s" lên "1m"
+
+2. Giảm iterations
+   -> Mỗi VU chạy ít iter hơn
+   -> Total giảm theo, nhưng đảm bảo xong trong maxDuration
+
+3. Tối ưu code (giảm iter_time)
+   -> Bỏ sleep dư, giảm số HTTP request
+```
+
+#### "VU chậm kéo dài scenario"
+
+Đây là behavior bình thường của closed model. Nếu khó chịu:
+
+```text
+1. Cho phép sớm dừng: dùng shared-iterations thay thế
+   -> VU nhanh sẽ "lấy việc" của VU chậm
+   -> shared-iterations chia chung thay vì đếm riêng từng VU
+
+2. Giảm iterations
+   -> VU chậm cũng xong nhanh hơn
+
+3. Tối ưu code
+```
+
+#### "Có interrupted iterations cuối"
+
+```text
+1. Tăng gracefulStop
+   -> Cho iter đang chạy cuối thêm thời gian
+   -> Default 30s, có thể tăng lên "1m"
+
+2. Đảm bảo iter_time < maxDuration / iterations
+   -> Iter cuối kịp xong trước maxDuration
+```
+
+#### "Tăng throughput trong cùng thời gian"
+
+```text
+Tăng vus -> peak_rate tăng theo
+   -> Mỗi VU vẫn chạy đủ N iter, không phụ thuộc VU khác
+   -> Khác shared-iterations: shared chia chung, tăng VU không tăng total
+```
+
+### 8.4. Bảng từ vựng: ký hiệu nào nghĩa là gì?
+
+| Ký hiệu | Đọc là | Nghĩa | Đơn vị |
+| --- | --- | --- | --- |
+| `vus` | "vê u ét" | Số VU pin cố định trong scenario | VU |
+| `iterations` | "i-tờ-rê-sần" | Số iter MỖI VU phải chạy (khác shared!) | iter |
+| `total_iter` | "tô-tồ" | `vus × iterations` = tổng iter scenario | iter |
+| `iter_time` | "i-tờ tham" | Thời gian 1 VU chạy 1 iter | giây/iter |
+| `T_vu_i` | "ti vê u i" | Thời gian VU thứ i chạy hết N iter | giây |
+| `T_max` | "ti mác" | `max(T_vu_i)` = thời gian VU chậm nhất | giây |
+| `maxDuration` | "mặc ru-rây-sần" | Trần thời gian, VU bị cắt nếu vượt | giây |
+| `gracefulStop` | "gờ-rây-sờ-ful" | Grace cuối scenario | giây |
+| `peak_rate` | "pích rết" | `vus / iter_time` = throughput đỉnh | iter/giây |
+| `N_done` | "ren đần" | Iter đã hoàn thành (summary) | iter |
+| `N_drop` | "ren đờ-rốp" | Iter bị cắt (chưa kịp xong) | iter |
+| `N_int` | "ren in-tờ" | Iter đã start nhưng bị cancel | iter |
+
+### 8.5. 3 công thức "1 dòng" để giải mọi case (nhớ vĩnh viễn)
+
+```text
+Tổng iter?           total = vus × iterations
+Hết bao lâu?         T ≈ iterations × iter_time   (VU chậm nhất)
+Throughput đỉnh?     peak ≈ vus / iter_time
+```
+
+Học thuộc 3 dòng này là dùng được 80% nhu cầu thực tế.
+
+### 8.6. Đọc output sau test: tìm số ở đâu?
+
+Sau `k6 run`, output có 3 nhóm số liệu.
+
+#### Nhóm 1: Header (đầu test)
+
+```text
+scenarios: (100.00%) 1 scenario, 3 max VUs, 40s max duration (incl. graceful stop):
+         * my_scenario: 5 iterations for each of 3 VUs (maxDuration: 10s, gracefulStop: 30s)
+```
+
+Đọc các con số:
+
+```text
+"3 max VUs"               <- vus
+"40s max duration"        <- maxDuration + gracefulStop
+"5 iterations for each"    <- iterations (mỗi VU)
+"of 3 VUs"                <- vus
+```
+
+#### Nhóm 2: Summary cuối test
+
+```text
+EXECUTION
+iteration_duration...: avg=505ms min=500ms max=520ms p(95)=515ms
+iterations...........: 15    1.5/s
+dropped_iterations...: 0
+vus..................: 3     min=3  max=3
+vus_max..............: 3     min=3  max=3
+```
+
+Đọc các con số:
+
+```text
+iteration_duration avg     <- iter_time thực tế
+iterations (count)         <- N_done
+iterations (rate)          <- actual_rate
+dropped_iterations         <- N_drop (iter chưa kịp xong khi maxDuration)
+vus                        <- VU active (= preAllocated với per-vu)
+```
+
+#### Nhóm 3: Progress/footer
+
+```text
+running (10.0s), 0/3 VUs, 15 complete and 0 interrupted iterations
+```
+
+Đọc các con số:
+
+```text
+"10.0s"                       <- T_run thực tế
+"15 complete"                 <- N_done
+"0 interrupted iterations"    <- N_int
+```
+
+### 8.7. Quy trình 5 bước phân tích output
+
+Output mẫu để phân tích.
+
+**Config đã chạy**:
+
+```js
+export const options = {
+  scenarios: {
+    demo_analyze: {
+      executor: "per-vu-iterations",
+      vus: 3,
+      iterations: 5,
+      maxDuration: "10s",
+      gracefulStop: "30s",
+    },
+  },
+};
+
+import { sleep } from "k6";
+export default function () { sleep(0.5); }
+```
+
+**Output đầy đủ k6 in ra**:
+
+```text
+scenarios: (100.00%) 1 scenario, 3 max VUs, 40s max duration (incl. graceful stop):
+         * demo_analyze: 5 iterations for each of 3 VUs (maxDuration: 10s, gracefulStop: 30s)
+
+running (02.5s), 0/3 VUs, 15 complete and 0 interrupted iterations
+
+  █ TOTAL RESULTS
+
+    EXECUTION
+    iteration_duration...: avg=502ms min=500ms max=510ms p(95)=508ms
+    iterations...........: 15    6.0/s
+    dropped_iterations...: 0
+    vus..................: 3     min=3  max=3
+    vus_max..............: 3     min=3  max=3
+```
+
+#### Bước 1: Verify config có chạy đúng không
+
+```text
+Header in:    "5 iterations for each of 3 VUs"
+Config có:    vus=3, iterations=5 ✓
+
+Header in:    "maxDuration: 10s, gracefulStop: 30s"
+Config có:    đúng như vậy ✓
+
+KẾT LUẬN: config đã parse đúng -> sang Bước 2
+```
+
+#### Bước 2: Tính total_iter dự kiến
+
+```text
+total_iter = vus × iterations = 3 × 5 = 15 iter
+```
+
+#### Bước 3: So với N_done thực tế
+
+```text
+Summary cho:  iterations = 15
+Tính từ Bước 2: total_iter = 15
+
+So sánh:
+  N_done / total_iter = 15 / 15 = 100%
+  -> hoàn hảo, mọi VU đều xong đủ 5 iter
+```
+
+#### Bước 4: Verify dropped/interrupted
+
+```text
+Summary cho:  dropped_iterations = 0
+Footer cho:   "0 interrupted iterations" -> N_int = 0
+
+Verify:
+  N_done + N_drop + N_int = 15 + 0 + 0 = 15 = total_iter ✓
+
+KẾT LUẬN: test "hoàn hảo" - không có vấn đề
+```
+
+#### Bước 5: Đo iter_time thực tế và suy ngược
+
+```text
+iteration_duration avg = 502ms = 0.502s
+
+So với code: sleep(0.5) + console.log overhead
+=> iter_time thực tế ≈ 502ms (overhead 2ms)
+
+Tính lại T_max:
+  T_max = iterations × iter_time = 5 × 0.502 = 2.51s
+
+So với T_run:
+  T_run = 2.5s (footer)
+  T_max ≈ 2.51s
+  -> khớp (chỉ chênh ms)
+
+Đánh giá maxDuration:
+  maxDuration = 10s, T_max = 2.5s
+  -> dư 7.5s, an toàn (có thể giảm nhưng không cần)
+
+Có thể tăng iter cho mỗi VU không?
+  iterations_max = maxDuration / iter_time
+                 = 10 / 0.502
+                 ≈ 19 iter mỗi VU (giới hạn maxDuration)
+  -> có thể đặt iterations = 18 (buffer 5%)
+  -> tổng iter = 3 × 18 = 54 iter
 ```
 

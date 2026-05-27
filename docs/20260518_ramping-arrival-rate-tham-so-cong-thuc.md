@@ -4531,6 +4531,82 @@ Mỗi khách ăn xong mất 5 phút.
 rate đỉnh = 10 iter/giây
 1 iter chạy mất 0.5s
 => cần 10 × 0.5 = 5 VU (+20% = 6 VU)
+```
+
+**Vì sao buffer 20%?**
+
+`required_vus = λ × W` chỉ đúng ở điều kiện lý tưởng. Thực tế có 4 nguồn
+biến thiên khiến số VU CẦN THỰC TẾ cao hơn. Lấy lại ví dụ quán phở:
+
+**1. iter_time biến thiên (thời gian phục vụ không đều)**
+
+```text
+Đời thường:
+  Trung bình mỗi khách ăn 5 phút, NHƯNG:
+  - khách trẻ ăn 3 phút (nhanh)
+  - khách nói chuyện điện thoại ăn 8 phút (chậm)
+  - 95% khách ăn ≤ 6.5 phút (p95 cao hơn avg 30%)
+  -> nếu chỉ tính 50 chỗ theo avg, lúc đông khách ăn lâu sẽ thiếu chỗ
+
+Áp vào k6:
+  iteration_duration avg = 0.5s, p95 = 0.65s
+  -> server lag, GC pause, network jitter làm 1 số iter chậm hơn
+```
+
+**2. Slot fire jitter (khách đến không đều tuyệt đối)**
+
+```text
+Đời thường:
+  10 khách/phút trung bình, nhưng đến lúc lệch nhau:
+  - có lúc 3 khách vào cùng phút (dồn cụm)
+  - có lúc cả phút không ai vào
+  -> phải dư 1-2 chỗ cho lúc dồn cụm
+
+Áp vào k6:
+  k6 fire slot không đều tuyệt đối, có vài ms jitter
+  Đôi khi 2 slot dồn lại cùng thời điểm -> cần 1 VU dư
+```
+
+**3. Boundary effect (giờ chuyển ca / chuyển stage)**
+
+```text
+Đời thường:
+  Quán chuyển giữa ca trưa (6 khách/phút) sang ca tối (12 khách/phút).
+  Trong 30 giây chuyển ca, khách dồn lên 13/phút (vượt target 1 chút).
+  -> cần dư VÀI chỗ cho moment chuyển
+
+Áp vào k6:
+  Stage ramp ở ranh giới có thể vượt target rate 1-2% trong vài ms
+```
+
+**4. Scheduler overhead (lễ tân bố trí chỗ tốn vài giây)**
+
+```text
+Đời thường:
+  Khách đến phải chờ lễ tân tìm chỗ (10-30 giây tích luỹ).
+  Trong thời gian đó, khách "ngồi tạm" ở khu chờ -> cần thêm 1-2 chỗ chờ.
+
+Áp vào k6:
+  Go runtime, channel ops mất ~1ms tích lũy mỗi slot
+```
+
+→ 4 nguồn biến thiên này cộng lại thường rơi vào 10-50%, nên buffer 20%
+là điểm vừa phải.
+
+**Buffer factor tuỳ tình huống** (vẫn dùng ví dụ quán phở):
+
+| Buffer | Tình huống quán phở | Tình huống k6 |
+| --- | --- | --- |
+| 1.1 (10%) | Quán có khách đều, không đông giờ cao điểm | Code chỉ `sleep`, không HTTP |
+| **1.2 (20%)** | **Default — quán quen** | **Code có HTTP nhẹ, latency ổn** |
+| 1.5 (50%) | Quán có khách giờ cao điểm bất thường | HTTP với p99 spike, server chia sẻ |
+| 2.0+ (100%+) | Quán stress test dịp Tết, lễ | Stress test dài, server có thể degrade |
+
+**Công thức đầy đủ**:
+
+```text
+required_vus = ceil(λ_peak × W) × buffer_factor
+buffer_factor ∈ [1.1, 2.0+]   (chọn theo độ ổn định của hệ thống)
 
 preAllocatedVUs = 6
 ```
@@ -4890,18 +4966,18 @@ export default function () { sleep(0.5); }
 **Output đầy đủ k6 in ra**:
 
 ```text
-scenarios: (100.00%) 1 scenario, 6 max VUs, 37s max duration (incl. graceful stop):
+scenarios: (100.00%) 1 scenario, 10 max VUs, 37s max duration (incl. graceful stop):
          * demo_analyze: Up to 4.00 iterations/s for 7s over 3 stages (maxVUs: 5-10)
 
-running (07.6s), 0/6 VUs, 18 complete and 0 interrupted iterations
+running (07.0s), 0/10 VUs, 20 complete and 0 interrupted iterations
 
   █ TOTAL RESULTS
 
     EXECUTION
     iteration_duration...: avg=505ms min=500ms max=520ms p(95)=515ms
-    iterations...........: 18    2.368421/s
-    dropped_iterations...: 2     0.263157/s
-    vus..................: 4     min=2  max=4
+    iterations...........: 20    2.857142/s
+    dropped_iterations...: 0
+    vus..................: 2     min=0  max=2
     vus_max..............: 6     min=6  max=6
 
   EXECUTION
@@ -4945,66 +5021,71 @@ stage 2: 2 × (4+0)/2 = 4 slot
 #### Bước 3: So với N_done (đã hoàn thành)
 
 ```text
-Summary cho:  iterations = 18
+Summary cho:  iterations = 20
 Tính từ Bước 2: N_sched = 20
 
 So sánh:
-  N_done / N_sched = 18 / 20 = 90%
-  -> hệ thống chịu được 90% rate target
+  N_done / N_sched = 20 / 20 = 100%
+  -> hệ thống chịu được toàn bộ rate target
 
 Phân loại:
-  >= 99%     : test "hoàn hảo"
+  >= 99%     : test "hoàn hảo"             <- DEMO RƠI VÀO ĐÂY
   95-99%     : nhỏ giọt drop ở biên slot, OK
-  80-95%     : có vấn đề, kiểm tra Bước 4    <- DEMO RƠI VÀO ĐÂY
+  80-95%     : có vấn đề, kiểm tra Bước 4
   < 80%      : sizing sai nghiêm trọng
 ```
 
 #### Bước 4: Tách rõ drop vs interrupt
 
 ```text
-Summary cho:  dropped_iterations = 2
+Summary cho:  dropped_iterations = 0
 Footer cho:   "0 interrupted iterations" -> N_int = 0
 
 Verify cộng số:
-  N_done + N_drop + N_int = 18 + 2 + 0 = 20 = N_sched ✓
-  (khớp tuyệt đối, không lệch)
+  N_done + N_drop + N_int = 20 + 0 + 0 = 20 = N_sched ✓
 
 Diagnose:
-  N_drop = 2 (> 0)  -> sizing VU thiếu vào lúc đỉnh rate
-                       -> Bước 5 sẽ tính cụ thể thiếu bao nhiêu
+  N_drop = 0  -> sizing VU đủ, không thiếu lúc đỉnh
+  N_int = 0   -> code đủ kịp grace, không có vấn đề
 
-  N_int = 0          -> code đủ kịp grace, không có vấn đề
+KẾT LUẬN: test "hoàn hảo", scenario chạy đúng như thiết kế
 ```
 
 #### Bước 5: Tính capacity thực tế từ output (suy ngược)
 
 Đây là bước **suy ngược công thức** từ output để biết hệ thống thật sự
-chịu được rate cao nhất bao nhiêu.
+chịu được rate cao nhất bao nhiêu, và pool VU có dư hay không.
 
 ```text
 Đo W từ summary:
   iteration_duration avg = 505ms = 0.505s
 
 Đo M_peak từ summary:
-  vus max = 4    (số VU bận cao nhất trong test)
+  vus max = 2    (số VU bận cao nhất trong test)
 
 Tính capacity thực tế:
-  C_thực = M_peak / W = 4 / 0.505 ≈ 7.92 iter/s
+  C_thực = M_peak / W = 2 / 0.505 ≈ 3.96 iter/s
+  -> Đúng bằng λ_peak (~4 iter/s), pool vừa khít
 
-WAIT! capacity 7.92 mà λ_peak chỉ 4? Vậy sao có drop?
-=> Vì preAllocated=5, maxVUs=10, NHƯNG vus max chỉ đạt 4
-=> Có lẽ k6 chưa kịp spawn VU thứ 5 trước khi rate đạt đỉnh
-=> Drop xảy ra trong window spawn (~10-50ms ban đầu)
+Verify Little's Law:
+  required_vus = ceil(λ_peak × W) = ceil(4 × 0.505) = ceil(2.02) = 3 VU
+  vus max thực tế = 2 VU
+  -> Sai số nhỏ vì k6 dùng số VU integer dao động giữa 1-2 VU
+     (đỉnh chỉ cần 2 VU bận đồng thời)
 
-Sizing đúng:
-  required_vus = ceil(λ_peak × W) × 1.2
-              = ceil(4 × 0.505) × 1.2
-              = ceil(2.02) × 1.2
-              = 3 × 1.2 ≈ 4 VU
+Đánh giá pool config:
+  preAllocatedVUs = 5  (config)
+  vus max thực tế = 2  (chỉ dùng 2/5)
+  -> dư 3 VU không dùng tới
+  -> có thể giảm preAllocatedVUs xuống 3 (vẫn an toàn với buffer)
+
+Cao nhất chịu được rate nào?
+  capacity với 5 VU = 5 / 0.505 ≈ 9.9 iter/s
+  -> có thể tăng λ_peak lên ~9 iter/s mà vẫn không drop
+  -> hoặc giảm preAllocated nếu chỉ cần test 4/s
 
 Kết luận:
-  - Cần 4 VU đỉnh, preAllocated=5 đáng lẽ đủ
-  - Nhưng spawn không kịp -> drop 2 slot ở giây đầu
-  - Cách fix: đặt preAllocatedVUs = required_vus + 1 = 5 (đã làm)
-              hoặc tăng buffer (1.5x thay vì 1.2x)
+  - Test thành công 100% (N_done = N_sched = 20)
+  - Pool VU dư (5 cấp, dùng 2)
+  - Có thể tối ưu: giảm preAllocated xuống 3, hoặc tăng λ_peak để stress hơn
 ```

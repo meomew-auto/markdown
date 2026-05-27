@@ -58,7 +58,8 @@ docs/20260517_constant_arrival_rate_quickpizza_two_requests_worked_example.md
 - [Demo QuickPizza 2 requests / iteration](#8-demo-quickpizza-2-requests--iteration)
 - [So sánh với constant-vus ramping-vus per-vu shared](#9-so-sánh-với-constant-vus-ramping-vus-per-vu-shared)
 - [Edge case và config không hợp lệ](#10-edge-case-và-config-không-hợp-lệ)
-- [Cheat sheet](#11-cheat-sheet)
+- [Cheat sheet — Công thức cần nhớ nhất](#11-cheat-sheet--công-thức-cần-nhớ-nhất)
+- [Cheat sheet (tóm gọn)](#12-cheat-sheet-tóm-gọn)
 
 ## 1. Ý tưởng chính
 
@@ -3593,7 +3594,757 @@ scenario - chỉ là index của worker.
 | `gracefulStop = 0` | pass | iter cuối có thể bị interrupt | dùng nếu chấp nhận interrupt |
 | `exec` không tồn tại | pass parse | runtime error trong VU init | check function name khi viết test |
 
-## 11. Cheat sheet
+## 11. Cheat sheet — Công thức cần nhớ nhất
+
+> Phần này dành cho người mới. Mỗi công thức có **tên tiếng Việt**, ví dụ
+> đời thường, và "khi nào dùng". Đọc xong section này là dùng được ngay
+> mà không cần đọc Section 3 chi tiết.
+
+### 11.0. Config chung của `constant-arrival-rate`
+
+Đây là **bộ config đầy đủ** cho executor `constant-arrival-rate`. Đọc bảng
+này trước khi viết test, biết tham số nào BẮT BUỘC, tham số nào có default.
+
+#### Template config đầy đủ
+
+```js
+export const options = {
+  scenarios: {
+    my_scenario: {
+      // === BẮT BUỘC ===
+      executor: "constant-arrival-rate",  // tên executor
+      rate: 10,                           // số iter/timeUnit (cố định)
+      duration: "30s",                    // thời gian schedule mốc start
+      preAllocatedVUs: 5,                 // số VU sẵn từ đầu
+
+      // === TUỲ CHỌN (có default) ===
+      timeUnit: "1s",                     // default = "1s"
+      maxVUs: 10,                         // default = preAllocatedVUs
+      gracefulStop: "30s",                // default = "30s" (BaseConfig)
+      startTime: "0s",                    // default = "0s"
+      exec: "default",                    // default = "default" function
+      tags: { test: "demo" },             // default = {}
+      env: { DEBUG: "1" },                // default = {}
+    },
+  },
+};
+
+export default function () {
+  // code chạy mỗi iter
+}
+```
+
+#### Bảng tham số chi tiết
+
+| Tham số | Required? | Default | Đơn vị | Ý nghĩa |
+| --- | --- | --- | --- | --- |
+| `executor` | **BẮT BUỘC** | — | string | Phải đặt là `"constant-arrival-rate"` |
+| `rate` | **BẮT BUỘC** | — | int (>0) | Số iter mỗi `timeUnit` (cố định, không ramp) |
+| `duration` | **BẮT BUỘC** | — | duration | Thời gian schedule mốc start (vd `"30s"`) |
+| `preAllocatedVUs` | **BẮT BUỘC** | — | int (>=0) | Số VU sẵn sàng từ đầu test |
+| `timeUnit` | tuỳ chọn | `"1s"` | duration | Đơn vị của `rate` (vd `"1s"`, `"1m"`) |
+| `maxVUs` | tuỳ chọn | `= preAllocatedVUs` | int | Trần VU tối đa (cho phép spawn unplanned) |
+| `gracefulStop` | tuỳ chọn | `"30s"` | duration | Grace cuối scenario cho iter đang chạy |
+| `startTime` | tuỳ chọn | `"0s"` | duration | Trễ trước khi scenario bắt đầu |
+| `exec` | tuỳ chọn | `"default"` | string | Tên function JS chạy mỗi iter |
+| `tags` | tuỳ chọn | `{}` | object | Tag attach vào metric của scenario |
+| `env` | tuỳ chọn | `{}` | object | Biến môi trường riêng cho scenario |
+
+#### 5 quy tắc validate (đọc từ core)
+
+```text
+1. rate phải có và > 0
+   (thiếu: lỗi "the iteration rate isn't specified")
+   (<= 0: lỗi "the iteration rate must be more than 0")
+
+2. timeUnit > 0
+   (nếu <= 0: lỗi "the timeUnit must be more than 0")
+
+3. duration phải có và >= minDuration
+   (thiếu: lỗi "the duration is unspecified")
+   (quá ngắn: lỗi "the duration must be at least <minDuration>")
+
+4. preAllocatedVUs phải có và >= 0
+   (thiếu: lỗi "the number of preAllocatedVUs isn't specified")
+   (âm: lỗi "the number of preAllocatedVUs can't be negative")
+
+5. maxVUs >= preAllocatedVUs
+   (nhỏ hơn: lỗi "maxVUs can't be less than preAllocatedVUs")
+   (không khai báo: tự động bằng preAllocatedVUs)
+```
+
+Code ref: `lib/executor/constant_arrival_rate.go:91-125` (function `Validate()`).
+
+#### Config tối thiểu (chạy được)
+
+Nếu chỉ muốn config gọn nhất:
+
+```js
+export const options = {
+  scenarios: {
+    minimal: {
+      executor: "constant-arrival-rate",
+      rate: 10,
+      duration: "10s",
+      preAllocatedVUs: 5,
+    },
+  },
+};
+```
+
+5 dòng đủ chạy. `timeUnit` lấy default `"1s"`, `maxVUs` lấy default
+`= preAllocatedVUs = 5`, `gracefulStop` lấy default `"30s"`.
+
+**Khác với `ramping-arrival-rate`**: không có `stages`, không có `startRate`.
+Rate ở đây CỐ ĐỊNH suốt `duration`, không thay đổi theo thời gian.
+
+### 11.1. 5 công thức TOP cần thuộc lòng
+
+#### Công thức 1: "Slot interval" (Khoảng cách 2 mốc start)
+
+```text
+slot_interval = timeUnit / rate
+```
+
+**Tiếng Việt**: "Cứ bao nhiêu giây thì k6 lại start 1 iter mới?"
+
+**Vì sao quan trọng**: với `constant-arrival-rate`, rate **CỐ ĐỊNH**, nên
+khoảng cách giữa 2 mốc start cũng cố định. Khác với ramping (slot_interval
+biến đổi theo thời gian).
+
+**Ví dụ đời thường**:
+
+```text
+Quán phở phục vụ đều: 12 khách/phút
+=> cứ 5 giây gọi 1 khách vào (60s / 12 = 5s)
+   Khoảng cách CỐ ĐỊNH suốt giờ mở cửa.
+```
+
+**Áp vào k6**:
+
+```text
+config: rate=4, timeUnit="1s"
+=> slot_interval = 1s / 4 = 0.25s
+=> mốc start: t=0, 0.25, 0.5, 0.75, 1.0, ... (cứ 0.25s 1 mốc)
+
+config: rate=120, timeUnit="1m"
+=> slot_interval = 60s / 120 = 0.5s
+=> mốc start: t=0, 0.5, 1.0, 1.5, ... (cứ 0.5s 1 mốc)
+```
+
+**Khi nào dùng**: muốn biết tại 1 thời điểm cụ thể, k6 đang start mốc nào,
+hoặc check xem 2 mốc cách nhau bao xa.
+
+Code ref: `constant_arrival_rate.go:202` — `tickerPeriod = getTickerPeriod(arrivalRate)`.
+
+#### Công thức 2: "Số slot dự kiến" (Đếm tổng mốc start)
+
+```text
+N_sched = rate × duration / timeUnit_in_seconds
+```
+
+**Tiếng Việt**: "Tổng mốc start dự kiến = rate × thời gian chạy
+(quy về cùng đơn vị)"
+
+**Ví dụ đời thường**:
+
+```text
+Quán phở: 12 khách/phút, mở 5 phút
+=> tổng khách dự kiến = 12 × 5 = 60 lượt
+   (KHÔNG cần nhân chia phức tạp vì rate cố định)
+```
+
+**Áp vào k6**:
+
+```text
+config: rate=4, timeUnit="1s", duration="10s"
+=> N_sched = 4 × 10 / 1 = 40 mốc start
+
+config: rate=120, timeUnit="1m", duration="2m"
+=> N_sched = 120 × 2 = 240 mốc start
+
+config: rate=10, timeUnit="1s", duration="30s"
+=> N_sched = 10 × 30 = 300 mốc start
+```
+
+**Khi nào dùng**: ước lượng số iter scenario sẽ có, đối chiếu với metric
+`iterations` + `dropped_iterations` sau test.
+
+**Lưu ý**: với `constant-arrival-rate`, công thức này ĐƠN GIẢN hơn ramping
+(không cần tính trung bình rate đầu/cuối stage).
+
+#### Công thức 3: "Cần bao nhiêu nhân viên?" (Sizing VU bằng Little's Law)
+
+```text
+required_vus = ceil(rate × iter_time / timeUnit_in_seconds) × 1.2
+```
+
+**Tiếng Việt**: "Số VU cần = (rate quy về iter/giây) × (thời gian 1 iter)
+× 1.2 (dự phòng 20%)"
+
+**Ví dụ đời thường**:
+
+```text
+Ngân hàng: 12 khách vào/phút (đều), mỗi giao dịch mất 30 giây
+=> trung bình lúc nào cũng có 12 × 30/60 = 6 khách đang giao dịch
+=> cần ÍT NHẤT 6 quầy + dự phòng = 7-8 quầy
+```
+
+**Áp vào k6**:
+
+```text
+config: rate=10, timeUnit="1s"
+code:   sleep(0.5) -> iter_time ≈ 0.5s
+
+required_vus = ceil(10 × 0.5 / 1) × 1.2
+             = ceil(5) × 1.2
+             = 5 × 1.2
+             = 6 VU
+
+=> preAllocatedVUs = 6
+```
+
+**Một ví dụ khác** (rate đơn vị phút):
+
+```text
+config: rate=120, timeUnit="1m"
+code:   iter_time ≈ 1s (1 HTTP request)
+
+lambda = 120/60 = 2 iter/s
+required_vus = ceil(2 × 1) × 1.2 = 3 VU
+```
+
+**Khi nào dùng**: trước khi chạy test, để biết đặt `preAllocatedVUs`
+bao nhiêu cho đủ. Nếu thiếu, sẽ có `dropped_iterations` lúc rate đỉnh.
+
+#### Công thức 4: "Pool M VU chịu rate cao nhất bao nhiêu?" (Capacity)
+
+```text
+capacity = M / iter_time
+```
+
+**Tiếng Việt**: "Năng lực pool M VU = số VU / thời gian 1 iter (đơn vị
+iter/giây)"
+
+**Ví dụ đời thường**:
+
+```text
+Quán có 5 nhân viên, mỗi đơn phục vụ 30 giây
+=> mỗi giây xử lý được 5 / 30 = 0.167 đơn/giây
+=> hay 10 đơn/phút
+```
+
+**Áp vào k6**:
+
+```text
+M = 6 VU, code sleep(0.5) -> iter_time = 0.5s
+=> capacity = 6 / 0.5 = 12 iter/s
+=> chịu được scenario có rate ≤ 12 iter/s
+
+M = 4 VU, code sleep(1) -> iter_time = 1s
+=> capacity = 4 / 1 = 4 iter/s
+=> nếu config rate = 5/s -> sẽ DROP 1 iter/s (vượt capacity)
+```
+
+**Khi nào dùng**: đã có pool VU sẵn (vd test infrastructure cố định),
+muốn biết có nên đẩy rate cao hơn không, hoặc rate cao bao nhiêu thì
+bắt đầu drop.
+
+**Liên hệ Công thức 3**: capacity là **chiều ngược lại** của Công thức 3.
+Công thức 3 cho rate, suy ra VU. Công thức 4 cho VU, suy ra rate max.
+
+#### Công thức 5: "Drop bao nhiêu nếu thiếu VU?" (Verify drop)
+
+```text
+drop_rate = max(0, rate − capacity)
+         = max(0, rate − M / iter_time)
+```
+
+**Tiếng Việt**: "Số iter bị drop mỗi giây = rate config − năng lực pool
+(nếu vượt; ngược lại = 0)"
+
+**Ví dụ**:
+
+```text
+config: rate=15/s
+pool:   M=6 VU, iter_time=0.5s -> capacity = 12/s
+
+drop_rate = max(0, 15 − 12) = 3 iter/s
+
+=> chạy 10s, dự kiến drop 3 × 10 = 30 iter
+=> summary sẽ thấy dropped_iterations ≈ 30
+```
+
+**Verify ngược từ output**:
+
+```text
+N_done + N_drop + N_int ≈ N_sched (đẳng thức gần đúng)
+
+vd: rate=10, duration=5s -> N_sched = 50
+    summary: iterations=42, dropped_iterations=8, interrupted=0
+    => 42 + 8 + 0 = 50 ✓ (khớp)
+```
+
+**Khi nào dùng**: sau test, để verify hệ thống có chịu được rate config
+hay không. Drop > 5% N_sched là dấu hiệu sizing thiếu.
+
+### 11.2. Bảng tra nhanh: gặp tình huống nào, dùng công thức nào
+
+#### Tình huống 1: "Sắp viết config, không biết đặt số bao nhiêu"
+
+```text
+Bước 1: Quyết rate đỉnh (target)
+   rate = ?  (đặt theo yêu cầu test)
+   timeUnit = ?  (mặc định "1s" cho dễ đọc)
+
+Bước 2: Đo iter_time (chạy thử 1 VU 5 giây, xem iteration_duration)
+   iter_time = avg của iteration_duration
+
+Bước 3: Tính số VU cần (Công thức 3)
+   required_vus = ceil(rate × iter_time / timeUnit_s) × 1.2
+
+Bước 4: Đặt config
+   preAllocatedVUs = required_vus
+   maxVUs = required_vus  (hoặc lớn hơn nếu muốn cho phép spawn)
+```
+
+**Ví dụ thực tế**:
+
+```text
+Yêu cầu: load test 10 req/s trong 1 phút, code 1 GET request
+Bước 2: chạy thử 1 VU, iter_time ≈ 0.3s (đo)
+Bước 3: required_vus = ceil(10 × 0.3 / 1) × 1.2 = 3 × 1.2 ≈ 4 VU
+Bước 4:
+  rate: 10
+  duration: "1m"
+  preAllocatedVUs: 4
+  maxVUs: 5  (buffer 1 VU)
+```
+
+#### Tình huống 2: "Đã có sẵn N VU, hỏi chịu được rate cao nhất là bao nhiêu?"
+
+```text
+Bước 1: Đo iter_time
+   iter_time = thời gian 1 iter (chạy thử)
+
+Bước 2: Tính capacity (Công thức 4)
+   capacity = N / iter_time  iter/giây
+
+Bước 3: So với rate config
+   nếu rate ≤ capacity -> không drop
+   nếu rate > capacity -> drop, drop_rate = rate − capacity (Công thức 5)
+```
+
+**Ví dụ**:
+
+```text
+Có 6 VU, code sleep(0.5)
+=> capacity = 6 / 0.5 = 12 iter/s
+
+Test các config:
+  rate=8/s   -> 8 ≤ 12, không drop ✓
+  rate=12/s  -> 12 = 12, biên, có thể drop nhỏ ⚠
+  rate=15/s  -> drop_rate = 15 − 12 = 3 iter/s ✗
+```
+
+#### Tình huống 3: "Đã chạy xong, đọc summary"
+
+```text
+3 con số quan trọng:
+   iterations         = N_done   (số iter hoàn thành)
+   dropped_iterations = N_drop   (slot bị drop, không có VU rảnh)
+   interrupted iter.  = N_int    (iter đã start, bị cancel cuối)
+
+3 câu hỏi cần trả lời:
+   1) Có drop nhiều không?           N_drop / N_sched > 5% -> đáng lo
+   2) Có interrupt cuối không?       N_int > 0 -> chưa kịp xong
+   3) Rate thực có gần target không?
+                       actual_rate = N_done / T_run
+                       so với rate config (đơn vị iter/s)
+```
+
+**Ví dụ verify**:
+
+```text
+config: rate=10, duration=5s -> N_sched = 50
+
+Summary:
+  iterations          = 45
+  dropped_iterations  = 5
+  interrupted         = 0
+
+Verify: 45 + 5 + 0 = 50 ✓
+Đánh giá:
+  N_drop / N_sched = 5/50 = 10% -> sizing thiếu, cần tăng VU
+  actual_rate = 45/5 = 9/s, target 10/s -> hụt 10%
+```
+
+### 11.3. Hành động khi gặp vấn đề
+
+#### "Drop nhiều quá!"
+
+Nguyên nhân: rate vượt năng lực pool VU. Cách xử lý theo độ ưu tiên:
+
+```text
+1. (DỄ NHẤT) Tăng preAllocatedVUs
+   -> Pool có sẵn nhiều VU rảnh, không cần spawn
+   -> Tốt nhất cho test ổn định
+
+2. Tăng maxVUs (cho phép spawn unplanned)
+   -> Cho k6 spawn thêm VU khi cần
+   -> Có window vài chục ms ban đầu vẫn drop trong lúc spawn
+   -> Xem Section 3.12-3.13 chi tiết
+
+3. Giảm rate (đơn giản nhất nếu rate cao là không cần)
+   -> Rate thấp hơn -> ít VU cần hơn
+
+4. Tối ưu code (giảm iter_time)
+   -> Bỏ sleep dư, tối ưu logic, gộp request
+   -> iter_time nhỏ hơn -> mỗi VU làm được nhiều iter/s hơn
+```
+
+**Công thức quyết định**:
+
+```text
+Rate config = R
+Capacity hiện tại = M / iter_time
+
+Cần tăng VU lên:
+  M_mới = ceil(R × iter_time × 1.2)
+
+Hoặc giảm rate xuống:
+  R_mới = M × 0.8 / iter_time  (chừa 20% buffer)
+```
+
+#### "Có interrupted iterations cuối test!"
+
+Nguyên nhân: iter chưa kịp xong khi `gracefulStop` hết. Cách xử lý:
+
+```text
+1. Tăng gracefulStop
+   -> Cho iter cuối thêm thời gian
+   -> Vd: gracefulStop: "60s" thay vì default "30s"
+
+2. Giảm rate
+   -> Mốc start cuối ít hơn -> ít iter dở dang lúc duration hết
+
+3. Tối ưu code (giảm iter_time)
+   -> Iter ngắn hơn -> ít có khả năng vắt qua mốc cuối duration
+```
+
+**Đặc thù `constant-arrival-rate`**: vì rate cố định đến tận cuối duration,
+slot start ngay sát `duration` rất dễ bị interrupt nếu code chậm. Khác với
+`ramping-arrival-rate` có thể ramp về 0 ở stage cuối để giảm risk.
+
+#### "Rate thực thấp hơn target nhiều!"
+
+```text
+1. Check N_drop trước
+   -> N_drop / N_sched > 5% -> fix theo "Drop nhiều"
+
+2. Check N_int sau
+   -> N_int > 0 -> tăng gracefulStop
+
+3. Check T_run vs duration
+   -> T_run > duration (dùng grace) -> divisor lớn hơn
+   -> rate thực tự nhiên thấp hơn rate config
+   -> đây là chuyện bình thường, không phải bug
+
+4. Check iter_time avg
+   -> nếu iter_time cao bất thường -> code chậm, làm spawn không kịp
+   -> tối ưu code hoặc giảm rate
+
+Nếu drop=0, int=0, T_run≈duration mà rate vẫn thấp:
+   -> có thể là caveat slot đầu lệch t=0 (không có iter ở t=0)
+   -> hoặc precision của ticker (Section 3.1)
+```
+
+### 11.4. Bảng từ vựng: ký hiệu nào nghĩa là gì?
+
+> Section 3 và section 11 dùng nhiều ký hiệu rút gọn cho gọn. Đây là bảng
+> tra để bạn không phải lật lại đầu Section 3 mỗi lần.
+
+| Ký hiệu | Đọc là | Nghĩa | Đơn vị |
+| --- | --- | --- | --- |
+| `lambda` (λ) | "lam-da" | Rate, nhịp start (ở `constant-arrival-rate` là CỐ ĐỊNH) | iter/giây |
+| `rate` | "rết" | Số iter mỗi `timeUnit` config | iter/timeUnit |
+| `timeUnit` | "tham đơn vị" | Đơn vị thời gian của rate | giây hoặc phút |
+| `iter_time` (W) | "đắp-bờ-liu" | Thời gian 1 iter chiếm 1 VU | giây/iter |
+| `slot_interval` | "slót in-tờ" | Khoảng cách 2 mốc start | giây |
+| `T` | "ti" | Tổng `duration` config | giây |
+| `T_run` | "ti rần" | Thời gian thực tế chạy (có thể > T do grace) | giây |
+| `M` | "em" | Số VU thực tế trong pool (preAllocated) | VU |
+| `M_max` | "em mác" | Trần VU (`maxVUs`) | VU |
+| `C` | "xi" | Capacity (năng lực pool M VU) = M/W | iter/giây |
+| `N_sched` | "ren skét" | Tổng slot dự kiến = rate × T / timeUnit_s | slot |
+| `N_done` | "ren đần" | Tổng iter HOÀN THÀNH (metric `iterations`) | iter |
+| `N_drop` | "ren đờ-rốp" | Slot bị drop (`dropped_iterations`) | slot |
+| `N_int` | "ren in-tờ" | Iter bị interrupt (đọc footer progress) | iter |
+
+**So với `ramping-arrival-rate`**: KHÔNG có `λ_peak` riêng (vì rate cố
+định = peak), KHÔNG có `λ_avg` (vì avg = rate luôn). Chỉ cần nhớ 1 `rate`.
+
+### 11.5. 3 công thức "1 dòng" để giải mọi case (nhớ vĩnh viễn)
+
+```text
+Cần BAO NHIÊU VU?         VU = ceil(rate × iter_time)
+Slot mỗi BAO LÂU?         slot_interval = timeUnit / rate
+Pool CHỊU rate cao bao nhiêu? rate_max = số_VU / iter_time
+```
+
+**Ví dụ áp dụng**:
+
+```text
+Case 1: muốn rate=20/s, iter_time=0.4s
+   -> VU = ceil(20 × 0.4) = 8 (+ 20% buffer = 10)
+
+Case 2: rate=10, timeUnit=1s
+   -> slot_interval = 1 / 10 = 0.1s (cứ 100ms 1 mốc)
+
+Case 3: có 12 VU, iter_time=0.6s
+   -> rate_max = 12 / 0.6 = 20 iter/s
+   -> nếu test cần > 20/s thì phải tăng VU
+```
+
+Học thuộc 3 dòng này là dùng được 80% nhu cầu thực tế.
+
+### 11.6. Đọc output sau test: tìm số ở đâu?
+
+Sau khi `k6 run` xong, bạn sẽ thấy 3 nhóm số liệu. Phải biết tìm từng
+con số ở đâu để áp công thức.
+
+#### Nhóm 1: Header (in ra ngay đầu test)
+
+```text
+scenarios: (100.00%) 1 scenario, 5 max VUs, 35s max duration (incl. graceful stop):
+         * my_scenario: 10.00 iterations/s for 5s (maxVUs: 5)
+```
+
+Đọc các con số:
+
+```text
+"5 max VUs"                      <- vus_max init (preAllocatedVUs hoặc maxVUs)
+"35s max duration"               <- duration + gracefulStop (5 + 30)
+"10.00 iterations/s"             <- rate / timeUnit_s (CỐ ĐỊNH)
+"for 5s"                         <- duration
+"maxVUs: 5"                      <- preAllocatedVUs (=maxVUs trong case này)
+```
+
+Code ref: `constant_arrival_rate.go:70-88` (function `GetDescription()`).
+
+**Khi nào đọc**: ngay đầu để verify config đã parse đúng. Đặc biệt check
+con số `iterations/s` có khớp `rate / timeUnit_s` không.
+
+#### Nhóm 2: Summary cuối test (block "TOTAL RESULTS")
+
+```text
+EXECUTION
+iteration_duration...: avg=505ms min=500ms max=520ms p(95)=515ms
+iterations...........: 42    8.4/s
+dropped_iterations...: 8     1.6/s
+vus..................: 5     min=5  max=5
+vus_max..............: 5     min=5  max=5
+
+NETWORK
+http_req_duration....: avg=200ms ...
+http_reqs............: 84    16.8/s
+```
+
+Đọc các con số:
+
+```text
+iteration_duration avg     <- iter_time hiệu dụng (W)
+iterations (count)         <- N_done (iter hoàn thành)
+iterations (rate)          <- actual_rate
+dropped_iterations (count) <- N_drop (slot bị drop)
+dropped_iterations (rate)  <- drop_rate (so với target)
+vus (max)                  <- M_busy_peak (VU bận cao nhất)
+vus_max                    <- preAllocated (instance đã init)
+http_reqs (count)          <- nếu code có HTTP, ÷ N_done = req per iter
+```
+
+**Khi nào đọc**: sau khi test xong, để đánh giá kết quả.
+
+#### Nhóm 3: Progress/footer (ngay trước summary)
+
+```text
+running (05.5s), 0/5 VUs, 42 complete and 0 interrupted iterations
+```
+
+Đọc các con số:
+
+```text
+"05.5s"                          <- T_run (thời gian thực tế chạy)
+"0/5 VUs"                        <- VU đang bận / tổng VU init
+"42 complete"                    <- N_done (khớp với summary)
+"0 interrupted iterations"       <- N_int (KHÔNG có metric Counter riêng)
+```
+
+**Lưu ý**: `N_int` chỉ xuất hiện ở dòng progress cuối, KHÔNG có trong
+block "TOTAL RESULTS" summary. Phải đọc dòng này riêng.
+
+### 11.7. Quy trình 5 bước phân tích output
+
+Sau khi có đủ số liệu từ 11.6, làm 5 bước theo thứ tự để diagnose test.
+
+#### Output mẫu để phân tích (dùng xuyên suốt 5 bước)
+
+**Config đã chạy**:
+
+```js
+export const options = {
+  scenarios: {
+    demo_analyze: {
+      executor: "constant-arrival-rate",
+      rate: 10,
+      timeUnit: "1s",
+      duration: "5s",
+      preAllocatedVUs: 5,
+      maxVUs: 5,
+      gracefulStop: "30s",
+    },
+  },
+};
+
+import { sleep } from "k6";
+export default function () { sleep(0.5); }
+```
+
+**Output đầy đủ k6 in ra**:
+
+```text
+scenarios: (100.00%) 1 scenario, 5 max VUs, 35s max duration (incl. graceful stop):
+         * demo_analyze: 10.00 iterations/s for 5s (maxVUs: 5)
+
+running (05.0s), 0/5 VUs, 42 complete and 0 interrupted iterations
+
+  █ TOTAL RESULTS
+
+    EXECUTION
+    iteration_duration...: avg=505ms min=500ms max=520ms p(95)=515ms
+    iterations...........: 42    8.4/s
+    dropped_iterations...: 8     1.6/s
+    vus..................: 5     min=5  max=5
+    vus_max..............: 5     min=5  max=5
+
+  EXECUTION
+  scenarios: 1 scenarios completed
+```
+
+Áp 5 bước dưới đây vào đúng output này.
+
+#### Bước 1: Verify config có chạy đúng không
+
+```text
+Câu hỏi: con số rate header có khớp với config?
+
+Header in:    "10.00 iterations/s"
+Config có:    rate=10, timeUnit=1s
+              -> rate/timeUnit_s = 10 / 1 = 10 iter/s ✓
+
+Header in:    "for 5s"
+Config có:    duration = "5s" ✓
+
+Header in:    "maxVUs: 5"
+Config có:    preAllocatedVUs=5, maxVUs=5 ✓
+
+Header in:    "5 max VUs"
+              -> instance VU init (= maxVUs = 5) ✓
+
+KẾT LUẬN: config parse đúng -> sang Bước 2
+```
+
+#### Bước 2: Tính N_sched (số slot dự kiến)
+
+Áp Công thức 2:
+
+```text
+N_sched = rate × duration / timeUnit_s
+        = 10 × 5 / 1
+        = 50 slot
+
+(với constant-arrival-rate, công thức RẤT đơn giản, không cần
+ tính trung bình ramp như ở ramping-arrival-rate)
+```
+
+#### Bước 3: So với N_done (đã hoàn thành)
+
+```text
+Summary cho:  iterations = 42
+Tính từ Bước 2: N_sched = 50
+
+So sánh:
+  N_done / N_sched = 42 / 50 = 84%
+  -> hệ thống chỉ chịu được 84% rate target
+
+Phân loại:
+  >= 99%     : test "hoàn hảo"
+  95-99%     : nhỏ giọt drop ở biên slot, OK
+  80-95%     : có vấn đề, kiểm tra Bước 4   <- DEMO RƠI VÀO ĐÂY
+  < 80%      : sizing sai nghiêm trọng
+```
+
+#### Bước 4: Tách rõ drop vs interrupt
+
+```text
+Summary cho:  dropped_iterations = 8
+Footer cho:   "0 interrupted iterations" -> N_int = 0
+
+Verify cộng số:
+  N_done + N_drop + N_int = 42 + 8 + 0 = 50 = N_sched ✓
+  (khớp tuyệt đối, không lệch)
+
+Diagnose:
+  N_drop = 8 (> 0)  -> sizing VU thiếu, không kịp xử rate=10
+                       -> Bước 5 sẽ tính cụ thể thiếu bao nhiêu
+
+  N_int = 0          -> code đủ kịp grace, không có vấn đề ở grace
+```
+
+#### Bước 5: Tính capacity thực tế từ output (suy ngược)
+
+Đây là bước **suy ngược** từ output để biết hệ thống thật sự chịu
+được rate cao nhất bao nhiêu, từ đó quyết định sizing đúng.
+
+```text
+Đo W từ summary:
+  iteration_duration avg = 505ms = 0.505s
+  (lớn hơn sleep(0.5) một chút vì overhead k6)
+
+Đo M từ summary:
+  vus max = 5    (số VU bận cao nhất trong test)
+
+Tính capacity thực tế (Công thức 4):
+  C_thực = M / W = 5 / 0.505 ≈ 9.9 iter/s
+
+So với rate config:
+  rate config = 10 iter/s
+  capacity   ≈ 9.9 iter/s
+  -> rate VƯỢT capacity 0.1 iter/s
+  -> drop ~0.1 × 5s = 0.5 iter/giây CỘNG VỚI overhead spawn ban đầu
+  -> tổng drop quan sát = 8 (lớn hơn lý thuyết do
+     ticker drift, slot cuối kẹt grace, etc.)
+
+Sizing ĐÚNG cho lần test sau:
+  required_vus = ceil(rate × iter_time) × 1.2
+              = ceil(10 × 0.505) × 1.2
+              = ceil(5.05) × 1.2
+              = 6 × 1.2
+              ≈ 7 VU
+
+Kết luận:
+  - 5 VU không đủ cho rate=10 với iter_time=0.505s
+  - Nên đặt preAllocatedVUs = 7 (theo công thức)
+  - Hoặc giảm rate xuống 8/s (5 VU đủ cho rate ≤ 9.9/s)
+  - Hoặc tối ưu code: bỏ sleep còn 0.4s
+    -> capacity = 5/0.4 = 12.5 iter/s -> đủ chịu rate=10
+```
+
+**Mẹo**: bước 5 quan trọng nhất, vì nó trả lời câu hỏi "lần sau test
+nên đặt số bao nhiêu". Đừng chỉ tăng `preAllocatedVUs` đại — luôn dùng
+công thức `ceil(rate × iter_time) × 1.2` để có số chuẩn.
+
+## 12. Cheat sheet (tóm gọn)
 
 ```text
 lambda = rate / timeUnit_seconds

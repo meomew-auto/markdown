@@ -3298,7 +3298,7 @@ shared-iterations = quota iteration cho cả pool
 arrival-rate = ép tốc độ start iteration
 ```
 
-## 9. Cheat sheet
+## 9. Cheat sheet — Công thức cần nhớ nhất
 
 ```text
 ramping-vus = variable VUs over time
@@ -3339,4 +3339,774 @@ gracefulStop = grace ở cuối scenario
 ```text
 ramping-vus không có đường emit dropped_iterations bình thường
 nhưng có thể có interrupted iterations
+```
+
+> Phần dưới đây dành cho người mới. Mỗi công thức có **tên tiếng Việt**,
+> ví dụ đời thường, và "khi nào dùng". Đọc xong là dùng được ngay mà
+> không cần đọc 3.x chi tiết. Đặc thù `ramping-vus` là **closed model**:
+> số VU thay đổi theo timeline, mỗi VU chạy iter nối tiếp nhau, không
+> có khái niệm rate cố định.
+
+### 9.0. Config chung của `ramping-vus`
+
+Đây là **bộ config đầy đủ** cho executor `ramping-vus`. Đọc bảng này
+trước khi viết test, biết tham số nào BẮT BUỘC, tham số nào có default.
+
+#### Template config đầy đủ
+
+```js
+export const options = {
+  scenarios: {
+    my_scenario: {
+      // === BẮT BUỘC ===
+      executor: "ramping-vus",            // tên executor
+      stages: [                           // mảng stage, ít nhất 1 stage
+        { duration: "2s", target: 4 },    // ramp 1 -> 4 VU trong 2s
+        { duration: "5s", target: 4 },    // hold 4 VU trong 5s
+        { duration: "2s", target: 0 },    // ramp 4 -> 0 VU trong 2s
+      ],
+
+      // === TUỲ CHỌN (có default) ===
+      startVUs: 1,                        // default = 1 VU
+      gracefulRampDown: "30s",            // default = "30s"
+      gracefulStop: "30s",                // default = "30s" (từ BaseConfig)
+      startTime: "0s",                    // default = "0s"
+      exec: "default",                    // default = "default" function
+      tags: { test: "demo" },             // default = {}
+      env: { DEBUG: "1" },                // default = {}
+    },
+  },
+};
+
+export default function () {
+  // code chạy mỗi iter (closed model: VU chạy nối tiếp)
+}
+```
+
+#### Bảng tham số chi tiết
+
+| Tham số | Required? | Default | Đơn vị | Ý nghĩa |
+| --- | --- | --- | --- | --- |
+| `executor` | **BẮT BUỘC** | — | string | Phải đặt là `"ramping-vus"` |
+| `stages` | **BẮT BUỘC** | — | array | Ít nhất 1 stage, mỗi stage có `duration` + `target` |
+| `stages[].duration` | **BẮT BUỘC** | — | duration | Thời gian stage (vd `"2s"`, `"1m"`) |
+| `stages[].target` | **BẮT BUỘC** | — | int | Số VU đích ở **cuối** stage (không phải cộng thêm) |
+| `startVUs` | tuỳ chọn | `1` | int | Số VU tại thời điểm bắt đầu scenario |
+| `gracefulRampDown` | tuỳ chọn | `"30s"` | duration | Grace cho VU đang chạy khi ramp DOWN |
+| `gracefulStop` | tuỳ chọn | `"30s"` | duration | Grace ở cuối scenario cho iter đang chạy |
+| `startTime` | tuỳ chọn | `"0s"` | duration | Trễ trước khi scenario bắt đầu |
+| `exec` | tuỳ chọn | `"default"` | string | Tên function JS chạy mỗi iter |
+| `tags` | tuỳ chọn | `{}` | object | Tag attach vào metric của scenario |
+| `env` | tuỳ chọn | `{}` | object | Biến môi trường riêng cho scenario |
+
+#### 4 quy tắc validate (đọc từ core)
+
+```text
+1. startVUs >= 0
+   (nếu âm: lỗi "the number of start VUs can't be negative")
+
+2. max(startVUs, mọi stage.target) > 0
+   (nếu tất cả = 0: lỗi "either startVUs or one of the stages' target
+    values must be greater than 0")
+
+3. stages có ít nhất 1 phần tử, mỗi stage có duration > 0 và target hợp lệ
+   (kiểm trong validateStages)
+
+4. Không có target shifts vô lý (ví dụ ramp về số âm)
+   (kiểm trong validateTargetShifts)
+```
+
+Code ref: `lib/executor/ramping_vus.go:84-99` (function `Validate()`).
+Default values: `lib/executor/ramping_vus.go:54-60` (function
+`NewRampingVUsConfig`).
+
+#### Config tối thiểu (chạy được)
+
+Nếu chỉ muốn config gọn nhất:
+
+```js
+export const options = {
+  scenarios: {
+    minimal: {
+      executor: "ramping-vus",
+      stages: [{ duration: "10s", target: 5 }],
+    },
+  },
+};
+```
+
+4 dòng đủ chạy. Các field khác lấy default (`startVUs=1`,
+`gracefulRampDown=30s`, `gracefulStop=30s`).
+
+### 9.1. 5 công thức TOP cần thuộc lòng
+
+#### Công thức 1: "Bước nhảy giữa các VU" (Step interval)
+
+```text
+step_interval = stage.duration / |stage.target − fromVUs|
+```
+
+**Tiếng Việt**: "Cứ bao nhiêu giây thì k6 lại spawn (hoặc giảm) 1 VU =
+thời gian stage chia cho số lượng VU thay đổi trong stage đó"
+
+`fromVUs` = số VU **đầu** stage (bằng `target` của stage trước, hoặc
+`startVUs` nếu là stage đầu tiên).
+
+**Ví dụ đời thường**:
+
+```text
+Quán phở mở thêm bàn từ 1 lên 4 bàn trong 6 phút.
+Cứ 6 / (4-1) = 2 phút thêm 1 bàn.
+=> phút 0: 1 bàn
+   phút 2: 2 bàn
+   phút 4: 3 bàn
+   phút 6: 4 bàn
+```
+
+**Áp vào k6**:
+
+```text
+stage: duration=12s, ramp 1 -> 4 VU (fromVUs=1)
+step_interval = 12 / (4-1) = 4s
+=> t=0s : 1 VU
+   t=4s : 2 VU
+   t=8s : 3 VU
+   t=12s: 4 VU
+```
+
+**Khi nào dùng**: muốn biết tại giây thứ N có bao nhiêu VU đang chạy.
+
+#### Công thức 2: "Rate của 1 VU" (Per-VU throughput)
+
+```text
+per_vu_rate = 1 / iter_time
+```
+
+**Tiếng Việt**: "Mỗi VU chạy được bao nhiêu iter/giây = 1 chia cho
+thời gian chạy 1 iter"
+
+**Ví dụ đời thường**:
+
+```text
+Một thợ cắt tóc cắt 1 khách mất 30 phút.
+=> 1 thợ làm được 1/30 = 0.033 khách/phút = 2 khách/giờ
+```
+
+**Áp vào k6**:
+
+```text
+code có sleep(0.5) và 1 HTTP call ~5ms
+=> iter_time ≈ 0.505s
+=> per_vu_rate = 1 / 0.505 ≈ 1.98 iter/s
+```
+
+**Khi nào dùng**: bước đệm trước Công thức 3 — phải biết 1 VU làm
+được bao nhiêu thì mới biết N VU làm được bao nhiêu.
+
+#### Công thức 3: "Throughput đỉnh tổng" (Peak rate cả pool)
+
+```text
+peak_rate ≈ active_vus_max / iter_time
+```
+
+**Tiếng Việt**: "Rate đỉnh = số VU bận cao nhất × rate của 1 VU"
+
+**Vì sao là "đỉnh"?** Vì closed model: VU chạy nối tiếp, không có
+queue. Nên rate cao nhất chỉ đạt được khi tất cả VU đều bận.
+
+**Ví dụ**:
+
+```text
+config max VU = 4, code sleep(0.5)
+peak_rate = 4 / 0.5 = 8 iter/s
+```
+
+**Khi nào dùng**:
+- Trước test: ước lượng throughput tối đa scenario có thể đạt.
+- Sau test: so với `iterations rate` trong summary, nếu thấp hơn
+  nhiều có thể do ramp chưa lên đỉnh hoặc bottleneck server.
+
+**Lưu ý**: đây là cận trên lý thuyết. Thực tế thường thấp hơn vì:
+1. Stage ramp chỉ đạt max ở cuối stage
+2. Stage hold ngắn -> không kịp đè peak
+3. Server chậm -> iter_time tăng -> rate giảm
+
+#### Công thức 4: "Số VU active(t) trong stage ramp" (Nội suy VU)
+
+```text
+active_vus(t) = fromVUs + floor((t − stageStart) / step_interval)
+```
+
+**Tiếng Việt**: "VU active tại thời điểm t = số VU đầu stage + số bước
+đã trôi qua kể từ đầu stage"
+
+**Vì sao có `floor`?** Vì k6 spawn VU theo bước rời rạc, không phải
+liên tục. Tại thời điểm chưa đủ 1 step thì giữ nguyên số VU cũ.
+
+**Ví dụ**:
+
+```text
+stage 1 -> 4 VU trong 12s, stageStart=0s
+step_interval = 12 / 3 = 4s
+
+t=0s : floor(0/4)  + 1 = 0 + 1 = 1 VU
+t=3s : floor(3/4)  + 1 = 0 + 1 = 1 VU   (chưa đủ step)
+t=4s : floor(4/4)  + 1 = 1 + 1 = 2 VU
+t=7s : floor(7/4)  + 1 = 1 + 1 = 2 VU
+t=8s : floor(8/4)  + 1 = 2 + 1 = 3 VU
+t=12s: floor(12/4) + 1 = 3 + 1 = 4 VU
+```
+
+**Khi nào dùng**: muốn biết tại giây thứ N có chính xác bao nhiêu VU
+đang chạy (để debug stage ramp, hoặc tính peak_rate tại 1 thời điểm).
+
+#### Công thức 5: "Trần wall-clock" (Max duration thật sự)
+
+```text
+max_duration = T + gracefulStop
+T = sum(stage.duration)
+```
+
+**Tiếng Việt**: "Thời gian tối đa scenario có thể chạy = tổng thời gian
+các stage + grace cuối"
+
+**Vì sao có `gracefulStop`?** Vì khi tới cuối stage cuối, có thể có
+iter đang chạy dở. k6 cho thêm `gracefulStop` để chúng kịp xong, sau
+đó mới kill.
+
+**Ví dụ**:
+
+```text
+config:
+  stages:
+    - duration: "2s", target: 4
+    - duration: "5s", target: 4
+    - duration: "2s", target: 0
+  gracefulStop: "30s"
+
+T = 2 + 5 + 2 = 9s
+max_duration = 9 + 30 = 39s
+=> header in: "Up to 4 looping VUs for 9s over 3 stages"
+=> max duration: 39s
+```
+
+**Khi nào dùng**: tính trước thời gian test sẽ chiếm máy bao lâu để
+plan lịch chạy.
+
+**Lưu ý phân biệt với `gracefulRampDown`**:
+- `gracefulRampDown`: grace cho VU bị giảm GIỮA timeline (vd 4 -> 2 VU)
+- `gracefulStop`: grace ở CUỐI scenario, sau khi tất cả stage xong
+
+### 9.2. Bảng tra nhanh: gặp tình huống nào, dùng công thức nào
+
+#### Tình huống 1: "Sắp viết config, không biết đặt số bao nhiêu"
+
+```text
+Bước 1: Tính tổng thời gian
+   T = sum(stage.duration)
+
+Bước 2: Tìm max VU
+   max_vu = max(startVUs, mọi stage.target)
+   -> đây sẽ là "Up to N looping VUs" trong header
+
+Bước 3: Tính max duration
+   max_duration = T + gracefulStop
+   -> chạy test sẽ chiếm máy bấy lâu
+
+Bước 4: Đo iter_time (chạy thử 1 VU)
+   W = iteration_duration của code
+
+Bước 5: Ước lượng peak rate
+   peak_rate ≈ max_vu / W
+```
+
+**Ví dụ**:
+
+```text
+config:
+  startVUs: 1
+  stages:
+    - duration: "2s", target: 4
+    - duration: "5s", target: 4
+    - duration: "2s", target: 0
+  gracefulStop: "30s"
+
+T = 2 + 5 + 2 = 9s
+max_vu = max(1, 4, 4, 0) = 4
+max_duration = 9 + 30 = 39s
+
+Code sleep(0.5) -> W ≈ 0.505s
+peak_rate ≈ 4 / 0.505 ≈ 7.92 iter/s
+```
+
+#### Tình huống 2: "Có bao nhiêu iter sẽ hoàn thành?"
+
+**Khó dự đoán chính xác** vì closed model: iter chạy nối tiếp, không
+có queue, số iter phụ thuộc vào iter_time của từng VU và thời điểm
+ramp.
+
+Cách ước lượng (CẬN TRÊN):
+
+```text
+estimated_iterations ≈ peak_rate × T
+
+vd: peak_rate=7.92, T=9s
+   estimated ≈ 7.92 × 9 = 71 iter
+```
+
+Nhưng thực tế **luôn thấp hơn** vì:
+- Stage ramp chưa lên đỉnh -> rate thực thấp hơn peak_rate
+- Stage cuối ramp xuống -> VU rảnh dần, rate giảm
+
+Cách chính xác hơn (TÍCH PHÂN từng stage):
+
+```text
+mỗi stage:
+  active_vus_avg = (fromVUs + target) / 2
+  iter_in_stage ≈ active_vus_avg × duration / W
+
+tổng = sum các stage
+```
+
+**Ví dụ**:
+
+```text
+W = 0.5s
+stage 1: 1 -> 4 VU trong 2s   -> avg=2.5  -> 2.5 × 2 / 0.5 = 10
+stage 2: 4 -> 4 VU trong 5s   -> avg=4    -> 4 × 5 / 0.5    = 40
+stage 3: 4 -> 0 VU trong 2s   -> avg=2    -> 2 × 2 / 0.5    = 8
+                                                              ----
+                                                              ≈ 58 iter
+```
+
+So với cách "peak × T = 71", cách tích phân ra 58 iter sát thực tế hơn.
+
+**Khi nào dùng**: muốn biết trước test sẽ có khoảng bao nhiêu iter
+(để đặt threshold, hoặc plan dữ liệu test).
+
+#### Tình huống 3: "Đã chạy xong, đọc summary"
+
+```text
+3 con số quan trọng cho ramping-vus:
+   iterations           = N_done   (số iter hoàn thành)
+   interrupted iter.    = N_int    (iter bị cancel ở cuối)
+   vus (max)            = M_peak   (số VU bận cao nhất)
+
+LƯU Ý: ramping-vus KHÔNG có metric `dropped_iterations`
+(khác với *-arrival-rate). Closed model không drop slot.
+
+3 câu hỏi cần trả lời:
+   1) Có interrupt cuối không?       N_int > 0 = chưa kịp xong
+   2) M_peak có khớp max stage.target?
+                                     nếu thấp hơn = ramp không kịp
+                                     hoặc stage hold quá ngắn
+   3) Rate thực tế là bao nhiêu?     iterations rate trong summary
+                                     so với peak_rate đã tính
+```
+
+### 9.3. Hành động khi gặp vấn đề
+
+#### "Có interrupted iterations cuối test!"
+
+Nguyên nhân: VU đang chạy iter dở thì k6 hết grace -> bị kill. Cách
+xử lý theo độ ưu tiên:
+
+```text
+1. (DỄ NHẤT) Tăng gracefulStop
+   -> Cho iter cuối thêm thời gian
+   -> Vd: gracefulStop: "60s" thay vì default "30s"
+
+2. Tăng gracefulRampDown nếu interrupt xảy ra ở stage giữa
+   -> Khi 1 stage giảm VU đột ngột (vd 10 -> 2)
+   -> 8 VU bị giảm cần grace để xong iter
+   -> Default 30s thường đủ, nhưng iter dài có thể cần 60-120s
+
+3. Kéo dài stage cuối ramp xuống thay vì cắt đột ngột
+   -> stages: [..., { duration: "5s", target: 0 }]
+   -> Iter cuối ít hơn vì VU rảnh dần
+
+4. Tối ưu code (giảm iter_time)
+   -> Iter ngắn hơn -> ít có khả năng vắt qua mốc cuối
+```
+
+#### "Iter time biến thiên (lúc nhanh lúc chậm)"
+
+Nguyên nhân: bottleneck phía server hoặc network, không phải k6.
+Cách diagnose:
+
+```text
+1. Xem iteration_duration min/max/p95
+   -> avg=500ms nhưng max=5s, p95=2s -> server tắc
+   -> avg=500ms nhưng max=550ms, p95=520ms -> ổn định
+
+2. Xem http_req_duration
+   -> nếu HTTP chậm theo VU tăng -> server tới giới hạn
+   -> peak_rate thực tế thấp hơn lý thuyết
+
+3. So với peak_rate dự kiến
+   peak_rate_dự_kiến = M / W_đầu_test
+   peak_rate_thực    = iterations rate trong summary
+   -> nếu chênh > 20% là server bottleneck
+```
+
+**Cách xử lý**:
+
+```text
+1. Tăng số VU cũng KHÔNG giúp
+   -> Vì server đã tắc, thêm VU chỉ làm iter_time dài hơn
+
+2. Giảm peak VU (giảm stage.target lớn nhất)
+   -> Để iter_time ổn định
+   -> Đây là "công suất thực" của server
+
+3. Tối ưu phía server hoặc nâng resource
+```
+
+#### "M_peak (vus max) thấp hơn max stage.target!"
+
+Nguyên nhân: stage hold quá ngắn so với step_interval, k6 chưa kịp
+spawn đủ.
+
+```text
+Vd: stage 1 -> 100 VU trong 1s
+    step_interval = 1 / 99 ≈ 10ms
+    -> k6 phải spawn 1 VU mỗi 10ms
+    -> Nếu spawn chậm hơn (vd 50ms/VU) -> chỉ kịp ~20 VU
+
+Cách fix:
+1. Kéo dài stage ramp
+   -> stages: [{ duration: "10s", target: 100 }, ...]
+   -> step_interval = 100ms, k6 spawn dư sức
+
+2. Dùng startVUs lớn ngay từ đầu
+   -> startVUs: 50 thay vì 1
+   -> giảm số VU phải spawn
+
+3. Tăng tài nguyên máy chạy k6
+   -> CPU/RAM nhiều hơn -> spawn nhanh hơn
+```
+
+### 9.4. Bảng từ vựng: ký hiệu nào nghĩa là gì?
+
+> Section 3.x dùng nhiều ký hiệu rút gọn cho gọn. Đây là bảng tra để
+> bạn không phải lật lại đầu Section 3 mỗi lần.
+
+| Ký hiệu | Đọc là | Nghĩa | Đơn vị |
+| --- | --- | --- | --- |
+| `M` | "em" | Số VU active tại 1 thời điểm | VU |
+| `M_peak` | "em pích" | Số VU bận cao nhất trong test | VU |
+| `M_max` | "em mác" | max(startVUs, mọi stage.target) | VU |
+| `W` | "đắp-bờ-liu" | Thời gian 1 iter (iter_time) | giây/iter |
+| `T` | "ti" | Tổng thời gian timeline (sum stages) | giây |
+| `T_run` | "ti rần" | Thời gian thực tế chạy (có thể có grace) | giây |
+| `step_interval` | "stép in-tơ-vồ" | Khoảng giữa 2 lần spawn/giảm VU | giây |
+| `fromVUs` | "from VU" | Số VU đầu stage (= target stage trước) | VU |
+| `active_vus(t)` | "ác-típ tại t" | VU đang chạy tại thời điểm t | VU |
+| `per_vu_rate` | "pờ VU rết" | Rate 1 VU = 1/W | iter/giây |
+| `peak_rate` | "pích rết" | Rate đỉnh = M_peak/W | iter/giây |
+| `N_done` | "ren đần" | Tổng iter HOÀN THÀNH | iter |
+| `N_int` | "ren in-tờ" | Iter bị interrupt (đã start, không xong) | iter |
+| `gracefulRampDown` | "gờ-rếts-phun rem-đao" | Grace khi giảm VU GIỮA timeline | duration |
+| `gracefulStop` | "gờ-rếts-phun stóp" | Grace ở CUỐI scenario | duration |
+
+**Lưu ý quan trọng cho ramping-vus**:
+
+```text
+KHÔNG có metric:
+  - dropped_iterations  (closed model không drop slot)
+  - λ (lambda) rate     (không có rate config, chỉ có VU thay đổi)
+
+CHỈ có:
+  - iterations          (số iter hoàn thành)
+  - vus / vus_max       (gauge VU đang dùng)
+  - interrupted (footer)
+```
+
+### 9.5. 3 công thức "1 dòng" để giải mọi case (nhớ vĩnh viễn)
+
+```text
+Throughput đỉnh?       peak = active_vus / iter_time
+VU active tại t?        floor((t-stageStart) / step_interval) + fromVUs
+Tổng iter?              khó dự đoán, đo từ summary
+                        (cận trên: peak × T, cận dưới: avg_VU × T / iter_time)
+```
+
+Học thuộc 3 dòng này là dùng được 80% nhu cầu thực tế.
+
+**Phân biệt với arrival-rate**:
+
+```text
+ramping-arrival-rate (open model):
+  - Config "rate đích" -> k6 ép theo rate
+  - Có dropped_iterations nếu VU không đủ
+  - Tính dùng λ (lambda)
+
+ramping-vus (closed model):           <- doc này
+  - Config "số VU đích" -> k6 chỉnh số VU
+  - KHÔNG có dropped_iterations
+  - Rate là HỆ QUẢ (không config trực tiếp)
+  - Tính dùng M (số VU) và W (iter time)
+```
+
+### 9.6. Đọc output sau test: tìm số ở đâu?
+
+Sau khi `k6 run` xong, bạn sẽ thấy 3 nhóm số liệu. Phải biết tìm từng
+con số ở đâu để áp công thức.
+
+#### Nhóm 1: Header (in ra ngay đầu test)
+
+```text
+scenarios: (100.00%) 1 scenario, 4 max VUs, 39s max duration (incl. graceful stop):
+         * my_scenario: Up to 4 looping VUs for 9s over 3 stages (gracefulRampDown: 30s)
+```
+
+Đọc các con số:
+
+```text
+"4 max VUs"                    <- M_max (số VU sẽ init tối đa)
+"39s max duration"             <- T + gracefulStop = 9 + 30
+"Up to 4 looping VUs"          <- M_max (max stage.target hoặc startVUs)
+"for 9s"                       <- T = sum(stage.duration)
+"3 stages"                     <- số stage trong config
+"gracefulRampDown: 30s"        <- grace cho VU bị giảm giữa timeline
+```
+
+**Khi nào đọc**: ngay đầu để verify config đã parse đúng.
+
+**Code ref**: `lib/executor/ramping_vus.go:77-82` (function
+`GetDescription` in ra dòng "Up to N looping VUs for X over N stages").
+
+#### Nhóm 2: Summary cuối test (block "TOTAL RESULTS")
+
+```text
+EXECUTION
+iteration_duration...: avg=505ms min=500ms max=520ms p(95)=515ms
+iterations...........: 58    6.444444/s
+vus..................: 4     min=1  max=4
+vus_max..............: 4     min=4  max=4
+
+NETWORK
+http_req_duration....: avg=200ms ...
+http_reqs............: 116   12.888888/s
+```
+
+Đọc các con số:
+
+```text
+iteration_duration avg     <- W (iter_time hiệu dụng)
+iterations (count)         <- N_done (iter hoàn thành)
+iterations (rate)          <- actual_rate trung bình
+vus (max)                  <- M_peak (số VU bận cao nhất)
+vus (min)                  <- M_min (lúc rảnh nhất, thường = startVUs)
+vus_max                    <- M_max (instance đã init, không đổi)
+http_reqs (count)          <- nếu code có HTTP, ÷ N_done = req per iter
+```
+
+**Phân biệt `vus` vs `vus_max`**:
+
+```text
+vus (Gauge):       số VU đang BẬN/active tại từng thời điểm
+                   -> trong test thay đổi liên tục
+                   -> summary in min/max/avg
+
+vus_max (Gauge):   số VU đã INIT sẵn trong pool
+                   -> ramping-vus: thường cố định = M_max
+                   -> không đổi trong test (init 1 lần)
+```
+
+**Khi nào đọc**: sau khi test xong, để đánh giá kết quả.
+
+#### Nhóm 3: Progress/footer (ngay trước summary)
+
+```text
+running (09.5s), 0/4 VUs, 58 complete and 0 interrupted iterations
+```
+
+Đọc các con số:
+
+```text
+"09.5s"                          <- T_run (thời gian thực tế chạy)
+"0/4 VUs"                        <- VU đang bận / tổng VU init
+"58 complete"                    <- N_done (khớp với iterations summary)
+"0 interrupted iterations"       <- N_int (KHÔNG có metric Counter riêng)
+```
+
+**Lưu ý**: `N_int` chỉ xuất hiện ở đây, không có trong summary. Phải
+đọc dòng progress cuối cùng để biết có interrupt hay không.
+
+### 9.7. Quy trình 5 bước phân tích output
+
+Sau khi có đủ số liệu từ 9.6, làm 5 bước theo thứ tự.
+
+#### Output mẫu để phân tích (dùng xuyên suốt 5 bước)
+
+**Config đã chạy**:
+
+```js
+export const options = {
+  scenarios: {
+    demo_analyze: {
+      executor: "ramping-vus",
+      startVUs: 1,
+      gracefulRampDown: "30s",
+      gracefulStop: "30s",
+      stages: [
+        { duration: "2s", target: 4 },   // ramp 1 -> 4
+        { duration: "5s", target: 4 },   // hold 4
+        { duration: "2s", target: 0 },   // ramp 4 -> 0
+      ],
+    },
+  },
+};
+
+import { sleep } from "k6";
+export default function () { sleep(0.5); }
+```
+
+**Output đầy đủ k6 in ra**:
+
+```text
+scenarios: (100.00%) 1 scenario, 4 max VUs, 39s max duration (incl. graceful stop):
+         * demo_analyze: Up to 4 looping VUs for 9s over 3 stages (gracefulRampDown: 30s)
+
+running (09.5s), 0/4 VUs, 58 complete and 0 interrupted iterations
+
+  █ TOTAL RESULTS
+
+    EXECUTION
+    iteration_duration...: avg=505ms min=500ms max=520ms p(95)=515ms
+    iterations...........: 58    6.105263/s
+    vus..................: 4     min=1  max=4
+    vus_max..............: 4     min=4  max=4
+
+  EXECUTION
+  scenarios: 1 scenarios completed
+```
+
+Áp 5 bước dưới đây vào đúng output này.
+
+#### Bước 1: Verify config có chạy đúng không
+
+```text
+Câu hỏi: header có khớp với config?
+
+Header in:    "Up to 4 looping VUs"
+Config có:    startVUs=1, max stage.target=4
+              -> max(1, 4, 4, 0) = 4 ✓
+
+Header in:    "for 9s"
+Config có:    sum(stage.duration) = 2 + 5 + 2 = 9s ✓
+
+Header in:    "3 stages"
+Config có:    3 phần tử trong stages array ✓
+
+Header in:    "39s max duration"
+Config có:    T + gracefulStop = 9 + 30 = 39s ✓
+
+Header in:    "gracefulRampDown: 30s"
+Config có:    gracefulRampDown="30s" ✓
+
+KẾT LUẬN: config đã parse đúng -> sang Bước 2
+```
+
+#### Bước 2: Tính peak rate dự kiến
+
+Áp Công thức 3 (peak_rate ≈ active_vus_max / iter_time):
+
+```text
+Đo iter_time từ summary:
+  iteration_duration avg = 505ms = 0.505s
+
+Tìm active_vus_max:
+  max(startVUs, mọi stage.target) = max(1, 4, 4, 0) = 4
+
+Tính peak_rate:
+  peak_rate ≈ 4 / 0.505 ≈ 7.92 iter/s
+
+Đây là CẬN TRÊN — chỉ đạt được trong stage 2 (hold 4 VU).
+```
+
+#### Bước 3: So với iterations thực tế trong summary
+
+Áp Tình huống 2 (tích phân từng stage):
+
+```text
+W = 0.505s
+
+stage 1: 1 -> 4 VU trong 2s
+  active_vus_avg = (1+4)/2 = 2.5
+  iter ≈ 2.5 × 2 / 0.505 ≈ 9.9
+
+stage 2: 4 -> 4 VU trong 5s
+  active_vus_avg = 4
+  iter ≈ 4 × 5 / 0.505 ≈ 39.6
+
+stage 3: 4 -> 0 VU trong 2s
+  active_vus_avg = (4+0)/2 = 2
+  iter ≈ 2 × 2 / 0.505 ≈ 7.9
+                                ----
+                                ≈ 57.4 iter
+
+Summary cho:  iterations = 58
+So sánh:       dự kiến ≈ 57, thực tế = 58 (lệch 1.5%) ✓
+
+Phân loại:
+  lệch < 5%      : ước lượng chính xác        <- DEMO RƠI VÀO ĐÂY
+  lệch 5-15%    : có biến động iter_time
+  lệch > 15%    : có vấn đề (server tắc / spawn chậm)
+```
+
+#### Bước 4: Verify interrupted (footer)
+
+```text
+Footer cho:   "0 interrupted iterations" -> N_int = 0
+
+Tốt — không có iter bị kill ở cuối.
+
+Diagnose nếu N_int > 0:
+  - Iter cuối đang chạy thì hết grace
+  - Cách fix: tăng gracefulStop hoặc kéo dài stage cuối
+  - Xem Section 9.3 "Có interrupted iterations cuối test"
+
+Lưu ý: ramping-vus KHÔNG có dropped_iterations (closed model).
+       Chỉ có 2 con số quan tâm: complete + interrupted.
+```
+
+#### Bước 5: Đo capacity thực tế từ vus max + iter_duration
+
+Đây là bước **suy ngược công thức** từ output để biết hệ thống thật sự
+chịu được rate cao nhất bao nhiêu.
+
+```text
+Đo W từ summary:
+  iteration_duration avg = 505ms = 0.505s
+
+Đo M_peak từ summary:
+  vus max = 4    (số VU bận cao nhất trong test)
+
+Tính capacity thực tế:
+  C_thực = M_peak / W = 4 / 0.505 ≈ 7.92 iter/s
+
+So với rate trung bình của test:
+  iterations rate (summary) = 6.105 iter/s
+  C_thực (peak)             = 7.92 iter/s
+
+  ratio = 6.105 / 7.92 ≈ 77%
+
+=> Test chỉ tận dụng 77% capacity peak.
+=> Vì có 2 stage ramp (lên + xuống) chỉ chạy 1 phần VU,
+   chỉ stage 2 (hold) đè peak.
+
+Thời gian đè peak (stage 2) = 5s
+Tổng T = 9s
+Tỉ lệ thời gian đè peak = 5/9 ≈ 56%
+
+Sizing đúng (nếu muốn test ổn định ở rate cụ thể):
+  - Dùng peak_rate = 7.92 iter/s làm reference
+  - Hoặc chuyển sang ramping-arrival-rate nếu cần ép rate
+
+Kết luận:
+  - Hệ thống chịu được peak ~7.92 iter/s với 4 VU
+  - Iter time ổn định (avg=505ms, max=520ms — chỉ lệch 3%)
+  - Server không tắc, capacity reproducible
 ```

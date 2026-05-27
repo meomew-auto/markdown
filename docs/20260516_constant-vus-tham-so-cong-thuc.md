@@ -46,7 +46,15 @@ docs/20260516_constant-vus-quick-index.md
 - [Edge case gracefulStop interaction](#64-edge-case-gracefulstop-interaction-với-iteration-đang-chạy)
 - [Demo QuickPizza 2 requests / iteration](#7-demo-quickpizza-2-requests--iteration)
 - [So sánh với per-vu và shared](#8-so-sánh-với-per-vu-và-shared)
-- [Cheat sheet](#9-cheat-sheet)
+- [Cheat sheet — Công thức cần nhớ nhất](#9-cheat-sheet--công-thức-cần-nhớ-nhất)
+  - [9.0 Config chung](#90-config-chung-của-constant-vus)
+  - [9.1 5 công thức TOP](#91-5-công-thức-top-cho-constant-vus)
+  - [9.2 Bảng tra theo tình huống](#92-bảng-tra-nhanh-gặp-tình-huống-nào-dùng-công-thức-nào)
+  - [9.3 Hành động khi gặp vấn đề](#93-hành-động-khi-gặp-vấn-đề)
+  - [9.4 Bảng từ vựng](#94-bảng-từ-vựng-ký-hiệu-nào-nghĩa-là-gì)
+  - [9.5 3 công thức "1 dòng"](#95-3-công-thức-1-dòng-để-nhớ-vĩnh-viễn)
+  - [9.6 Đọc output sau test](#96-đọc-output-sau-test-tìm-số-ở-đâu)
+  - [9.7 Quy trình 5 bước phân tích](#97-quy-trình-5-bước-phân-tích-output)
 
 ## 1. Ý tưởng chính
 
@@ -2648,89 +2656,715 @@ shared-iterations:
   -> VU nhanh có thể chạy nhiều hơn VU chậm
 ```
 
-## 9. Cheat sheet
+## 9. Cheat sheet — Công thức cần nhớ nhất
 
-```text
-constant-vus = fixed VUs over time
+> Phần này dành cho người mới. Mỗi công thức có **tên tiếng Việt**, ví dụ
+> đời thường, và "khi nào dùng". Đọc xong section này là dùng được ngay
+> mà không cần đọc 3.1-3.16 chi tiết.
+>
+> `constant-vus` đơn giản hơn `*-arrival-rate` rất nhiều: chỉ pin một số
+> VU cố định, không ramp, không drop slot. Mọi công thức đều xoay quanh
+> hai con số `vus` và `iter_time`.
+
+### 9.0. Config chung của `constant-vus`
+
+Đây là **bộ config đầy đủ** cho executor `constant-vus`. Đọc bảng này
+trước khi viết test, biết tham số nào BẮT BUỘC, tham số nào có default.
+
+#### Template config đầy đủ
+
+```js
+export const options = {
+  scenarios: {
+    my_scenario: {
+      // === BẮT BUỘC ===
+      executor: "constant-vus",   // tên executor
+      vus: 4,                      // số VU pin cố định
+      duration: "30s",             // thời gian regular phase
+
+      // === TUỲ CHỌN (có default) ===
+      gracefulStop: "30s",         // default = "30s" (từ BaseConfig)
+      startTime: "0s",             // default = "0s"
+      exec: "default",             // default = "default" function
+      tags: { test: "demo" },      // default = {}
+      env: { DEBUG: "1" },         // default = {}
+    },
+  },
+};
+
+export default function () {
+  // code chạy mỗi iter, chạy lặp suốt duration
+}
 ```
 
-Tham số chính:
+#### Bảng tham số chi tiết
+
+| Tham số | Required? | Default | Đơn vị | Ý nghĩa |
+| --- | --- | --- | --- | --- |
+| `executor` | **BẮT BUỘC** | — | string | Phải đặt là `"constant-vus"` |
+| `vus` | **BẮT BUỘC** | — | int (> 0) | Số VU pin cố định trong suốt `duration` |
+| `duration` | **BẮT BUỘC** | — | duration (>= 1s) | Thời gian regular phase |
+| `gracefulStop` | tuỳ chọn | `"30s"` | duration | Grace cuối scenario cho iter đang chạy |
+| `startTime` | tuỳ chọn | `"0s"` | duration | Trễ trước khi scenario bắt đầu |
+| `exec` | tuỳ chọn | `"default"` | string | Tên function JS chạy mỗi iter |
+| `tags` | tuỳ chọn | `{}` | object | Tag attach vào metric của scenario |
+| `env` | tuỳ chọn | `{}` | object | Biến môi trường riêng cho scenario |
+
+**Không có** trong `constant-vus` (tránh nhầm lẫn với executor khác):
 
 ```text
-vus       số VU cố định
-duration  thời gian regular phase
-gracefulStop thời gian cho iteration đang chạy finish
+iterations          (chỉ có ở per-vu-iterations / shared-iterations)
+maxDuration         (không phải option riêng — duration + gracefulStop là trần)
+preAllocatedVUs     (chỉ có ở *-arrival-rate)
+maxVUs              (chỉ có ở *-arrival-rate)
+stages              (chỉ có ở ramping-vus / ramping-arrival-rate)
+rate / timeUnit     (chỉ có ở *-arrival-rate)
 ```
 
-Không có:
+Khai báo nhầm các field này sẽ bị `StrictJSONUnmarshal` từ chối với lỗi
+`json: unknown field "..."`. Xem chi tiết Section 3.10.
+
+#### 3 quy tắc validate (đọc từ core)
 
 ```text
-iterations
-maxDuration option riêng
+1. vus > 0
+   (nếu <= 0: lỗi "the number of VUs must be more than 0")
+
+2. duration phải có
+   (nếu thiếu: lỗi "the duration is unspecified")
+
+3. duration >= 1 giây
+   (nếu < 1s: lỗi "the duration must be at least 1s, but is ...")
+
+(BaseConfig còn check: gracefulStop >= 0, startTime >= 0)
 ```
 
-Header:
+Code ref: `lib/executor/constant_vus.go:65-80` (function `Validate()`)
+và `lib/executor/base_config.go:50-73` (`BaseConfig.Validate()`).
+
+#### Config tối thiểu (chạy được)
+
+Nếu chỉ muốn config gọn nhất, **3 dòng đủ chạy**:
+
+```js
+export const options = {
+  scenarios: {
+    minimal: {
+      executor: "constant-vus",
+      vus: 2,
+      duration: "10s",
+    },
+  },
+};
+```
+
+Các field khác lấy default: `gracefulStop=30s`, `startTime=0s`,
+`exec="default"`, `tags={}`, `env={}`.
+
+### 9.1. 5 công thức TOP cho `constant-vus`
+
+#### Công thức 1: "Throughput đỉnh" (Peak rate)
 
 ```text
-max duration (incl. graceful stop) = duration + gracefulStop
+peak_rate = vus / iter_time
 ```
 
-Công thức:
+**Tiếng Việt**: "Throughput đỉnh = số VU chia cho thời gian 1 iter"
+
+**Ví dụ đời thường**:
 
 ```text
-executor_wall_time_after_start = duration + gracefulStop
-
-per_vu_rate_i = 1 / t_i
-
-peak_iteration_rate_if_all_vus_active = sum(1 / t_i)
-
-average_iteration_rate = completed_iterations / summary_runtime_base
-
-summary_runtime_base = counter_count / counter_rate
+Quán phở có 4 nhân viên (VU).
+Mỗi nhân viên phục vụ 1 khách mất 2 phút (iter_time).
+=> 1 phút phục vụ được 4 / 2 = 2 khách
+=> 60 giây phục vụ được 60 × 2 = 120 khách (peak rate)
 ```
 
-Nếu các VU đều gần giống nhau:
+**Áp vào k6**:
 
 ```text
-per_vu_rate ~= 1 / W_effective
-peak_iteration_rate ~= vus / W_effective
+config:
+  vus: 4
+  duration: "30s"
+code: sleep(0.5)  -> iter_time ≈ 0.5s
+
+peak_rate = 4 / 0.5 = 8 iter/giây
 ```
 
-Với HTTP:
+**Khi nào dùng**: muốn ước lượng throughput trước khi chạy. Đây là
+**rate tối đa** mà scenario có thể đạt nếu code không có biến thiên.
+
+**So với `ramping-vus`**: đơn giản hơn rất nhiều. `ramping-vus` rate
+thay đổi theo stage, còn `constant-vus` rate cố định = `vus / iter_time`.
+
+#### Công thức 2: "Rate của 1 VU" (Per-VU rate)
 
 ```text
-estimated_http_requests_if_fixed_path = completed_iterations * http_requests_per_iteration
-estimated_http_reqs_rate_if_fixed_path = estimated_http_requests_if_fixed_path / summary_runtime_base
+per_vu_rate = 1 / iter_time
 ```
 
-Không đọc nhầm:
+**Tiếng Việt**: "Tốc độ của 1 VU = 1 chia cho thời gian 1 iter"
+
+**Ví dụ đời thường**:
 
 ```text
-http_req_duration avg
-  = thời gian trung bình của 1 HTTP request
-
-iteration_duration avg
-  = thời gian trung bình của 1 vòng JS function
-
-iterations/s
-  = tốc độ iteration trung bình của toàn scenario
-
-http_reqs/s
-  = tốc độ HTTP request trung bình của toàn scenario
+1 nhân viên phục vụ 1 khách mất 2 phút.
+=> nhân viên đó làm được 1 / 2 = 0.5 khách/phút
+=> hay 30 khách/giờ
 ```
 
-Khi tuning:
+**Áp vào k6**:
 
 ```text
-mu ~= vus / W_effective
+code có sleep(0.5), HTTP mất ~0.05s -> iter_time ≈ 0.55s
+
+per_vu_rate = 1 / 0.55 ≈ 1.82 iter/giây
 ```
 
-Trong đó:
+**Khi nào dùng**: debug khi VU chậm bất thường, hoặc muốn biết 1 VU
+chạy được bao nhiêu iter/giây để sizing.
+
+**Liên kết Công thức 1**: `peak_rate = vus × per_vu_rate`.
+
+#### Công thức 3: "Tổng iter ước lượng" (Total iterations)
 
 ```text
-mu = capacity iteration/s ước lượng
-W_effective = effective_iteration_time_avg
-            = thời gian trung bình 1 iteration chiếm 1 VU
+total ≈ vus × duration / iter_time
 ```
 
-Nếu cần fixed RPS/iteration rate, đi tiếp executor `constant-arrival-rate`.
+**Tiếng Việt**: "Tổng iter ≈ số VU × thời gian / thời gian 1 iter"
+
+**Ví dụ đời thường**:
+
+```text
+4 nhân viên làm 30 phút, mỗi khách mất 2 phút.
+=> tổng khách = 4 × 30 / 2 = 60 khách
+```
+
+**Áp vào k6**:
+
+```text
+config: vus=4, duration=30s, sleep(0.5)
+total ≈ 4 × 30 / 0.5 = 240 iter
+```
+
+**Lưu ý có dấu xấp xỉ (`≈`)**:
+
+```text
+Vì sao xấp xỉ?
+  - iter_time có thể biến thiên (HTTP latency, GC, ...)
+  - iter cuối có thể chưa kịp xong khi grace hết -> bị interrupt
+  - VU spawn xong start gần như đồng thời tại t=0,
+    nhưng "gần như" chứ không phải đúng tuyệt đối
+
+Trên thực tế:
+  total_thực ≈ total_lý_thuyết, sai số vài %
+```
+
+**Khi nào dùng**: ước lượng trước test để biết tổng iter sẽ là bao
+nhiêu, đối chiếu với `iterations` trong summary sau test.
+
+#### Công thức 4: "Trần wall-clock" (Max real time)
+
+```text
+max_wall_time = duration + gracefulStop
+```
+
+**Tiếng Việt**: "Thời gian thật tối đa scenario chiếm = duration + gracefulStop"
+
+**Ví dụ đời thường**:
+
+```text
+"Quán bán từ 8h-9h" (duration = 1 giờ)
+"Cho khách đang ăn 30 phút nữa để xong" (gracefulStop = 30 phút)
+=> 9h30 là chốt cuối cùng, sau đó khách phải về
+```
+
+**Áp vào k6**:
+
+```text
+config: duration="30s", gracefulStop="30s" (default)
+max_wall_time = 30 + 30 = 60s
+
+Scenario sẽ kết thúc CHẬM NHẤT là 60s.
+Nếu mọi iter đều xong trước 30s, kết thúc đúng 30s.
+Nếu có iter dài, k6 đợi tối đa thêm 30s rồi cancel.
+```
+
+**Quan trọng**:
+
+```text
+Header k6 in:
+  "max duration (incl. graceful stop) = duration + gracefulStop"
+
+Đó là cùng 1 con số với max_wall_time.
+```
+
+**Khi nào dùng**: setup CI/CD timeout (đặt timeout > max_wall_time để
+tránh job kill scenario sớm), hoặc plan thời lượng test.
+
+Code ref: `lib/executor/constant_vus.go:87-98`
+(`GetExecutionRequirements()`).
+
+#### Công thức 5: "Số iter mỗi VU" (Per-VU iterations)
+
+```text
+iter_per_vu ≈ duration / iter_time
+```
+
+**Tiếng Việt**: "Số iter mỗi VU ≈ thời gian / thời gian 1 iter"
+
+**Ví dụ đời thường**:
+
+```text
+1 nhân viên làm 30 phút, mỗi khách mất 2 phút.
+=> 1 nhân viên phục vụ 30 / 2 = 15 khách
+```
+
+**Áp vào k6**:
+
+```text
+config: vus=4, duration=30s, sleep(0.5)
+iter_per_vu ≈ 30 / 0.5 = 60 iter mỗi VU
+
+Tổng (Công thức 3): 4 × 60 = 240 iter
+```
+
+**Liên kết với `__ITER`**:
+
+```text
+__ITER counter trong code chạy từ 0 lên iter_per_vu - 1
+(mỗi VU có __ITER riêng, đếm từ 0)
+```
+
+**Khi nào dùng**: setup test data per-VU (vd dùng `__ITER` làm index
+data), hoặc check log xem có VU nào tụt hậu so với expected.
+
+### 9.2. Bảng tra nhanh: gặp tình huống nào, dùng công thức nào
+
+#### Tình huống 1: "Sắp viết config, không biết đặt số bao nhiêu"
+
+```text
+Bước 1: Đo iter_time (chạy thử 1 VU, xem iteration_duration)
+   W = iteration_duration của code
+
+Bước 2: Quyết định throughput muốn (X iter/s)
+   Vd muốn 10 iter/s
+
+Bước 3: Tính số VU cần (đảo Công thức 1)
+   vus = ceil(X × W)
+       = ceil(10 × 0.5) = 5 VU
+
+Bước 4: Đặt config
+   vus      = 5
+   duration = "30s"  (hoặc thời lượng test mong muốn)
+```
+
+#### Tình huống 2: "Đã có target throughput, cần bao nhiêu VU?"
+
+Đây là dạng phổ biến nhất với `constant-vus`: biết throughput target,
+hỏi đặt `vus` bao nhiêu.
+
+```text
+target_rate × iter_time = vus
+
+công thức gốc: peak_rate = vus / iter_time
+đảo lại:        vus      = ceil(target_rate × iter_time)
+```
+
+**Ví dụ**:
+
+```text
+Muốn 20 iter/s, iter_time đo được 0.5s
+=> vus = ceil(20 × 0.5) = ceil(10) = 10
+
+Muốn 7 iter/s, iter_time = 0.3s
+=> vus = ceil(7 × 0.3) = ceil(2.1) = 3
+```
+
+**Lưu ý quan trọng**:
+
+```text
+constant-vus KHÔNG đảm bảo target_rate đúng tuyệt đối.
+Nếu iter_time biến thiên, rate thực tế cũng biến thiên.
+Nếu cần rate ổn định -> dùng constant-arrival-rate.
+```
+
+#### Tình huống 3: "Đã có sẵn N VU, hỏi throughput được bao nhiêu?"
+
+```text
+Bước 1: Đo iter_time
+   W = thời gian 1 iter
+
+Bước 2: Tính peak (Công thức 1)
+   peak_rate = N / W
+
+Bước 3: Đó là throughput tối đa scenario sẽ đạt
+```
+
+**Ví dụ**:
+
+```text
+Có 6 VU, code sleep(0.5)
+=> peak_rate = 6 / 0.5 = 12 iter/s
+
+Tổng iter trong 30s: 6 × 30 / 0.5 = 360
+```
+
+#### Tình huống 4: "Đã chạy xong, đọc summary"
+
+```text
+3 con số quan trọng (constant-vus đơn giản hơn arrival-rate, KHÔNG có drop):
+   iterations         = N_done    (số iter hoàn thành)
+   iteration_duration = W_thực    (đo iter_time hiệu dụng)
+   vus                = M_thực    (số VU bận, KHÔNG đổi với constant-vus)
+
+Footer:
+   "X complete and Y interrupted iterations"
+   -> X = N_done
+   -> Y = N_int (iter bị cancel ở grace)
+
+3 câu hỏi cần trả lời:
+   1) N_done có gần total ước lượng không?    -> sai số <5% là OK
+   2) Có interrupt cuối không?                 -> N_int > 0 là chưa kịp xong
+   3) iteration_duration có đúng như test thử? -> nếu lệch lớn, code biến thiên
+```
+
+### 9.3. Hành động khi gặp vấn đề
+
+#### "Throughput thấp hơn expected!"
+
+Nguyên nhân: `iter_time` thực tế dài hơn dự kiến, hoặc biến thiên lớn.
+Cách xử lý theo thứ tự:
+
+```text
+1. (KIỂM TRA TRƯỚC) iter_time có biến thiên không?
+   Đọc summary:
+     iteration_duration min  = ?
+     iteration_duration avg  = ?
+     iteration_duration max  = ?
+     iteration_duration p95  = ?
+
+   Nếu max >> avg (vd avg=500ms nhưng max=5s):
+     -> code có biến thiên lớn, throughput không đều
+     -> peak_rate tính từ avg, nhưng thực tế thấp hơn nhiều
+
+2. Đo iter_time đúng (chạy test 1 VU, hold lâu)
+   Vd: vus=1, duration=60s, đo iteration_duration p95
+   -> p95 chính xác hơn avg nếu code biến thiên
+
+3. Tính lại Công thức 1
+   peak_rate_thực = vus / iter_time_p95
+   (chứ không phải vus / iter_time_avg)
+
+4. Tăng vus nếu cần
+   muốn X iter/s ổn định -> vus = ceil(X × iter_time_p95)
+
+5. Nếu vẫn không đạt, đổi executor
+   -> constant-arrival-rate cho rate ổn định bất kể iter_time
+```
+
+#### "Có interrupted iterations cuối test!"
+
+Nguyên nhân: iter chưa kịp xong khi `duration + gracefulStop` hết.
+Cách xử lý:
+
+```text
+1. Tăng gracefulStop
+   -> Cho iter cuối thêm thời gian
+   -> Vd: gracefulStop: "60s" thay vì default 30s
+
+2. Giảm iter_time (tối ưu code)
+   -> Bỏ sleep dư
+   -> Tối ưu logic, giảm số HTTP request
+
+3. Tăng duration (cho iter "đều" hơn)
+   -> Iter đủ dài để biến thiên cuối ít ảnh hưởng
+
+4. Chấp nhận N_int nếu nhỏ
+   -> Trong test thực tế, N_int = 1-2 ở biên là OK
+   -> Quan trọng là N_int / N_done < 1%
+```
+
+#### "iter_time biến thiên lớn (max >> avg)!"
+
+```text
+1. Check code có HTTP request bên ngoài không
+   -> Latency mạng không ổn định
+   -> Đặt timeout cụ thể: http.get(url, { timeout: "5s" })
+
+2. Check code có sleep ngẫu nhiên không
+   -> sleep(Math.random() * 5) -> biến thiên lớn
+   -> Đổi thành sleep cố định nếu được
+
+3. Check GC pause
+   -> Test dài, nhiều object -> GC chạy lâu
+   -> Giảm allocation trong hot path
+
+4. Check VU nhiễu lẫn nhau
+   -> Quá nhiều VU -> CPU/memory contention
+   -> Giảm vus, hoặc chia ra nhiều scenario
+```
+
+#### "Test kết thúc sớm hơn duration!"
+
+```text
+Không thể với constant-vus.
+Khác hẳn shared-iterations / per-vu-iterations:
+  - shared-iterations: hết iters thì stop sớm
+  - per-vu-iterations: VU xong iters thì idle, scenario stop khi VU cuối xong
+  - constant-vus: CHẠY ĐÚNG duration, KHÔNG sớm hơn
+
+Nếu thấy stop sớm:
+  -> Có phải bị Ctrl+C không?
+  -> Có phải duration < 1s (validate sẽ fail)?
+  -> Có phải scenario khác đụng độ?
+```
+
+### 9.4. Bảng từ vựng: ký hiệu nào nghĩa là gì?
+
+> Section 3.1-3.16 dùng nhiều ký hiệu rút gọn cho gọn. Đây là bảng tra
+> để bạn không phải lật lại đầu Section 3 mỗi lần.
+
+| Ký hiệu | Đọc là | Nghĩa | Đơn vị |
+| --- | --- | --- | --- |
+| `vus` | "vê u s" | Số VU pin cố định (config) | VU |
+| `M` | "em" | Số VU thực tế trong pool (= vus) | VU |
+| `W` | "đắp-bờ-liu" | Thời gian 1 iter chiếm 1 VU (= iter_time) | giây/iter |
+| `iter_time` | "i tờ tai" | Như W, dạng tiếng Việt dễ đọc | giây/iter |
+| `T` | "ti" | duration của scenario | giây |
+| `T_run` | "ti rần" | Thời gian thực tế chạy (≤ T + grace) | giây |
+| `peak_rate` | "pích rết" | Throughput đỉnh = vus / iter_time | iter/giây |
+| `per_vu_rate` | "pờ vê u rết" | Rate của 1 VU = 1 / iter_time | iter/giây |
+| `total` | "tổ-tô" | Tổng iter ước lượng | iter |
+| `iter_per_vu` | "i tờ pờ vê u" | Số iter mỗi VU ≈ T / iter_time | iter |
+| `N_done` | "ren đần" | Tổng iter HOÀN THÀNH (đọc summary) | iter |
+| `N_int` | "ren in-tờ" | Iter bị interrupt cuối test | iter |
+| `gracefulStop` | "grây-sờ-phun stóp" | Grace cuối scenario | giây |
+| `__ITER` | "đồ bồ ai tê e rờ" | Counter iter của VU (đếm từ 0) | int |
+| `__VU` | "đồ bồ vê u" | ID của VU (đếm từ 1) | int |
+
+**Khác biệt với `*-arrival-rate`** (KHÔNG có ở `constant-vus`):
+
+```text
+λ (lambda)        -> không có (constant-vus đo throughput từ vus, không từ rate config)
+N_sched           -> không có (constant-vus không lên lịch slot trước)
+N_drop            -> không có (constant-vus không drop, vì không có slot)
+preAllocatedVUs   -> không có
+maxVUs            -> không có
+```
+
+`constant-vus` đơn giản hơn nhiều vì closed model: VU pin xong cứ chạy.
+
+### 9.5. 3 công thức "1 dòng" để giải mọi case (nhớ vĩnh viễn)
+
+```text
+Throughput đỉnh?  peak = vus / iter_time
+Tổng iter?        total ≈ vus × duration / iter_time
+Mỗi VU làm bao nhiêu? per_vu ≈ duration / iter_time
+```
+
+Học thuộc 3 dòng này là dùng được 80% nhu cầu thực tế với `constant-vus`.
+
+### 9.6. Đọc output sau test: tìm số ở đâu?
+
+Sau `k6 run`, output có 3 nhóm số liệu cần đọc.
+
+#### Nhóm 1: Header (đầu test)
+
+```text
+scenarios: (100.00%) 1 scenario, 5 max VUs, 40s max duration (incl. graceful stop):
+         * my_scenario: 5 looping VUs for 10s (gracefulStop: 30s)
+```
+
+Đọc các con số:
+
+```text
+"5 max VUs"               <- vus (số VU pin)
+"40s max duration"        <- duration + gracefulStop = 10s + 30s
+"5 looping VUs"           <- vus (lặp lại từ config)
+"for 10s"                 <- duration
+"gracefulStop: 30s"       <- grace cuối
+```
+
+#### Nhóm 2: Summary cuối test
+
+```text
+EXECUTION
+iteration_duration...: avg=505ms min=500ms max=520ms p(95)=515ms
+iterations...........: 100   10/s
+vus..................: 5     min=5  max=5
+vus_max..............: 5     min=5  max=5
+```
+
+Đọc các con số:
+
+```text
+iteration_duration avg     <- iter_time thực tế (so với config sleep)
+iterations (count)         <- N_done
+iterations (rate)          <- actual_rate = N_done / T_run
+vus (max)                  <- M (= vus, không đổi)
+vus_max                    <- preAllocated (= vus)
+```
+
+`constant-vus` KHÔNG có dropped_iterations vì closed model không drop.
+
+#### Nhóm 3: Progress/footer (ngay trước summary)
+
+```text
+running (10.0s), 0/5 VUs, 100 complete and 0 interrupted iterations
+```
+
+Đọc các con số:
+
+```text
+"10.0s"                       <- T_run thực tế
+"0/5 VUs"                     <- VU đang bận / tổng VU
+"100 complete"                <- N_done
+"0 interrupted iterations"    <- N_int (= 0 nếu mọi iter xong clean)
+```
+
+`N_int` chỉ xuất hiện ở đây, không có metric Counter riêng.
+
+### 9.7. Quy trình 5 bước phân tích output
+
+Sau khi có đủ số liệu từ 9.6, làm 5 bước theo thứ tự.
+
+#### Output mẫu để phân tích (dùng xuyên suốt 5 bước)
+
+**Config đã chạy**:
+
+```js
+export const options = {
+  scenarios: {
+    demo_analyze: {
+      executor: "constant-vus",
+      vus: 2,
+      duration: "10s",
+      // gracefulStop: "30s" (default)
+    },
+  },
+};
+
+import { sleep } from "k6";
+export default function () { sleep(0.5); }
+```
+
+**Output đầy đủ k6 in ra**:
+
+```text
+scenarios: (100.00%) 1 scenario, 2 max VUs, 40s max duration (incl. graceful stop):
+         * demo_analyze: 2 looping VUs for 10s
+
+running (10.0s), 0/2 VUs, 40 complete and 0 interrupted iterations
+
+  █ TOTAL RESULTS
+
+    EXECUTION
+    iteration_duration...: avg=502ms min=500ms max=515ms p(95)=510ms
+    iterations...........: 40    3.984063/s
+    vus..................: 2     min=2  max=2
+    vus_max..............: 2     min=2  max=2
+
+  EXECUTION
+  scenarios: 1 scenarios completed
+```
+
+Áp 5 bước dưới đây vào đúng output này.
+
+#### Bước 1: Verify config có chạy đúng không
+
+```text
+Câu hỏi: header có khớp với config?
+
+Header in:    "2 looping VUs"
+Config có:    vus = 2 ✓
+
+Header in:    "for 10s"
+Config có:    duration = "10s" ✓
+
+Header in:    "40s max duration"
+Tính:         duration + gracefulStop = 10 + 30 = 40s ✓ (Công thức 4)
+
+Header in:    "2 max VUs"
+Config có:    vus = 2 (constant-vus init đúng vus VU) ✓
+
+KẾT LUẬN: config đã parse đúng -> sang Bước 2
+```
+
+#### Bước 2: Tính total ước lượng
+
+Áp Công thức 3 với iter_time chưa biết, dùng `sleep(0.5)` ≈ 0.5s:
+
+```text
+total ≈ vus × duration / iter_time
+     ≈ 2 × 10 / 0.5
+     = 40 iter
+```
+
+#### Bước 3: So với N_done (đã hoàn thành)
+
+```text
+Summary cho:  iterations = 40
+Tính từ Bước 2: total ≈ 40
+
+So sánh:
+  N_done / total = 40 / 40 = 100%
+  -> hoàn hảo, không sai số
+
+Phân loại:
+  >= 99%     : test "hoàn hảo"          <- DEMO RƠI VÀO ĐÂY
+  95-99%     : sai số biên cuối, OK
+  80-95%     : iter_time biến thiên lớn, kiểm tra Bước 5
+  < 80%      : code chậm, có vấn đề nghiêm trọng
+```
+
+#### Bước 4: Verify N_int
+
+```text
+Footer cho:   "0 interrupted iterations" -> N_int = 0
+
+Diagnose:
+  N_int = 0  -> tất cả iter đều xong trước duration + grace
+              -> code không cần lo grace
+              -> không cần tăng gracefulStop
+```
+
+Nếu N_int > 0:
+
+```text
+N_int = 2:  iter cuối chưa kịp xong khi grace hết
+            -> tăng gracefulStop, hoặc giảm iter_time
+```
+
+#### Bước 5: Đo iter_time thực tế (suy ngược công thức)
+
+Đây là bước **suy ngược công thức** từ output để biết peak_rate thực tế.
+
+```text
+Đo W từ summary:
+  iteration_duration avg = 502ms = 0.502s
+  iteration_duration p95 = 510ms = 0.51s
+  iteration_duration max = 515ms
+
+Đo M từ summary:
+  vus max = 2 (= vus, vì constant-vus pin cố định)
+
+Tính peak_rate thực tế (Công thức 1):
+  peak_rate_avg = M / W_avg = 2 / 0.502 ≈ 3.98 iter/s
+  peak_rate_p95 = M / W_p95 = 2 / 0.510 ≈ 3.92 iter/s
+
+Đối chiếu summary:
+  iterations rate = 3.984/s ≈ peak_rate_avg ✓
+
+Sizing đúng:
+  Nếu muốn 10 iter/s với code này:
+  vus = ceil(10 × 0.502) = ceil(5.02) = 6 VU
+  (lấy theo avg, vì code khá đều - max chỉ chênh 13ms)
+
+Kết luận:
+  - Code RẤT đều (max - min = 15ms, biến thiên cực thấp)
+  - Throughput thực = 3.98/s, gần với target 4/s = 2/0.5
+  - Sizing để scale 10x: dùng 6 VU thay vì 2 VU
+```
+
