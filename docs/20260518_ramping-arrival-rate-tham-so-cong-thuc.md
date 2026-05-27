@@ -4833,101 +4833,71 @@ stage — đường rate(t) trên đồ thị là đường gấp khúc liên t�
 
 **Biết rate_đầu/rate_cuối → tính được slot_interval ra sao?**
 
-Có **2 cách tính** với độ chính xác khác nhau:
+**Vì sao cần thêm slot_interval khi đã có rate?**
 
 ```text
-Cách 1 (xấp xỉ trực giác):  slot_interval(t) ≈ 1 / rate(t)
-Cách 2 (chính xác từ core): nghiệm bậc 2 (xem phần "Khoảng cách thật
-                             giữa 2 slot liên tiếp" ở trên)
+rate           = "TỐC ĐỘ" fire slot                  (slot/giây)
+slot_interval  = "KHOẢNG CÁCH" giữa 2 slot liên tiếp (giây/slot)
+
+2 đại lượng nghịch đảo, đo CÙNG 1 hiện tượng nhưng từ 2 góc nhìn:
+  rate          trả lời: "1 giây fire mấy slot?"
+  slot_interval trả lời: "slot tiếp theo cách bao xa?"
 ```
 
-Cách 1 dễ tính nhẩm trong đầu, đủ chính xác cho ƯỚC LƯỢNG ban đầu.
-Cách 2 đúng tuyệt đối, dùng khi cần biết MỐC FIRE chính xác từng slot.
+Người mới đọc config thấy `rate=10/s` → khó hình dung. Nhưng đổi sang
+`slot_interval=100ms` → ngay lập tức biết "cứ 100ms fire 1 slot, scheduler
+phải đẩy slot vào hệ thống mỗi 100ms".
 
-So sánh số bằng ví dụ stage `ramp 2→4 trong 2s`:
+**Công thức tính slot_interval từ rate**:
 
 ```text
-| Slot | Mốc thực (nghiệm bậc 2) | Gap thực | 1/rate(t) tại slot | Sai số |
-|------|-------------------------|----------|--------------------|----|
-| 1    | 0.449s                  | 0.449s   | 1/2.45 ≈ 408ms     | ~10% |
-| 3    | 1.162s                  | 0.334s   | 1/3.16 ≈ 316ms     | ~5%  |
-| 6    | 2.000s                  | 0.258s   | 1/4.00  = 250ms    | ~3%  |
+slot_interval(t) = 1 / rate(t)         (xấp xỉ trực giác, đủ dùng)
+
+Tại biên stage:
+  slot_interval đầu stage  ≈ 1 / rate_đầu
+  slot_interval cuối stage ≈ 1 / rate_cuối
 ```
 
-→ `1/rate(t)` là XẤP XỈ ĐỦ TỐT cho ước lượng nhanh, sai vài % so với
-mốc thực từ nghiệm bậc 2.
+(Công thức chính xác hơn — nghiệm bậc 2 — đã ở phần "Khoảng cách thật
+giữa 2 slot liên tiếp" trên đầu, sai số ~5%. Dùng `1/rate` cho ước lượng
+nhanh, dùng nghiệm bậc 2 khi cần mốc fire chính xác.)
 
-**Áp công thức xấp xỉ `1/rate` để ước lượng slot_interval BIÊN**:
+**Áp vào 3 stage (chỉ tính 2 đầu mỗi stage)**:
 
 ```text
-slot_interval đầu stage  ≈ 1 / rate_đầu
-slot_interval cuối stage ≈ 1 / rate_cuối
+| Stage | rate_đầu → rate_cuối | slot_interval đầu → cuối | Pattern        |
+|-------|----------------------|--------------------------|----------------|
+| 0     | 0 → 10/s             | ∞ → 100ms                | CO LẠI dần    |
+| 1     | 10 → 4/s             | 100ms → 250ms            | GIÃN RA dần   |
+| 2     | 4 → 0/s              | 250ms → ∞                | GIÃN RA dần   |
 ```
 
-Áp vào 3 stage:
+Diễn giải:
 
 ```text
-Stage 0 (rate_đầu=0, rate_cuối=10, dur=2s):
-  slot_interval đầu  = 1/0  = ∞     (chưa fire slot)
-  slot_interval cuối = 1/10 = 100ms (slot đầy nhất stage 0)
-  -> CO LẠI dần (∞ → 100ms) khi rate tăng
-
-Stage 1 (rate_đầu=10, rate_cuối=4, dur=5s):
-  slot_interval đầu  = 1/10 = 100ms
-  slot_interval cuối = 1/4  = 250ms
-  -> GIÃN RA dần (100ms → 250ms) khi rate giảm
-
-Stage 2 (rate_đầu=4, rate_cuối=0, dur=2s):
-  slot_interval đầu  = 1/4 = 250ms
-  slot_interval cuối = 1/0 = ∞       (slot cuối có thể KHÔNG fire)
-  -> GIÃN RA dần (250ms → ∞)
+Stage 0: rate tăng -> slot_interval CO LẠI -> mật độ slot DÀY DẦN
+Stage 1: rate giảm -> slot_interval GIÃN RA -> mật độ slot THƯA DẦN
+Stage 2: rate giảm về 0 -> slot_interval → ∞ -> mật độ slot RẤT THƯA
 ```
 
-Bảng tóm tắt:
+**Ý nghĩa thực tế của slot_interval**:
 
 ```text
-| Stage | rate range  | slot_interval range | Pattern              |
-|-------|-------------|---------------------|----------------------|
-| 0     | [0, 10]     | [100ms, ∞]          | THƯA → NHẶT (warm)   |
-| 1     | [10, 4]     | [100ms, 250ms]      | NHẶT → THƯA (giảm)   |
-| 2     | [4, 0]      | [250ms, ∞]          | THƯA → RẤT THƯA (cool)|
-```
-
-**Ý nghĩa thực tế của quan hệ này**:
-
-```text
-1. Biết "tốc độ fire" tại biên stage
-   - Stage 1 đầu: fire 100ms/slot -> hệ thống nhận burst nhặt
-   - Stage 1 cuối: fire 250ms/slot -> hệ thống được "thở"
+1. Hình dung "tốc độ fire" tại biên stage
+   - Stage 1 đầu: 100ms/slot -> hệ thống nhận burst nhặt
+   - Stage 1 cuối: 250ms/slot -> hệ thống được "thở"
 
 2. So với iter_time để dự đoán drop
-   - Nếu slot_interval < iter_time/M (M = số VU rảnh)
+   - Nếu slot_interval < iter_time/M (M = số VU)
    - Slot fire nhanh hơn năng lực VU xử lý -> DROP
 
-   vd: stage 1 đầu, slot=100ms, iter_time=500ms, có 4 VU rảnh
-       -> mỗi VU làm 1 iter trong 500ms = 5 slot
-       -> 4 VU = 20 slot/giây, ngang với rate=10/s -> OK
-       -> nếu chỉ có 3 VU: 15 slot/s capacity, vẫn OK
-       -> nếu chỉ có 2 VU: 10 slot/s capacity, sát đỉnh -> dễ drop
-
-3. Hiểu pattern slot khác nhau giữa stage qua/không qua biên 0
-   - Stage 0, 2 (qua rate=0): slot_interval lệch về ∞ ở 1 đầu
-   - Stage 1 (không qua 0): slot_interval thay đổi tuyến tính êm
+   vd stage 1 đầu (slot=100ms), iter_time=500ms, M=4:
+       capacity = 4 / 0.5 = 8 slot/s = slot_interval đủ 125ms
+       slot thực = 100ms -> SẮP DROP (capacity sát đỉnh)
+       => cần M=5 (capacity 100ms) để an toàn
 ```
 
-Đây là **mạch logic xuyên suốt Công thức 3**:
-
-```text
-config: stages, target, timeUnit
-  ↓ chia cho timeUnit_seconds
-rate_đầu, rate_cuối của từng stage    (vừa tính ở trên)
-  ↓ nghịch đảo (1/rate)
-slot_interval đầu/cuối stage           (mới tính)
-  ↓ áp công thức diện tích hình thang
-tổng slot N_sched mỗi stage            (sẽ tính ở phần dưới)
-  ↓ sizing với Little's Law
-required_vus + drop diagnose           (dùng cuối cùng)
-```
+→ slot_interval là **cầu nối** giữa rate (config) và năng lực VU (Little's Law).
 
 **Có rate từng stage rồi, dùng để LÀM GÌ?**
 
@@ -5635,16 +5605,48 @@ N_done   = "đã xong"    (số phở ăn xong)
        -> không có scheduled thì không biết đáng lẽ là 1000
 ```
 
-**Vì sao là trung bình?** Vì rate ramp **đường thẳng** (tuyến tính):
-giữa stage rate là trung bình của 2 đầu.
+**Vì sao công thức tổng slot có dấu chia 2?**
 
-**Ví dụ**:
+Quay lại công thức ở đầu Công thức 3:
+
+```text
+scheduled_slots = duration × (rate_đầu + rate_cuối) / 2
+                            └────────────────────┘
+                              = rate TRUNG BÌNH của stage
+```
+
+Phần `(rate_đầu + rate_cuối) / 2` chính là **rate trung bình** — trung
+bình cộng của 2 đầu stage. Vì sao công thức dùng trung bình?
+
+Vì rate ramp **đường thẳng** (tuyến tính) — trung điểm của đường thẳng
+nối 2 điểm chính là trung bình cộng của 2 điểm đó.
+
+```text
+rate
+  ↑
+4 |        ●  rate_cuối = 4
+  |       /
+3 |      ●   rate trung bình = (2+4)/2 = 3 (tại giữa stage)
+  |     /
+2 |    ●  rate_đầu = 2
+  |
+  +─────────→ t
+  0   1   2
+
+=> Diện tích dưới đường rate(t) = duration × rate trung bình
+=> tổng slot = 2 × 3 = 6
+```
+
+**Ví dụ cụ thể**:
 
 ```text
 stage: duration=2s, ramp 2/s -> 4/s
 rate trung bình = (2 + 4) / 2 = 3 iter/giây
 tổng slot = 2 × 3 = 6 lượt start
 ```
+
+(Đây cũng là **diện tích hình thang** với 2 đáy là `rate_đầu` và
+`rate_cuối`, chiều cao là `duration` — đã thấy ở Section 3.1.)
 
 Diễn giải: trong 2 giây này, scheduler "bấm chuông" 6 lần. Phân bố không
 đều (đầu thưa, cuối dày), nhưng tổng vẫn là 6:
