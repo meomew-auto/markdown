@@ -4713,13 +4713,27 @@ Cùng nội dung:
 
 **Trước hết — "lượt start" / "slot" là gì?**
 
-Trong open model, scheduler hoạt động như **người bấm chuông gọi món**:
+Trong open model với rate biến thiên (ramping), scheduler hoạt động như
+**người bấm chuông gọi món**, nhưng **nhịp chuông thay đổi theo timeline**:
 
 ```text
-Cứ mỗi slot_interval, scheduler "bấm chuông" 1 lần
-mỗi tiếng chuông = 1 LƯỢT START = 1 SLOT
-nghe chuông xong, có VU rảnh thì VU đó nhận order, bắt đầu chạy iter
-nếu không có VU rảnh -> drop slot đó (chuông kêu vô ích)
+- Lúc rate thấp (đầu stage ramp): chuông kêu thưa
+- Lúc rate cao (đỉnh stage):       chuông kêu nhặt
+- Mỗi tiếng chuông = 1 LƯỢT START = 1 SLOT
+- Có VU rảnh -> VU đó nhận, chạy iter
+- Không VU rảnh -> drop slot (chuông kêu vô ích)
+```
+
+Đời thường: quán phở giờ cao điểm có lễ tân đẩy khách vào, nhưng tần
+suất thay đổi:
+
+```text
+9h sáng: ít khách, lễ tân đẩy 1 khách / 30s     (rate thấp)
+11h trưa: đông khách, lễ tân đẩy 1 khách / 6s   (rate đỉnh)
+14h chiều: vắng khách, lễ tân đẩy 1 khách / 60s (rate giảm)
+
+=> nhịp đẩy thay đổi theo giờ, không cố định cả ngày
+=> giống stage ramp trong ramping-arrival-rate
 ```
 
 **Vậy 1 SLOT có phải = 1 lần `default()` chạy không?**
@@ -4767,61 +4781,41 @@ Tóm gọn cho dễ nhớ:
 "1 slot = 1 LỊCH GỌI default()"      -> ĐÚNG cho cả 3 trường hợp ✓
 ```
 
-Đời thường (giả định rate **CỐ ĐỊNH** cho dễ hiểu): nếu rate=10 khách/phút
-thì cứ 6 giây cửa quán "đẩy 1 khách vào". Mỗi lần đẩy = 1 lượt start.
+Đời thường — quán phở chuyển ca trong 1 stage ramp:
 
 ```text
-Cách tính 6s từ rate=10 khách/phút:
-  1 phút = 60 giây
-  rate = 10 khách / phút
-  -> mỗi khách cách nhau = 60 / 10 = 6 giây
+Stage: ramp 0 → 10 khách/phút trong 2 phút (lễ tân tăng tốc dần)
 
-Đây chính là công thức slot_interval = 1 / rate (Section 1.3):
-  - rate=10/phút  -> slot_interval = 60s / 10 = 6 giây
-  - rate=10/giây  -> slot_interval = 1s / 10  = 0.1 giây = 100ms
-  - rate=100/giây -> slot_interval = 1s / 100 = 0.01s = 10ms
+Phút 0:   rate=0/phút   -> chưa đẩy khách (gap = ∞)
+Phút 0.5: rate=2.5/phút -> 1 khách / 24 giây (gap thưa)
+Phút 1:   rate=5/phút   -> 1 khách / 12 giây
+Phút 1.5: rate=7.5/phút -> 1 khách / 8 giây
+Phút 2:   rate=10/phút  -> 1 khách / 6 giây (gap dày nhất)
+
+=> đầu stage thưa, cuối stage nhặt
+=> KHÔNG có "1 nhịp đẩy" cố định cả stage
 ```
 
-**CẢNH BÁO QUAN TRỌNG**: 3 ví dụ trên CHỈ ĐÚNG với rate **CỐ ĐỊNH**
-(stage hold hoặc `constant-arrival-rate`). Vì doc này là về
-**`ramping-arrival-rate`** với stages biến thiên, công thức `1/rate` ở
-trên KHÔNG áp được trực tiếp cho stage ramp.
-
-Ví dụ với config thực tế hơn (giống đầu doc):
-
-```text
-stages:
-  - duration: "2s", target: 10    <- ramp 0 → 10/s
-  - duration: "5s", target: 4     <- ramp 10 → 4/s
-  - duration: "2s", target: 0     <- ramp 4 → 0/s
-
-Trong stage 0 (ramp 0 → 10):
-  t=0s    : rate=0/s    -> slot_interval = ∞ (chưa fire slot nào)
-  t=1s    : rate=5/s    -> slot_interval = 200ms
-  t=2s    : rate=10/s   -> slot_interval = 100ms (cuối stage, slot dày nhất)
-
-=> slot ĐẦU stage thưa, slot CUỐI stage nhặt
-=> KHÔNG có slot_interval cố định cho cả stage
-```
-
-Khi rate **THAY ĐỔI** (stage ramp), `slot_interval` cũng thay đổi theo:
+Áp công thức cho từng thời điểm:
 
 ```text
 slot_interval(t) = 1 / rate(t)
 
-Stage ramp 2 → 4 iter/s trong 2s:
-  t=0s   : rate=2/s -> slot_interval = 1/2 = 500ms (đầu stage thưa)
-  t=1s   : rate=3/s -> slot_interval = 1/3 ≈ 333ms (giữa stage)
-  t=2s   : rate=4/s -> slot_interval = 1/4 = 250ms (cuối stage nhặt)
+Tại 1 thời điểm cụ thể trong stage ramp, có thể tính rate(t) bằng đường
+thẳng nội suy (xem Công thức 4 ở dưới):
+  rate(t) = rate_đầu + slope × (t - thời_điểm_đầu_stage)
+  slope   = (rate_cuối - rate_đầu) / duration
+
+Rồi nghịch đảo để có slot_interval tại thời điểm đó.
 ```
 
-Bảng "slot 1: ~t=0.4s, slot 2: ~t=0.8s..." ở dưới chính là minh họa
-slot_interval co lại dần khi rate tăng.
+Lưu ý quan trọng: trong `ramping-arrival-rate`, **không có 1 con số
+slot_interval cố định** — phải đọc theo từng thời điểm.
 
-**Công thức chính xác cho slot biến thiên** (dùng nghiệm bậc 2 từ core):
-xem **Section 3.14 "Bước nhảy của rate trong 1 stage"** — đây là chỗ
-giải thích cách `cal()` trong core tính mốc fire của từng slot khi rate
-ramp tuyến tính.
+**Khoảng cách thật giữa 2 slot liên tiếp** (chính xác hơn `1/rate(t)`):
+core dùng nghiệm bậc 2 từ công thức diện tích hình thang để tính mốc
+fire của từng slot. Xem Section 3.14 "Bước nhảy của rate trong 1 stage"
+cho công thức đầy đủ.
 
 Khách có vào ngồi ăn được hay không phụ thuộc có chỗ trống không, nhưng
 "lượt đẩy khách" thì cứ đều đặn theo curve rate(t).
@@ -4838,21 +4832,23 @@ Quan hệ:
 
 **Vì sao có dấu ≤ chứ không phải = ?**
 
-Đời thường — quán phở giờ cao điểm:
+Đời thường — quán phở chuyển ca từ trưa sang tối (stage ramp):
 
 ```text
-Quán hẹn lễ tân: cứ 6 giây đẩy 1 khách vào (= 10 khách/phút)
+Stage: ramp 4/phút → 10/phút trong 5 phút (lễ tân tăng tốc dần)
 
-Trong 1 phút, lễ tân đẩy ĐỦ 10 khách (=> 10 lượt đẩy = 10 slot)
+Theo công thức diện tích hình thang:
+  N_sched = 5 × (4 + 10) / 2 = 35 lượt đẩy khách
 
-Nhưng số khách THỰC SỰ ĂN XONG có thể ÍT HƠN 10:
-  - 2 khách bị từ chối vì không còn bàn (= drop)
-    "Chuông kêu, nhưng không có chỗ ngồi -> đuổi về"
-  - 1 khách ngồi vào rồi nhưng phở chưa xong, quán đóng cửa
-    -> khách phải ra về dở dang (= interrupt)
+Trong 5 phút này, lễ tân đẩy ĐỦ 35 khách (= 35 slot).
 
-=> số khách ăn xong (N_done) = 10 - 2 - 1 = 7
-=> N_done (7) ≤ N_sched (10) ✓
+Nhưng số khách THỰC SỰ ĂN XONG có thể ÍT HƠN 35:
+  - 4 khách bị từ chối vì hết bàn lúc cao điểm (= drop)
+    "Lúc đỉnh 10/phút, quán chỉ có 5 bàn -> 4 khách phải về"
+  - 1 khách ngồi vào ăn dở, quán đóng cửa (= interrupt)
+
+=> số khách ăn xong (N_done) = 35 - 4 - 1 = 30
+=> N_done (30) ≤ N_sched (35) ✓
 ```
 
 Áp vào k6:
