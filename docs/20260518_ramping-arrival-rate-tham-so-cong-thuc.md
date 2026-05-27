@@ -4575,19 +4575,59 @@ biến thiên khiến số VU CẦN THỰC TẾ cao hơn. Lấy lại ví dụ q
   Trong 30 giây chuyển ca, khách dồn lên 13/phút (vượt target 1 chút).
   -> cần dư VÀI chỗ cho moment chuyển
 
+Vì sao có "dồn cụm"?
+  - Lễ tân chưa kịp xử lý hết khách ca trưa khi ca tối bắt đầu
+  - Khách ca tối đến đúng giờ, gặp khách ca trưa chưa rời -> dồn
+
 Áp vào k6:
-  Stage ramp ở ranh giới có thể vượt target rate 1-2% trong vài ms
+  Tại biên giới giữa 2 stage, có 3 nguyên nhân kỹ thuật:
+
+  (a) Floating point precision khi tính slot:
+      cal() dùng nghiệm bậc 2 (sqrt) để tìm mốc fire
+      sqrt trả số lẻ -> làm tròn ms -> slot fire sớm/muộn 0.1-0.5ms
+
+  (b) doneSoFar tích lũy phần lẻ giữa stage:
+      Stage trước có 12.3 slot -> fire 12, dư 0.3 mang sang stage sau
+      Stage sau fire slot đầu sớm hơn -> dồn cụm nhỏ tại biên
+
+  (c) Window đo rate ngắn:
+      Đo rate trong window 5ms tại biên có thể thấy vượt target 1-2%
+      (window càng ngắn càng dao động lớn)
+
+  -> rate "trung bình" vẫn đúng, nhưng instant rate trong vài ms biên
+     có thể vượt target 1-2%
 ```
 
 **4. Scheduler overhead (lễ tân bố trí chỗ tốn vài giây)**
 
 ```text
 Đời thường:
-  Khách đến phải chờ lễ tân tìm chỗ (10-30 giây tích luỹ).
-  Trong thời gian đó, khách "ngồi tạm" ở khu chờ -> cần thêm 1-2 chỗ chờ.
+  Khách đến quán phải qua các bước:
+  - Lễ tân chào hỏi          (~5 giây)
+  - Tìm bàn trống            (~10 giây)
+  - Hướng dẫn vào chỗ        (~5 giây)
+                              -----
+                              ~20 giây trước khi khách thực sự ngồi
+
+  Trong 20 giây đó, khách "ngồi tạm" ở khu chờ -> cần thêm 1-2 ghế chờ.
 
 Áp vào k6:
-  Go runtime, channel ops mất ~1ms tích lũy mỗi slot
+  Mỗi slot fire có 5 bước nhỏ trong Go runtime:
+
+  1. Timer wake up        (đánh thức goroutine từ sleep)   ~0.1ms
+  2. Send vào channel     (vusPool.iterations <- ...)       ~0.05ms
+  3. VU goroutine receive (for range p.iterations)          ~0.05ms
+  4. Activate VU context  (tạo runtime cho iter)            ~0.5ms
+  5. Bắt đầu chạy JS      (entry vào default function)      ~0.3ms
+                                                             -----
+                                                  tổng ~1ms
+
+  Nếu rate=1000/s: overhead = 1ms × 1000 = 1 giây tích lũy mỗi giây
+  -> rất đáng kể
+  Nếu rate=10/s:   overhead = 1ms × 10  = 10ms (không đáng kể)
+
+  -> overhead này KHÔNG ảnh hưởng iter_time đo được, NHƯNG có thể
+     làm chậm slot fire vài ms -> cần buffer VU
 ```
 
 → 4 nguồn biến thiên này cộng lại thường rơi vào 10-50%, nên buffer 20%
