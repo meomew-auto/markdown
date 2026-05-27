@@ -4726,6 +4726,141 @@ rate_cuối = rate target ở cuối stage (= λ_next = stage này.target / time
 rate(t)   = rate target tại thời điểm t (đường thẳng nội suy)
 ```
 
+**Ví dụ áp vào config 3 stage thực tế**:
+
+```js
+startRate: 0,
+timeUnit: "1s",
+stages: [
+  { duration: "2s", target: 10 },   // stage 0
+  { duration: "5s", target: 4 },    // stage 1
+  { duration: "2s", target: 0 },    // stage 2
+],
+```
+
+**Cách tính rate_đầu và rate_cuối cho từng stage**:
+
+Quy tắc chung:
+
+```text
+rate_đầu của stage N = rate_cuối của stage (N-1)
+                     = stage trước.target / timeUnit_seconds
+                     (riêng stage 0: rate_đầu = startRate / timeUnit_seconds)
+
+rate_cuối của stage N = stage N.target / timeUnit_seconds
+```
+
+Vì `timeUnit = "1s"` nên `timeUnit_seconds = 1`. Mọi phép chia là chia
+cho 1 → giữ nguyên giá trị.
+
+**Tính từng stage một**:
+
+Stage 0 — stage ĐẦU TIÊN, rate_đầu lấy từ `startRate`:
+
+```text
+Đầu vào:
+  startRate = 0
+  stages[0] = { duration: "2s", target: 10 }
+  timeUnit = "1s"  -> timeUnit_seconds = 1
+
+Tính:
+  rate_đầu  = startRate / timeUnit_seconds
+            = 0 / 1
+            = 0/s    (đầu scenario, chưa fire slot nào)
+
+  rate_cuối = stages[0].target / timeUnit_seconds
+            = 10 / 1
+            = 10/s   (target ở cuối stage 0)
+
+Kết quả:
+  Stage 0 = ramp 0/s → 10/s trong 2s
+  (rate tăng tuyến tính từ 0 lên 10 trong 2 giây)
+```
+
+Stage 1 — stage giữa, rate_đầu lấy từ rate_cuối của stage trước:
+
+```text
+Đầu vào:
+  Stage 0 đã tính: rate_cuối = 10/s
+  stages[1] = { duration: "5s", target: 4 }
+
+Tính:
+  rate_đầu  = rate_cuối của stage 0
+            = 10/s   (NỐI LIÊN TỤC, không nhảy bậc!)
+
+  rate_cuối = stages[1].target / timeUnit_seconds
+            = 4 / 1
+            = 4/s
+
+Kết quả:
+  Stage 1 = ramp 10/s → 4/s trong 5s
+  (rate giảm tuyến tính từ 10 xuống 4 trong 5 giây)
+```
+
+Stage 2 — stage CUỐI, vẫn theo cùng quy tắc:
+
+```text
+Đầu vào:
+  Stage 1 đã tính: rate_cuối = 4/s
+  stages[2] = { duration: "2s", target: 0 }
+
+Tính:
+  rate_đầu  = rate_cuối của stage 1
+            = 4/s    (NỐI LIÊN TỤC)
+
+  rate_cuối = stages[2].target / timeUnit_seconds
+            = 0 / 1
+            = 0/s
+
+Kết quả:
+  Stage 2 = ramp 4/s → 0/s trong 2s
+  (rate giảm tuyến tính từ 4 xuống 0, scenario kết thúc với rate=0)
+```
+
+**Tóm tắt 3 stage** dưới dạng bảng:
+
+```text
+| Stage | rate_đầu | rate_cuối | duration | Diễn giải             |
+|-------|----------|-----------|----------|-----------------------|
+| 0     | 0/s      | 10/s      | 2s       | Ramp lên (warm up)    |
+| 1     | 10/s     | 4/s       | 5s       | Giữ peak rồi giảm dần |
+| 2     | 4/s      | 0/s       | 2s       | Ramp xuống (cool down)|
+```
+
+Lưu ý: `rate_cuối stage 0` = `rate_đầu stage 1` = `10/s` (giá trị giống
+nhau ở 2 chỗ). Đây là cách k6 đảm bảo rate **không nhảy bậc** giữa các
+stage — đường rate(t) trên đồ thị là đường gấp khúc liên tục.
+
+**Quan sát quan trọng — rate nối liên tục giữa các stage**:
+
+```text
+| Mốc thời gian | Stage chuyển | rate trước biên | rate sau biên |
+|---------------|--------------|-----------------|---------------|
+| t=0s          | start        | -               | 0/s (startRate) |
+| t=2s          | stage 0 → 1  | 10/s            | 10/s ✓ (= nhau) |
+| t=7s          | stage 1 → 2  | 4/s             | 4/s  ✓ (= nhau) |
+| t=9s          | end          | 0/s             | -               |
+
+=> Rate KHÔNG nhảy bậc tại biên (= nguyên tắc của ramping)
+```
+
+**Tính rate(t) tại 1 thời điểm cụ thể bằng đường thẳng nội suy** (Công thức 4):
+
+```text
+rate(t) = rate_đầu + slope × (t - thời_điểm_đầu_stage)
+slope   = (rate_cuối - rate_đầu) / duration
+
+Áp vào stage 1 (ramp 10 → 4 trong 5s):
+  slope = (4 - 10) / 5 = -1.2 (rate giảm 1.2/s mỗi giây)
+
+  t=2.0s (đầu stage 1): rate = 10 + (-1.2)×0   = 10/s
+  t=4.0s (giữa stage 1): rate = 10 + (-1.2)×2  = 7.6/s
+  t=7.0s (cuối stage 1): rate = 10 + (-1.2)×5  = 4/s
+```
+
+(Thời điểm `t` ở đây là wall-clock từ scenario start — tương đương biên
+stage 1 bắt đầu tại t=2s, kết thúc tại t=7s.)
+
 **Đây là công thức diện tích hình thang** đã thấy ở Section 3.1
 (`scheduled_iterations_i = d_i × (λ_prev + λ_next) / 2`).
 Cả 2 công thức GIỐNG NHAU, chỉ khác cách viết:
