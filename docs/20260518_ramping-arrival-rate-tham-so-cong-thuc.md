@@ -4718,6 +4718,53 @@ Quan hệ:
   Phần thiếu = slot bị drop hoặc iter bị interrupt
 ```
 
+**Vì sao có dấu ≤ chứ không phải = ?**
+
+Đời thường — quán phở giờ cao điểm:
+
+```text
+Quán hẹn lễ tân: cứ 6 giây đẩy 1 khách vào (= 10 khách/phút)
+
+Trong 1 phút, lễ tân đẩy ĐỦ 10 khách (=> 10 lượt đẩy = 10 slot)
+
+Nhưng số khách THỰC SỰ ĂN XONG có thể ÍT HƠN 10:
+  - 2 khách bị từ chối vì không còn bàn (= drop)
+    "Chuông kêu, nhưng không có chỗ ngồi -> đuổi về"
+  - 1 khách ngồi vào rồi nhưng phở chưa xong, quán đóng cửa
+    -> khách phải ra về dở dang (= interrupt)
+
+=> số khách ăn xong (N_done) = 10 - 2 - 1 = 7
+=> N_done (7) ≤ N_sched (10) ✓
+```
+
+Áp vào k6:
+
+```text
+N_sched = số slot scheduler ĐÃ LÊN LỊCH (cứ đến giờ là kêu chuông)
+N_drop  = slot kêu chuông NHƯNG không VU rảnh để nhận
+N_int   = iter VU đã nhận, đang chạy thì hết grace -> bị cancel
+N_done  = iter VU chạy XONG SẠCH
+
+Công thức quan hệ:
+  N_done = N_sched - N_drop - N_int   (xấp xỉ ±1 do biên slot)
+
+Trường hợp đặc biệt:
+  Test "hoàn hảo" -> N_drop = N_int = 0 -> N_done = N_sched
+  Test có vấn đề -> N_done < N_sched, kiểm tra N_drop và N_int
+
+=> Vì N_drop và N_int luôn ≥ 0, N_done LUÔN ≤ N_sched
+   (không bao giờ vượt được lịch dự kiến)
+```
+
+Quy tắc nhớ nhanh:
+
+```text
+N_sched  = "đã hẹn"     (số chuông kêu)
+N_done   = "đã xong"    (số phở ăn xong)
+
+"Đã xong" không bao giờ vượt "đã hẹn" -> N_done ≤ N_sched
+```
+
 **Vì sao cần đếm slot trước khi chạy?**
 
 3 lý do thực tế:
