@@ -3449,19 +3449,22 @@ export const options = {
 
 ### 8.1. 5 công thức TOP cần thuộc lòng
 
-#### Công thức 1: "Tổng iter scenario" (Total iterations)
+#### Công thức 1: "Tổng việc cần làm?" (Total iterations)
 
 ```text
 total_iter = vus × iterations
 ```
 
-**Tiếng Việt**: "Tổng số iter = số VU × số iter mỗi VU"
+**Tiếng Việt**: "Tổng số iter = số VU × số iter mỗi VU phải chạy"
 
 **Ví dụ đời thường**:
 
 ```text
-3 nhân viên kiểm tra hàng, mỗi người kiểm tra 10 đơn:
-  tổng đơn được kiểm = 3 × 10 = 30 đơn
+QA team có 4 nhân viên, mỗi người được giao kiểm 5 test case riêng.
+=> tổng test case team chạy = 4 × 5 = 20 test case
+
+Nhân viên A xong sớm KHÔNG được "lấy thêm" test case của nhân viên B.
+   (Mỗi người tự kiểm phần được giao, không gộp chung)
 ```
 
 **Áp vào k6**:
@@ -3469,74 +3472,237 @@ total_iter = vus × iterations
 ```text
 vus=4, iterations=5
 => total_iter = 4 × 5 = 20 iter
+
+Nếu vus=10, iterations=20:
+=> total_iter = 10 × 20 = 200 iter (mỗi VU chạy đúng 20 iter)
 ```
 
-**Khi nào dùng**: ước lượng số request hệ thống sẽ chịu (vd test
-QA: mỗi user 5 test case, có 4 user → 20 test case tổng).
+**Vì sao KHÔNG cần buffer?**
 
-#### Công thức 2: "Thời gian chạy mỗi VU" (Per-VU runtime)
+Đây là phép nhân CHÍNH XÁC của 2 số config — không có yếu tố ngẫu nhiên,
+không có jitter. `total_iter` đếm SỐ LỊCH GIAO, không phải số đã làm xong.
+Nếu test có drop hoặc interrupt thì `N_done < total_iter`, dùng `total_iter`
+làm mốc kỳ vọng để so với output (xem CT 5).
+
+**Khác `shared-iterations` ở chỗ nào?**
+
+```text
+per-vu-iterations:
+  total_iter = vus × iterations   (phép NHÂN, đếm RIÊNG mỗi VU)
+  Mỗi VU chạy ĐÚNG N iter của mình, không lấy việc VU khác.
+
+shared-iterations:
+  total_iter = iterations          (1 con số, CHIA CHUNG cho cả pool VU)
+  VU rảnh thì lấy iter tiếp theo, đến khi pool trống thì xong.
+```
+
+**Khi nào dùng**: trước khi viết test, để biết tổng tải hệ thống sẽ chịu
+(vd: 4 user × 5 scenario = 20 lượt request); hoặc sau khi chạy, để so với
+`iterations` count trong summary (verify test có chạy đủ không).
+
+**Liên hệ với CT khác**:
+
+```text
+CT 1 (total_iter) -> input cho CT 5 (verify N_done == total_iter ?)
+CT 1 không phụ thuộc iter_time, nên dùng được CẢ TRƯỚC test (sizing) và
+    SAU test (verify).
+```
+
+#### Công thức 2: "Mỗi nhân viên cần bao lâu?" (Per-VU runtime)
 
 ```text
 T_vu_i = iterations × iter_time_i
 ```
 
-**Tiếng Việt**: "Thời gian VU thứ i chạy = số iter × thời gian 1 iter
-của VU đó"
+**Tiếng Việt**: "Thời gian VU thứ i làm xong việc = số iter mỗi VU × thời
+gian 1 iter của VU đó"
 
-**Ví dụ**:
-
-```text
-iterations = 5, iter_time = 0.5s
-T_vu = 5 × 0.5 = 2.5s
-```
-
-Nếu các VU có iter_time khác nhau (vd VU=1 chạy 0.4s, VU=2 chạy 0.6s):
+**Ví dụ đời thường**:
 
 ```text
-T_vu_1 = 5 × 0.4 = 2.0s   <- xong sớm hơn
-T_vu_2 = 5 × 0.6 = 3.0s   <- xong muộn hơn
+QA team có 3 nhân viên, mỗi người kiểm 5 test case:
+  - Nhân viên A nhanh, mỗi case 4 phút  -> tổng = 5 × 4 = 20 phút
+  - Nhân viên B trung bình, mỗi case 6 phút -> tổng = 5 × 6 = 30 phút
+  - Nhân viên C chậm, mỗi case 8 phút  -> tổng = 5 × 8 = 40 phút
+
+A xong lúc 20 phút, ngồi không.
+B xong lúc 30 phút.
+C còn đang làm tới 40 phút mới xong.
 ```
 
-**Khi nào dùng**: ước lượng từng VU mất bao lâu, để biết scenario tổng
-sẽ chờ VU chậm nhất.
+**Áp vào k6**:
 
-#### Công thức 3: "Thời gian scenario" (Scenario duration)
+```text
+config: vus=3, iterations=5
+
+Nếu mỗi VU có iter_time khác nhau (do server lag, GC pause, ...):
+  T_vu_1 = 5 × 0.4s = 2.0s   <- VU nhanh
+  T_vu_2 = 5 × 0.5s = 2.5s   <- VU trung bình
+  T_vu_3 = 5 × 0.6s = 3.0s   <- VU chậm
+
+VU 1 xong lúc 2.0s -> IDLE đến hết scenario (không lấy việc VU khác)
+VU 2 xong lúc 2.5s -> IDLE
+VU 3 chạy đến 3.0s mới xong
+```
+
+**Vì sao KHÔNG cần buffer?**
+
+`T_vu_i` là PHÉP NHÂN xác định: số iter (cố định) × iter_time đo được.
+Iter_time có thể biến thiên theo từng iter (jitter), nhưng khi đã có
+con số `iter_time_i` (lấy từ avg, p95, hay đo cụ thể từng VU), CT 2
+chỉ là phép nhân cuối cùng. Buffer (nếu cần) đặt ở `iter_time` đầu vào
+(vd dùng p95 thay vì avg), không phải ở CT 2.
+
+**Khi nào dùng**: trước test để ước lượng từng VU mất bao lâu (giúp đặt
+`maxDuration` đủ lớn); sau test để hiểu vì sao scenario chạy lâu hơn dự
+kiến (do VU chậm nhất kéo dài).
+
+**Liên hệ với CT khác**:
+
+```text
+CT 2 (T_vu_i) -> input cho CT 3 (T_max = max của các T_vu_i)
+CT 2 cần biết iter_time -> đo từ Summary `iteration_duration` (xem 8.6)
+```
+
+#### Công thức 3: "Scenario kết thúc lúc nào?" (Scenario duration)
 
 ```text
 T_max = max(T_vu_i)
 ```
 
-**Tiếng Việt**: "Scenario chỉ kết thúc khi VU CHẬM NHẤT xong → lấy max
-trong các T_vu"
+**Tiếng Việt**: "Scenario kết thúc khi VU CHẬM NHẤT làm xong → lấy con số
+LỚN NHẤT trong tất cả T_vu"
 
-**Ví dụ**:
+**Ví dụ đời thường**:
 
 ```text
-T_vu_1 = 2.0s, T_vu_2 = 3.0s, T_vu_3 = 2.5s
-T_max = max(2.0, 3.0, 2.5) = 3.0s
+QA team có 3 nhân viên (lấy lại từ CT 2):
+  Nhân viên A xong lúc 20 phút
+  Nhân viên B xong lúc 30 phút
+  Nhân viên C xong lúc 40 phút    <- chậm nhất
 
-=> scenario chạy 3.0s (chờ VU=2 hoàn thành 5 iter)
+Team meeting tổng kết tổ chức khi NÀO?
+  -> Phải đợi C xong (lúc 40 phút)
+  -> A và B đã rảnh từ trước, ngồi chờ C
+  => T_team = max(20, 30, 40) = 40 phút
 ```
 
-**Khi nào dùng**: biết scenario thực tế dài bao nhiêu, để đặt
-`maxDuration` đủ lớn.
+**Áp vào k6**:
 
-#### Công thức 4: "Throughput đỉnh" (Peak rate)
+```text
+Lấy T_vu_i từ CT 2:
+  T_vu_1 = 2.0s, T_vu_2 = 2.5s, T_vu_3 = 3.0s
+
+T_max = max(2.0, 2.5, 3.0) = 3.0s
+
+=> Scenario chạy đến 3.0s mới kết thúc.
+   VU 1 và 2 IDLE từ giây 2.0 - 3.0 (waste 1s và 0.5s).
+```
+
+**Vì sao KHÔNG cần buffer?**
+
+`T_max` là phép `max()` thuần — không có yếu tố ngẫu nhiên ngoài bản
+thân `T_vu_i` đã có jitter rồi. Nếu cần dự phòng "VU chậm nhất chậm hơn
+dự kiến", buffer đặt ở CT 5 (`maxDuration` đủ lớn so với `T_max`), không
+phải ở CT 3.
+
+**Đặc thù closed model (per-vu-iterations)**:
+
+```text
+Closed model: số việc CỐ ĐỊNH, scheduler ĐỢI VU chậm nhất xong.
+  -> không có "drop khi đỉnh" như open model
+  -> nhưng có IDLE TIME (VU nhanh xong sớm thì ngồi không)
+
+Open model (constant-arrival-rate): rate cố định, scheduler ĐỀU NHỊP.
+  -> không đợi ai, đến giờ thì fire slot
+  -> có drop nếu VU không kịp nhận
+```
+
+**Khi nào dùng**: trước test để đặt `maxDuration` đủ lớn cho VU chậm
+nhất; sau test để verify scenario có chạy đúng `T_max` không (so với
+footer `running (X.Xs)`).
+
+**Liên hệ với CT khác**:
+
+```text
+CT 2 (T_vu_i) -> input cho CT 3 (T_max = max)
+CT 3 (T_max)  -> input cho CT 5 (T_total_max = min(maxDuration, T_max))
+```
+
+#### Công thức 4: "Throughput đỉnh là bao nhiêu?" (Peak rate)
 
 ```text
 peak_rate ≈ vus / iter_time
 ```
 
-**Tiếng Việt**: "Số iter hoàn thành mỗi giây ≈ số VU / thời gian 1 iter"
+**Tiếng Việt**: "Số iter hoàn thành mỗi giây ở đỉnh điểm ≈ số VU chia cho
+thời gian 1 iter"
 
-**Ví dụ**:
+**Ví dụ đời thường**:
 
 ```text
-vus=5, iter_time=0.5s
-=> peak_rate = 5 / 0.5 = 10 iter/s
+QA team có 3 nhân viên, mỗi case làm 5 phút:
+  - Cùng lúc 3 người làm song song
+  - Mỗi 5 phút, team xong 3 case
+  => throughput ≈ 3 / 5 = 0.6 case/phút (= 36 case/giờ)
+
+Tăng nhân viên lên 6:
+  => throughput ≈ 6 / 5 = 1.2 case/phút (= 72 case/giờ)
 ```
 
-**Khi nào dùng**: ước lượng load lên hệ thống đỉnh điểm bao nhiêu request/s.
+**Áp vào k6**:
+
+```text
+config: vus=5, iter_time=0.5s
+=> peak_rate = 5 / 0.5 = 10 iter/s
+
+Tức là khi cả 5 VU đều đang chạy:
+  Mỗi 0.5s có 5 iter xong (1 iter/VU)
+  => 10 iter/s tổng team
+```
+
+**Vì sao KHÔNG cần buffer?**
+
+Đây là CÔNG THỨC ƯỚC LƯỢNG THƯỢNG GIỚI (upper bound), không phải dự
+phòng. Throughput THỰC TẾ luôn ≤ peak_rate này:
+
+```text
+1. Có overhead VU (init, teardown, scheduler) -> giảm vài %
+2. Có jitter iter_time -> 1 vài iter chậm kéo trung bình xuống
+3. Cuối scenario VU xong sớm thì IDLE -> rate giảm về 0
+
+=> peak_rate = "đỉnh điểm có thể chạm được", không phải con số trung bình.
+   Số trung bình thực tế = N_done / T_max (xem CT 5).
+```
+
+**Khác `constant-arrival-rate` ở chỗ nào?**
+
+```text
+per-vu-iterations: rate là HỆ QUẢ của (vus, iter_time)
+  -> không config trực tiếp được
+  -> tăng vus hoặc giảm iter_time để tăng rate
+
+constant-arrival-rate: rate là MỤC TIÊU config trực tiếp
+  -> đặt rate=10/s trong config
+  -> scheduler tự fire slot đều nhịp 10/s
+  -> VU nhiều/ít chỉ ảnh hưởng có drop hay không
+```
+
+**Khi nào dùng**: ước lượng load đỉnh server sẽ chịu (vd `peak=10/s`,
+mỗi iter có 2 HTTP request → server chịu peak 20 req/s); so sánh với
+năng lực server (DB, API gateway) để biết test có realistic không.
+
+**Liên hệ với CT khác**:
+
+```text
+CT 4 (peak_rate) chỉ phụ thuộc (vus, iter_time)
+   -> không liên quan trực tiếp tới CT 1 (total_iter)
+   -> không liên quan trực tiếp tới CT 3 (T_max)
+
+CT 4 hữu ích để so với "rate target" khi chuyển sang executor open model:
+   - Nếu chuyển per-vu-iterations sang constant-arrival-rate
+   - Đặt target_rate ≤ peak_rate để không drop
+```
 
 #### Công thức 5: "Trần wall-clock" (Maximum runtime)
 
@@ -3544,22 +3710,80 @@ vus=5, iter_time=0.5s
 T_total_max = min(maxDuration, T_max) + gracefulStop
 ```
 
-**Tiếng Việt**: "Thời gian tối đa scenario (kể cả grace) = nhỏ hơn giữa
-maxDuration và T_max thực tế, cộng grace"
+**Tiếng Việt**: "Trần wall-clock của scenario = nhỏ hơn giữa `maxDuration`
+(config) và `T_max` (thực tế từ CT 3), CỘNG `gracefulStop`"
 
-**Ví dụ**:
+**Ví dụ đời thường**:
 
 ```text
-maxDuration = 10m (default), T_max = 3s, gracefulStop = 30s
-T_total_max = min(10m, 3s) + 30s = 3s + 30s = 33s
+Văn phòng có quy định: làm việc tối đa 8h/ngày, hết giờ có 30 phút "đệm"
+để đóng máy và viết báo cáo.
 
-Nếu maxDuration = 2s (cố tình ngắn):
-T_total_max = min(2s, 3s) + 30s = 2s + 30s = 32s
-=> bị cắt sớm, có thể có dropped iterations
+Trường hợp 1: Team xong việc lúc 6h (T_max = 6h)
+  -> work_time = min(8h, 6h) = 6h
+  -> total = 6h + 30 phút đệm = 6h30
+  (Xong sớm, dùng đệm để dọn dẹp)
+
+Trường hợp 2: Team chậm, đến 9h vẫn còn việc (T_max = 9h)
+  -> work_time = min(8h, 9h) = 8h    (BỊ CẮT ở mốc 8h)
+  -> total = 8h + 30 phút đệm = 8h30
+  -> Việc còn dở phải hoãn ngày mai (= dropped iterations)
 ```
 
-**Khi nào dùng**: biết test sẽ tốn bao lâu trên CI, hoặc khi nào k6 sẽ
-hard-stop.
+**Áp vào k6**:
+
+```text
+Trường hợp 1 — bình thường (config dư):
+  maxDuration = 10m (default), T_max = 3s, gracefulStop = 30s
+  T_total_max = min(10m, 3s) + 30s = 3s + 30s = 33s
+  -> scenario chạy ~3s rồi dùng grace, không có drop
+
+Trường hợp 2 — config cắt sớm:
+  maxDuration = 2s (cố tình ngắn), T_max = 3s, gracefulStop = 30s
+  T_total_max = min(2s, 3s) + 30s = 2s + 30s = 32s
+  -> scenario bị cắt ở 2s, có thể có dropped + interrupted iterations
+```
+
+**Vì sao có dấu `min()`?**
+
+```text
+maxDuration = TRẦN config (k6 sẽ hard-stop ở mốc này)
+T_max       = THỜI GIAN VU CHẬM NHẤT cần để xong (CT 3)
+
+Nếu T_max < maxDuration:
+  -> scenario tự xong sớm -> dùng T_max
+Nếu T_max > maxDuration:
+  -> bị cắt -> dùng maxDuration (k6 không cho chạy quá)
+
+=> min() lấy con số NHỎ HƠN = mốc thực sự scenario kết thúc.
+```
+
+**Vì sao cộng `gracefulStop`?**
+
+```text
+gracefulStop = thời gian đệm SAU khi scenario "kết thúc" (theo nghĩa
+                không start iter mới), CHO PHÉP iter đang chạy hoàn tất.
+
+Nếu iter đang chạy không xong trong grace -> bị cancel = INTERRUPTED.
+Default 30s, tăng lên nếu iter dài.
+```
+
+**Khi nào dùng**:
+
+```text
+- Trước test: ước lượng test sẽ tốn bao lâu trên CI/local
+  vd: T_total_max = 3s + 30s = 33s -> CI cần ít nhất 33s timeout
+- Sau test: verify footer "running (X.Xs)" khớp với T_total_max
+- Diagnose drop: nếu maxDuration < T_max -> đó là nguyên nhân drop
+```
+
+**Liên hệ với CT khác**:
+
+```text
+CT 3 (T_max)        -> input cho CT 5 (so với maxDuration)
+CT 5 < T_max        -> báo có drop (xem 8.3 "Có dropped_iterations")
+CT 5 = T_max + grace -> test chạy trọn, có thể có interrupted ở grace
+```
 
 ### 8.2. Bảng tra nhanh: gặp tình huống nào, dùng công thức nào
 

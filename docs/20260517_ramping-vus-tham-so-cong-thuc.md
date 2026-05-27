@@ -3300,52 +3300,26 @@ arrival-rate = ép tốc độ start iteration
 
 ## 9. Cheat sheet — Công thức cần nhớ nhất
 
-```text
-ramping-vus = variable VUs over time
-```
+Phần này dành cho người mới. Mỗi công thức có **tên tiếng Việt**, ví dụ
+đời thường, và "khi nào dùng". Đọc xong section này là dùng được ngay
+mà không cần đọc 3.x chi tiết.
 
-Công thức hay dùng:
-
-```text
-regular_duration = sum(stage.duration)
-
-executor_wall_time_after_start_max = regular_duration + gracefulStop
-
-per_vu_rate_i = 1 / effective_iteration_time
-
-peak_iteration_rate_if_all_active ~= active_vus / effective_iteration_time
-
-average_iteration_rate = completed_iterations / summary_runtime_base
-
-average_http_request_rate = total_http_requests / summary_runtime_base
-
-estimated_http_requests_if_fixed_path = completed_iterations * http_requests_per_iteration
-
-estimated_checks_if_fixed_path = completed_iterations * checks_per_iteration
-```
-
-Nhớ nhanh:
+Đặc thù `ramping-vus` là **closed model**:
 
 ```text
-stage.target = mức VU ở cuối stage
-không phải số VU cộng thêm
+- Số VU thay đổi theo timeline (config "stages" với target = số VU đích)
+- Mỗi VU chạy iter NỐI TIẾP, xong iter này mới chạy iter kế tiếp
+- KHÔNG có khái niệm "rate" config sẵn (rate là HỆ QUẢ, không phải input)
+- KHÔNG có dropped_iterations (closed model không drop slot)
+- CÓ THỂ có interrupted iterations (iter chạy dở khi grace hết)
 ```
+
+So với `ramping-arrival-rate` (open model):
 
 ```text
-gracefulRampDown = grace khi giảm VU giữa timeline
-gracefulStop = grace ở cuối scenario
+ramping-arrival-rate: config rate -> k6 ép theo rate, có drop nếu thiếu VU
+ramping-vus       : config số VU -> rate là hệ quả, KHÔNG drop
 ```
-
-```text
-ramping-vus không có đường emit dropped_iterations bình thường
-nhưng có thể có interrupted iterations
-```
-
-> Phần dưới đây dành cho người mới. Mỗi công thức có **tên tiếng Việt**,
-> ví dụ đời thường, và "khi nào dùng". Đọc xong là dùng được ngay mà
-> không cần đọc 3.x chi tiết. Đặc thù `ramping-vus` là **closed model**:
-> số VU thay đổi theo timeline, mỗi VU chạy iter nối tiếp nhau, không
-> có khái niệm rate cố định.
 
 ### 9.0. Config chung của `ramping-vus`
 
