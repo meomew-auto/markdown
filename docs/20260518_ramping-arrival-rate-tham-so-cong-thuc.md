@@ -5771,6 +5771,20 @@ Test hoàn hảo (drop=0, int=0): số iter complete = số slot dự kiến
 
 #### Công thức 4: "Rate ở giây thứ N là bao nhiêu?" (Đường thẳng nội suy)
 
+**Liên hệ với Công thức 3**:
+
+```text
+Công thức 3 chỉ dùng rate_đầu và rate_cuối (= 2 ĐẦU stage)
+   để tính TỔNG slot.
+
+Nhưng đôi khi cần biết rate TẠI 1 THỜI ĐIỂM CỤ THỂ (giữa stage):
+   - "Tại t=4.5s rate là bao nhiêu?" -> Công thức 4 trả lời
+   - "Slot_interval tại t=4.5s là bao nhiêu?" -> 1/rate(t) từ Công thức 4
+
+=> Công thức 4 = Công thức MỞ RỘNG của rate_đầu/rate_cuối, áp được
+   cho mọi điểm trong stage (không chỉ 2 đầu).
+```
+
 ```text
 rate(t) = rate_đầu + slope × (t - thời_điểm_đầu_stage)
 slope = (rate_cuối - rate_đầu) / duration
@@ -5786,17 +5800,39 @@ stage: ramp 2/s -> 4/s trong 2s
 
 slope = (4 - 2) / 2 = 1 (mỗi giây tăng 1)
 
-rate tại t=0   : 2 + 1×0   = 2/s   (đầu)
-rate tại t=0.5 : 2 + 1×0.5 = 2.5/s
+rate tại t=0   : 2 + 1×0   = 2/s   (đầu)    <- Công thức 3 đã có
+rate tại t=0.5 : 2 + 1×0.5 = 2.5/s            <- mới: giữa stage
 rate tại t=1   : 2 + 1×1   = 3/s   (giữa)
-rate tại t=2   : 2 + 1×2   = 4/s   (cuối)
+rate tại t=2   : 2 + 1×2   = 4/s   (cuối)   <- Công thức 3 đã có
 ```
+
+→ Công thức 4 lấp khoảng trống giữa rate_đầu và rate_cuối: cho phép tính
+rate TẠI bất kỳ thời điểm nào trong stage.
 
 **Khi nào dùng**: muốn biết tại 1 thời điểm cụ thể trong scenario,
 rate đang là bao nhiêu (để debug, hoặc tính `λ_current` cho công thức
-drop).
+drop, hoặc tính slot_interval tại điểm giữa stage).
 
 #### Công thức 5: "Hệ thống chịu nổi không?" (Verify drop/interrupt)
+
+**Liên hệ với Công thức 3**:
+
+```text
+Công thức 3 cho biết N_sched (TỔNG SLOT DỰ KIẾN) trước khi chạy.
+Sau khi chạy, summary cho N_done (số iter HOÀN THÀNH).
+
+Công thức 5 = SO SÁNH 2 con số đó để biết hệ thống có "chịu" được
+              rate config (rate_đầu, rate_cuối) hay không.
+
+Vòng đời 1 slot:
+  Công thức 3: scheduler LÊN LỊCH       -> N_sched
+  Trong test:  có VU rảnh nhận?
+                  + có  -> chạy iter
+                       + chạy xong -> N_done
+                       + bị cancel -> N_int
+                  + không -> N_drop
+  Công thức 5: ĐÁNH GIÁ kết quả          -> N_done = N_sched - N_drop - N_int
+```
 
 ```text
 N_done ≈ N_sched - N_drop - N_int
@@ -5804,19 +5840,33 @@ actual_rate = N_done / T_run
 ```
 
 **Tiếng Việt**:
-- "Số iter HOÀN THÀNH = tổng dự kiến − slot bị drop − iter bị cancel"
+- "Số iter HOÀN THÀNH = TỔNG SLOT dự kiến (Công thức 3) − slot bị drop − iter bị cancel"
 - "Rate thực tế = số iter hoàn thành / thời gian thực tế chạy"
 
 **Ví dụ**:
 
 ```text
-Trước test:    N_sched = 20 (tính từ Công thức 3)
-Sau test summary cho:
-  iterations          = 18
-  dropped_iterations  = 2
+Trước test (Công thức 3):  N_sched = 20 slot
+                            (vd stage hold 4/s × 5s = 20)
 
-verify: 18 + 2 + 0 = 20 ✓
+Sau test summary cho:
+  iterations          = 18 (= N_done)
+  dropped_iterations  = 2  (= N_drop)
+                       0  (= N_int, đọc từ progress footer)
+
+Verify cộng số: 18 + 2 + 0 = 20 = N_sched ✓
 actual_rate = 18 / 7s ≈ 2.57 iter/s
+```
+
+→ Công thức 5 là **bước cuối** trong chuỗi:
+
+```text
+config (rate_đầu, rate_cuối)
+  → Công thức 3: N_sched = duration × (rate_đầu+rate_cuối)/2
+  → CHẠY TEST →  k6 fire slot, VU nhận hoặc không
+  → Công thức 5: SO SÁNH N_done với N_sched
+                 -> drop nhiều = sizing thiếu (cần tăng VU theo Công thức 1)
+                 -> interrupt nhiều = code chậm (tăng gracefulStop)
 ```
 
 **Khi nào dùng**: sau test, để biết hệ thống có chịu được rate config
@@ -5824,21 +5874,37 @@ hay không. Drop nhiều = sizing thiếu, interrupt nhiều = code chậm.
 
 ### 6.2. Bảng tra nhanh: gặp tình huống nào, dùng công thức nào
 
+5 tình huống hay gặp, mỗi tình huống dùng công thức nào:
+
+```text
+| Tình huống                              | Công thức chính | Phụ trợ      |
+| --------------------------------------- | --------------- | ------------ |
+| 1. Sắp viết config, sizing VU           | CT 1, 2         | CT 3 verify  |
+| 2. Có sẵn N VU, hỏi chịu rate nào       | CT 1 (đảo)      | CT 3         |
+| 3. Muốn biết rate ở 1 thời điểm cụ thể  | CT 4            | -            |
+| 4. Thiết kế ngược từ số slot mong muốn  | CT 3            | CT 4         |
+| 5. Đã chạy xong, đọc summary            | CT 5            | CT 3 đối chiếu |
+```
+
 #### Tình huống 1: "Sắp viết config, không biết đặt số bao nhiêu"
 
 ```text
-Bước 1: Tính rate đỉnh (Công thức 2)
+Bước 1: Tính rate đỉnh                                    [Công thức 2]
    λ_peak = max(startRate, mọi stage.target) / timeUnit
 
 Bước 2: Đo iter_time (chạy thử 1 VU, xem iteration_duration)
    W = iteration_duration của code
 
-Bước 3: Tính số VU cần (Công thức 1)
+Bước 3: Tính số VU cần                                    [Công thức 1]
    required_vus = ceil(λ_peak × W) × 1.2
 
 Bước 4: Đặt config
    preAllocatedVUs = required_vus
    maxVUs = required_vus  (hoặc lớn hơn nếu muốn cho phép spawn)
+
+Bước 5 (verify): Tính N_sched dự kiến                     [Công thức 3]
+   N_sched = sum(d_i × (rate_đầu+rate_cuối)/2)
+   -> chạy thử 1 lần, kiểm tra iterations summary có gần N_sched không
 ```
 
 #### Tình huống 2: "Đã có sẵn N VU, hỏi chịu được rate cao nhất là bao nhiêu?"
@@ -5847,12 +5913,16 @@ Bước 4: Đặt config
 Bước 1: Đo iter_time
    W = thời gian 1 iter
 
-Bước 2: Tính capacity
+Bước 2: Tính capacity                                     [Công thức 1 đảo]
    capacity = N / W  iter/giây
 
 Bước 3: So với rate config
    nếu λ_peak ≤ capacity -> không drop
    nếu λ_peak > capacity -> drop, rate dư = λ_peak − capacity
+
+Bước 4 (chi tiết hơn): Tính N_sched theo capacity         [Công thức 3]
+   N_sched_max chịu được = sum(d_i × min(λ(t_i), capacity))
+   -> ước lượng tổng iter sẽ hoàn thành nếu không drop
 ```
 
 **Ví dụ**:
@@ -5864,15 +5934,73 @@ Có 6 VU, code sleep(0.5)
 => nếu config rate = 15/s -> sẽ drop 3/s tại đỉnh
 ```
 
-#### Tình huống 3: "Đã chạy xong, đọc summary"
+#### Tình huống 3: "Muốn biết rate ở thời điểm cụ thể trong stage"
+
+Câu hỏi điển hình: "Tại t=4.5s (giữa stage 1) rate đang là bao nhiêu?"
 
 ```text
-3 con số quan trọng:
+Bước 1: Xác định stage chứa t=4.5s
+   Cộng dồn duration để tìm:
+     stage 0: t=0..2s
+     stage 1: t=2..7s    <- t=4.5s nằm ở đây
+     stage 2: t=7..9s
+
+Bước 2: Lấy rate_đầu, rate_cuối của stage đó             [Công thức 3]
+   stage 1: rate_đầu=10/s, rate_cuối=4/s, dur=5s
+
+Bước 3: Áp công thức nội suy đường thẳng                 [Công thức 4]
+   slope = (4 - 10) / 5 = -1.2
+   t_local = 4.5 - 2 = 2.5s (đã trôi 2.5s trong stage 1)
+   rate(4.5s) = 10 + (-1.2) × 2.5 = 7/s
+
+Bước 4 (nếu cần): Tính slot_interval tại đó
+   slot_interval(4.5s) ≈ 1 / 7 = 143ms
+```
+
+**Khi nào dùng**: debug log, ước lượng burst tại 1 điểm, tính capacity
+local cho diagnosis.
+
+#### Tình huống 4: "Thiết kế ngược từ số slot mong muốn"
+
+Câu hỏi: "Muốn có đúng 100 slot ở giai đoạn cao điểm, config thế nào?"
+
+```text
+Bước 1: Quyết định pattern muốn dùng
+   Cách A: hold rate cố định
+   Cách B: ramp lên đỉnh rồi giảm
+   Cách C: spike ngắn
+
+Bước 2: Áp công thức diện tích hình thang                 [Công thức 3]
+   N_sched = duration × (rate_đầu + rate_cuối) / 2
+
+   Cách A (hold rate=4/s): 25 × (4+4)/2 = 100 -> duration = 25s
+   Cách B (ramp 0→20/s):   10 × (0+20)/2 = 100 -> duration = 10s
+   Cách C (hold rate=20/s): 5 × (20+20)/2 = 100 -> duration = 5s
+
+Bước 3: Chọn cách phù hợp với SLA
+   Cách A: tải đều, server có thời gian thở
+   Cách B: tăng dần, mô phỏng warm up
+   Cách C: spike ngắn, stress test
+
+Bước 4: Verify rate ở từng điểm                           [Công thức 4]
+   Đảm bảo λ_peak chọn không vượt năng lực server
+```
+
+#### Tình huống 5: "Đã chạy xong, đọc summary"
+
+```text
+Bước 1: Đọc 3 con số từ summary + footer
    iterations         = N_done   (số iter hoàn thành)
    dropped_iterations = N_drop   (slot bị drop)
    interrupted iter.  = N_int    (iter bị cancel ở cuối)
 
-3 câu hỏi cần trả lời:
+Bước 2: Tính N_sched dự kiến để đối chiếu                 [Công thức 3]
+   N_sched = sum(d_i × (rate_đầu+rate_cuối)/2)
+
+Bước 3: Verify quan hệ                                    [Công thức 5]
+   N_done + N_drop + N_int ≈ N_sched (xấp xỉ ±1)
+
+Bước 4: 3 câu hỏi diagnose
    1) Có drop nhiều không?           N_drop / N_sched > 5% là đáng lo
    2) Có interrupt cuối không?       N_int > 0 là chưa kịp xong
    3) Rate thực có gần target không? actual_rate = N_done / T_run
