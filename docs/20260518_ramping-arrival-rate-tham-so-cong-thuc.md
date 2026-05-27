@@ -5694,40 +5694,47 @@ tục (0.25s/lần), tổng vẫn 6 lượt.
 **Khi nào dùng**: ước lượng số iter scenario sẽ có (trước khi chạy),
 hoặc đối chiếu với `iterations` trong summary sau test.
 
-**Vì sao cần đếm slot/iter cho TỪNG STAGE riêng (không chỉ tổng)?**
+**Vì sao cần đếm SLOT cho TỪNG STAGE riêng (không chỉ tổng)?**
 
-4 lý do thực tế:
+4 lý do thực tế (mỗi lý do đều dùng SLOT của stage):
 
 ```text
-1. SIZING VU CHO STAGE ĐỈNH
-   Mỗi stage rate khác nhau -> VU cần khác nhau:
-     Stage 1: rate=4/s,  sleep(0.5) -> cần 2 VU
-     Stage 2: rate=10/s, sleep(0.5) -> cần 5 VU  <- đỉnh
-     Stage 3: rate=4/s,  sleep(0.5) -> cần 2 VU
-   preAllocatedVUs = max(2, 5, 2) = 5
-   -> phải biết stage nào ĐỈNH để chuẩn bị đủ VU lúc đó
+1. TÌM STAGE CÓ MẬT ĐỘ SLOT CAO NHẤT -> SIZING VU
+   Slot mỗi stage = duration × (rate_đầu+rate_cuối)/2
+     Stage 0: 2 × (0+10)/2 = 10 slot   trong 2s -> 5 slot/s
+     Stage 1: 5 × (10+4)/2 = 35 slot   trong 5s -> 7 slot/s  <- đỉnh slot
+     Stage 2: 2 × (4+0)/2  = 4  slot   trong 2s -> 2 slot/s
+   -> Stage 1 có mật độ slot CAO NHẤT
+   -> Sizing VU theo stage 1: cần ceil(10/s × 0.5s) = 5 VU đỉnh
+   -> Không có slot/stage thì không biết đỉnh ở đâu để sizing
 
-2. PHÂN BỔ CHI PHÍ TEST (cloud k6)
-   Cloud k6 tính tiền theo iter count:
-     Stage 1: 8 iter   (rẻ)
-     Stage 2: 100 iter (đỉnh, đắt nhất)
-     Stage 3: 8 iter   (rẻ)
-   -> biết stage nào tốn tiền nhất để tối ưu/cắt giảm nếu cần
+2. ƯỚC LƯỢNG TẢI HỆ THỐNG TẠI MỖI GIAI ĐOẠN
+   Slot/stage = số request ĐỀ NGHỊ scheduler đẩy vào hệ thống:
+     Stage 0: 10 slot -> hệ thống warm up nhẹ (không đáng kể)
+     Stage 1: 35 slot -> hệ thống nhận burst (đoạn dài + rate đỉnh)
+     Stage 2: 4 slot  -> cool down
+   -> Biết stage nào "hot" để chuẩn bị monitoring DB/cache đoạn đó
 
 3. ĐỐI CHIẾU DROP THEO TỪNG GIAI ĐOẠN
    Summary chỉ cho TỔNG dropped, không phân theo stage.
-   Nhưng nếu tự đếm slot/stage:
-     Stage 1: 8 slot dự kiến, complete 8     -> OK
-     Stage 2: 100 slot dự kiến, complete 90  -> drop 10!
-     Stage 3: 8 slot dự kiến, complete 8     -> OK
-   -> biết drop xảy ra ở stage 2, fix sizing đúng đoạn đó
+   Nhưng nếu biết slot dự kiến mỗi stage:
+     Stage 0: 10 slot dự kiến, completed 10  -> OK
+     Stage 1: 35 slot dự kiến, completed 25  -> drop 10!
+     Stage 2: 4  slot dự kiến, completed 4   -> OK
+   -> Biết DROP xảy ra ở stage 1 (rate cao), fix sizing đoạn đó
+   -> Không có slot/stage thì chỉ biết "tổng drop 10/49", không biết ở đâu
 
-4. THIẾT KẾ NGƯỢC TỪ MỤC TIÊU TEST
-   Muốn 100 iter ở giai đoạn cao điểm:
-     - cách A: stage hold rate=4/s trong 25s   -> 100 iter
-     - cách B: stage hold rate=10/s trong 10s -> 100 iter
-   -> đếm slot/stage để chọn cách phù hợp với SLA
+4. THIẾT KẾ NGƯỢC TỪ SỐ SLOT MONG MUỐN
+   Muốn có đúng 100 SLOT trong giai đoạn cao điểm:
+     - cách A: stage hold rate=4/s trong 25s   -> 25 × 4 = 100 slot
+     - cách B: stage hold rate=10/s trong 10s -> 10 × 10 = 100 slot
+     - cách C: stage ramp 0→20/s trong 10s    -> 10 × 10 = 100 slot
+   -> Cùng 100 slot nhưng load pattern khác nhau
+   -> Đếm slot/stage giúp chọn pattern phù hợp SLA
 ```
+
+→ Tóm gọn: **slot/stage** là đại lượng để **chia nhỏ** scenario thành
+các đoạn có thể phân tích riêng (sizing, monitoring, debug, design).
 
 **Lưu ý — slot có thể "vắt qua" biên stage**
 
