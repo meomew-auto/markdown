@@ -4180,6 +4180,21 @@ Footer   -> T_run, N_int                                [OUTPUT cho CT 3, 5]
 
 ### 8.7. Quy trình 5 bước phân tích output
 
+Sau khi có đủ số liệu từ 8.6, làm 5 bước theo thứ tự. Mỗi bước **dùng
+đúng 1 công thức từ 8.1**.
+
+**Bảng mapping nhanh: Bước → Công thức → Số liệu cần**:
+
+```text
+| Bước | Công thức dùng       | Input cần               | Output                |
+|------|----------------------|-------------------------|-----------------------|
+| 1    | verify Header        | Header + config         | Verify config OK      |
+| 2    | CT 1 (total)         | vus, iterations         | total dự kiến         |
+| 3    | CT 5 (so N_done)     | N_done từ summary       | Tỷ lệ N_done/total    |
+| 4    | CT 5 (drop/int)      | N_drop, N_int           | Diagnose drop/int     |
+| 5    | CT 2/3 (suy ngược)   | iter_time + T_run       | T_max thực tế vs ước  |
+```
+
 Output mẫu để phân tích.
 
 **Config đã chạy**:

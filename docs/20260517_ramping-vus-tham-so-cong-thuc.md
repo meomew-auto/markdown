@@ -3929,7 +3929,20 @@ running (09.5s), 0/4 VUs, 58 complete and 0 interrupted iterations
 
 ### 9.7. Quy trình 5 bước phân tích output
 
-Sau khi có đủ số liệu từ 9.6, làm 5 bước theo thứ tự.
+Sau khi có đủ số liệu từ 9.6, làm 5 bước theo thứ tự. Mỗi bước **dùng
+đúng 1 công thức từ 9.1**.
+
+**Bảng mapping nhanh: Bước → Công thức → Số liệu cần**:
+
+```text
+| Bước | Công thức dùng       | Input cần                 | Output                  |
+|------|----------------------|---------------------------|-------------------------|
+| 1    | verify Header        | Header + config           | Verify config OK        |
+| 2    | CT 2 (peak rate)     | active_vus_max, W         | peak_rate dự kiến       |
+| 3    | CT 5 (so N_done)     | N_done từ summary         | Tỷ lệ N_done/expected   |
+| 4    | CT 5 (interrupted)   | N_int từ footer           | Diagnose interrupt cuối |
+| 5    | CT 2 đảo (suy ngược) | M_peak + W từ summary     | Throughput thực tế      |
+```
 
 #### Output mẫu để phân tích (dùng xuyên suốt 5 bước)
 
