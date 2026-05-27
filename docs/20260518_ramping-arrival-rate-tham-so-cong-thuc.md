@@ -6093,7 +6093,24 @@ Học thuộc 3 dòng này là dùng được 80% nhu cầu thực tế.
 ### 6.6. Đọc output sau test: tìm số ở đâu?
 
 Sau khi `k6 run` xong, bạn sẽ thấy 3 nhóm số liệu. Phải biết tìm từng
-con số ở đâu để áp công thức.
+con số ở đâu để **áp vào đúng công thức** đã học ở 6.1.
+
+**Bảng mapping nhanh: số ở đâu → dùng cho công thức nào**:
+
+```text
+| Số liệu                  | Đọc ở đâu              | Dùng cho công thức |
+| ------------------------ | ---------------------- | ------------------ |
+| λ_peak                   | Header "Up to X iter/s"| CT 1, 2 (verify)   |
+| T = sum(stage.duration)  | Header "for Xs"        | CT 3 verify        |
+| preAllocatedVUs, maxVUs  | Header "maxVUs: A-B"   | CT 1 verify        |
+| W (iter_time)            | Summary iteration_duration | CT 1, 2 (sizing)|
+| N_done                   | Summary iterations count   | CT 5 (verify)   |
+| N_drop                   | Summary dropped_iterations | CT 5 (verify)   |
+| M_peak (VU bận cao nhất) | Summary vus max        | CT 1 đảo (suy ngược)|
+| actual_rate              | Summary iterations rate    | CT 5 (so target) |
+| T_run                    | Footer "running (X.Xs)"| CT 5 (mẫu số rate) |
+| N_int                    | Footer "X interrupted" | CT 5 (verify)   |
+```
 
 #### Nhóm 1: Header (in ra ngay đầu test)
 
@@ -6105,15 +6122,18 @@ scenarios: (100.00%) 1 scenario, 6 max VUs, 9s max duration (incl. graceful stop
 Đọc các con số:
 
 ```text
-"6 max VUs"                   <- vus_max (số instance VU sẽ init)
-"9s max duration"              <- T + gracefulStop
-"Up to 4.00 iterations/s"      <- λ_peak (rate cao nhất config)
-"for 7s"                        <- T = sum(stage.duration)
-"3 stages"                     <- số stage trong config
-"maxVUs: 5-10"                 <- preAllocatedVUs (5) - maxVUs (10)
+| Output                       | Biến      | Dùng để                                |
+|------------------------------|-----------|----------------------------------------|
+| "6 max VUs"                  | vus_max   | verify pool đã init đủ                 |
+| "9s max duration"            | T+grace   | verify gracefulStop                    |
+| "Up to 4.00 iterations/s"    | λ_peak    | INPUT cho CT 1 (sizing) và CT 2 (peak) |
+| "for 7s"                     | T         | INPUT cho CT 3 (tính N_sched)          |
+| "3 stages"                   | -         | verify số stage trong config           |
+| "maxVUs: 5-10"               | preAlloc, maxVUs | verify config                   |
 ```
 
-**Khi nào đọc**: ngay đầu để verify config đã parse đúng.
+**Khi nào đọc**: ngay đầu để verify config đã parse đúng. Đây là input
+cho CT 1, 2, 3 (chuẩn bị tính).
 
 #### Nhóm 2: Summary cuối test (block "TOTAL RESULTS")
 
@@ -6133,16 +6153,25 @@ http_reqs............: 36    5.142857/s
 Đọc các con số:
 
 ```text
-iteration_duration avg     <- W (iter_time hiệu dụng)
-iterations (count)         <- N_done (iter hoàn thành)
-iterations (rate)          <- actual_rate
-dropped_iterations (count) <- N_drop (slot bị drop)
-vus (max)                  <- M_peak (số VU bận cao nhất)
-vus_max                    <- preAllocated (instance đã init)
-http_reqs (count)          <- nếu code có HTTP, ÷ N_done = req per iter
+| Output                  | Biến         | Dùng để                              |
+|-------------------------|--------------|--------------------------------------|
+| iteration_duration avg  | W            | INPUT CT 1 (sizing), CT 2 (capacity) |
+| iterations (count)      | N_done       | OUTPUT CT 5 (verify với N_sched)     |
+| iterations (rate)       | actual_rate  | OUTPUT CT 5 (so với λ_avg target)    |
+| dropped_iterations      | N_drop       | OUTPUT CT 5 (slot bị drop)           |
+| vus max                 | M_peak       | INPUT CT 1 đảo (capacity_thực = M/W) |
+| vus_max                 | preAllocated | verify init phase đúng config        |
+| http_reqs (count)       | N_done × N_req| nếu code N HTTP req/iter           |
 ```
 
-**Khi nào đọc**: sau khi test xong, để đánh giá kết quả.
+**Khi nào đọc**: sau test xong, áp công thức ngược:
+
+```text
+- W từ summary -> verify Bước 2 sizing (CT 1)
+- N_done so với N_sched (CT 3) -> tính tỷ lệ chịu được (CT 5)
+- M_peak/W -> capacity thực tế (CT 1 đảo)
+- N_drop > 0 -> sizing thiếu -> tăng preAllocated (CT 1)
+```
 
 #### Nhóm 3: Progress/footer (ngay trước summary)
 
@@ -6153,14 +6182,29 @@ running (07.6s), 0/6 VUs, 18 complete and 2 interrupted iterations
 Đọc các con số:
 
 ```text
-"07.6s"                          <- T_run (thời gian thực tế chạy)
-"0/6 VUs"                        <- VU đang bận / tổng VU init
-"18 complete"                    <- N_done (khớp với summary)
-"2 interrupted iterations"       <- N_int (KHÔNG có metric Counter riêng)
+| Output                      | Biến      | Dùng để                          |
+|-----------------------------|-----------|----------------------------------|
+| "07.6s"                     | T_run     | MẪU SỐ cho actual_rate (CT 5)    |
+| "0/6 VUs"                   | -         | snapshot lúc test xong (cosmetic)|
+| "18 complete"               | N_done    | trùng với summary, dùng CT 5     |
+| "2 interrupted iterations"  | N_int     | OUTPUT CT 5 (iter bị cancel)     |
 ```
 
-**Lưu ý**: `N_int` chỉ xuất hiện ở đây, không có trong summary. Phải đọc
-dòng progress cuối cùng.
+**Lưu ý**: `N_int` CHỈ xuất hiện ở footer, KHÔNG có metric Counter riêng
+trong summary. Phải đọc dòng progress cuối cùng.
+
+**Tổng hợp luồng đọc số → áp công thức**:
+
+```text
+Header   -> λ_peak, T              [INPUT cho CT 1, 2, 3 - chuẩn bị tính]
+Summary  -> W, N_done, N_drop, M   [OUTPUT cho CT 1, 5 - so kết quả]
+Footer   -> T_run, N_int           [OUTPUT cho CT 5 - hoàn tất verify]
+
+Áp công thức theo thứ tự:
+   CT 3: tính N_sched từ rate_đầu/rate_cuối (lấy từ Header)
+   CT 5: verify N_done + N_drop + N_int ≈ N_sched
+   CT 1 đảo: M_peak / W = capacity thực, so với λ_peak để biết dư/thiếu
+```
 
 ### 6.7. Quy trình 5 bước phân tích output
 
