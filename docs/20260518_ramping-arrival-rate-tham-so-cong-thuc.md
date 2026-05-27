@@ -5071,16 +5071,60 @@ rate_đầu/rate_cuối              = quy định MẬT ĐỘ slot ở 2 đầu
 Hình dung trên timeline:
 
 ```text
-Stage 1 (rate 10 → 4 trong 5s):
-  rate_đầu = 10/s -> slot dày (gap ~100ms)
-  rate_cuối = 4/s -> slot thưa (gap ~250ms)
+Stage 1 (ramp 10/s → 4/s trong 5 giây, từ t=2s đến t=7s wall-clock)
 
-  slot 1   slot 2   slot 3 ... slot N    slot N+1
-  ●        ●        ●           ●          ●
-  |--gap--|--gap--|--gap--   ... |---gap---|
-   ~100ms  ~110ms  ~120ms         ~250ms
+Đầu stage (t=2s):  rate=10/s -> slot DÀY (gap ~100ms)
+Giữa stage (t=4.5s): rate=7/s  -> slot THƯA dần (gap ~140ms)
+Cuối stage (t=7s): rate=4/s  -> slot THƯA (gap ~250ms)
 
-  (gap CO LẠI hay GIÃN RA tùy rate đang tăng/giảm)
+(Các gap 100ms, 140ms, 250ms đều áp công thức xấp xỉ
+slot_interval ≈ 1/rate(t) từ phần "Biết rate_đầu/rate_cuối → tính
+được slot_interval ra sao?" ở trên: 1/10 = 100ms, 1/7 ≈ 143ms,
+1/4 = 250ms.)
+
+Trục t (giây):
+  2.0    2.5    3.0    3.5    4.0    4.5    5.0    5.5    6.0    6.5    7.0
+  |------|------|------|------|------|------|------|------|------|------|
+  ●●●●● ●●●●● ●●●●  ●●●● ●●●●  ●●●●   ●●●●   ●●●●    ●●●●     ●●●●      ●
+  ↑                  ↑                ↑                          ↑
+  rate=10/s          rate=8.8/s       rate=7/s                   rate=4/s
+  (slot 11-15)       (slot 16-20)     (slot 21-25)               (slot 35)
+
+  Trong 0.5s đầu (t=2..2.5s): có ~5 slot (rate ~9.4/s, gap ~107ms)
+  Trong 0.5s cuối (t=6.5..7s): chỉ ~2 slot (rate ~4.3/s, gap ~234ms)
+
+Tổng cả stage 1: 5 × (10+4)/2 = 35 slot
+```
+
+**Quan sát**:
+
+```text
+- Đầu stage (rate cao): slot DÀY, các dấu ● gần nhau
+- Cuối stage (rate thấp): slot THƯA, các dấu ● cách xa nhau
+- Mật độ slot CO LẠI hay GIÃN RA tùy rate đang tăng/giảm
+- Trong stage 1 này rate GIẢM (10→4), nên slot GIÃN RA dần
+```
+
+So sánh với stage 0 (ramp ngược lại):
+
+```text
+Stage 0 (ramp 0/s → 10/s trong 2s):
+  Đầu stage rate=0/s  -> chưa fire slot (gap = ∞)
+  Cuối stage rate=10/s -> slot DÀY (gap ~100ms)
+
+Trục t (giây) trong stage 0:
+  0.0    0.5    1.0    1.5    2.0
+  |------|------|------|------|
+                  ●     ●●    ●●●●
+                  ↑     ↑     ↑
+                  ↑     ↑     rate=10/s (slot dồn cuối)
+                  ↑     rate=7.5/s
+                  rate=5/s (slot bắt đầu xuất hiện)
+
+  Nửa đầu stage (rate thấp): rất ít slot
+  Nửa cuối stage (rate cao): slot dồn vào
+
+Tổng cả stage 0: 2 × (0+10)/2 = 10 slot, RẢI LỆCH về cuối
 ```
 
 Trong open model với rate biến thiên (ramping), scheduler hoạt động như
