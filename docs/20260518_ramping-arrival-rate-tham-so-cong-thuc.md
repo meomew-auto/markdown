@@ -5050,16 +5050,62 @@ Cùng nội dung:
 
 **Trước hết — "lượt start" / "slot" là gì?**
 
-Trong open model với rate biến thiên (ramping), scheduler hoạt động như
-**người bấm chuông gọi món**, nhưng **nhịp chuông thay đổi theo timeline**:
+Quay lại phần trên: ta đã có `rate_đầu`, `rate_cuối` của 3 stage và biết
+`slot_interval ≈ 1/rate(t)` thay đổi theo curve. Vậy 1 SLOT thực chất
+là gì?
 
 ```text
-- Lúc rate thấp (đầu stage ramp): chuông kêu CÁCH QUÃNG (gap dài)
-- Lúc rate cao (đỉnh stage):       chuông kêu LIÊN TỤC (gap ngắn)
+1 SLOT = 1 LƯỢT START iteration mà scheduler "đặt lịch"
+       = 1 mốc thời gian trên timeline mà scheduler quyết định
+         "bây giờ phải start 1 iter"
+```
+
+Nói cách khác:
+
+```text
+slot_interval (đã tính ở trên) = KHOẢNG CÁCH giữa 2 SLOT liên tiếp
+slot                            = ĐIỂM trên timeline (1 lượt start)
+rate_đầu/rate_cuối              = quy định MẬT ĐỘ slot ở 2 đầu stage
+```
+
+Hình dung trên timeline:
+
+```text
+Stage 1 (rate 10 → 4 trong 5s):
+  rate_đầu = 10/s -> slot dày (gap ~100ms)
+  rate_cuối = 4/s -> slot thưa (gap ~250ms)
+
+  slot 1   slot 2   slot 3 ... slot N    slot N+1
+  ●        ●        ●           ●          ●
+  |--gap--|--gap--|--gap--   ... |---gap---|
+   ~100ms  ~110ms  ~120ms         ~250ms
+
+  (gap CO LẠI hay GIÃN RA tùy rate đang tăng/giảm)
+```
+
+Trong open model với rate biến thiên (ramping), scheduler hoạt động như
+**người bấm chuông gọi món**, nhịp chuông thay đổi theo `rate_đầu/rate_cuối`:
+
+```text
+- Lúc rate thấp (= rate_đầu của stage 0, hoặc rate_cuối của stage 2):
+  chuông kêu CÁCH QUÃNG (gap dài)
+- Lúc rate cao (= rate_cuối stage 0 hoặc rate_đầu stage 1 = đỉnh 10/s):
+  chuông kêu LIÊN TỤC (gap ngắn)
 - Mỗi tiếng chuông = 1 LƯỢT START = 1 SLOT
 - Có VU rảnh -> VU đó nhận, chạy iter
 - Không VU rảnh -> drop slot (chuông kêu vô ích)
 ```
+
+→ Tới đây ta đã nối được:
+
+```text
+config (target, timeUnit) -> rate_đầu, rate_cuối
+                          -> slot_interval (1/rate)
+                          -> SLOT (mốc fire trên timeline)
+```
+
+Bước tiếp theo trong section này: tính tổng SỐ slot mỗi stage (công thức
+hình thang) và mối quan hệ với iter hoàn thành.
 
 **Lưu ý — đừng nhầm "nhịp slot" với "số VU"**:
 
