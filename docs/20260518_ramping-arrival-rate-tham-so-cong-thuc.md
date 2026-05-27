@@ -4831,6 +4831,87 @@ Lưu ý: `rate_cuối stage 0` = `rate_đầu stage 1` = `10/s` (giá trị gi�
 nhau ở 2 chỗ). Đây là cách k6 đảm bảo rate **không nhảy bậc** giữa các
 stage — đường rate(t) trên đồ thị là đường gấp khúc liên tục.
 
+**Có rate từng stage rồi, dùng để LÀM GÌ?**
+
+5 mục đích chính:
+
+**(1) Sizing VU — quan trọng nhất**
+
+```text
+λ_peak = max(0, 10, 4, 0) = 10/s         (lấy từ bảng trên)
+required_vus = ceil(λ_peak × iter_time) × 1.2
+            = ceil(10 × 0.5) × 1.2        (với code sleep(0.5))
+            = ceil(5) × 1.2 = 6 VU
+
+=> đặt preAllocatedVUs = 6 (ĐỦ cho đỉnh rate)
+```
+
+Không có rate từng stage → không biết đỉnh ở đâu → đặt VU sai.
+
+**(2) Tính tổng slot dự kiến (`N_sched`)**
+
+```text
+Stage 0: 2 × (0+10)/2 = 10 slot
+Stage 1: 5 × (10+4)/2 = 35 slot
+Stage 2: 2 × (4+0)/2  = 4  slot
+                       -----
+                       49 slot
+
+Trước test: biết N_sched = 49 (đáng lẽ chạy được 49 iter)
+Sau test:   so với "iterations" trong summary
+            - 49 -> hoàn hảo
+            - <49 -> có drop hoặc interrupt
+```
+
+**(3) Biết stage nào "đỉnh" để FIX khi có vấn đề**
+
+```text
+Stage 1 có rate đầu = 10/s (đỉnh) -> đoạn DỄ DROP NHẤT
+
+Nếu sau test có drop:
+  -> 90% drop xảy ra trong stage 1 (lúc rate cao nhất)
+  -> Fix: tăng preAllocatedVUs HOẶC giảm stage 1.target
+
+Nếu drop ở stage 0/2 (rate thấp):
+  -> Bất thường, kiểm tra biên slot hoặc spawn unplanned chậm
+```
+
+**(4) Tính chi phí test (cloud k6)**
+
+```text
+Cloud k6 tính tiền theo iter count + VUh:
+  Iter count = 49
+  VUh = 6 VU × 9s = 54 VU-giây ≈ 0.015 VUh (rẻ với demo nhỏ)
+
+Khi scenario lớn:
+  Iter count = 1M, max VU = 1000, T = 1h
+  -> 1M iter × $X/iter + 1000 VUh × $Y
+  -> dự trù budget trước khi chạy
+```
+
+**(5) Đối chiếu mật độ slot theo thời gian khi đọc log**
+
+```text
+Stage 0 (rate 0→10):  slot ĐẦU thưa (gap ~0.6s), CUỐI nhặt (gap ~0.1s)
+Stage 1 (rate 10→4):  slot ĐẦU nhặt (gap ~0.1s), CUỐI thưa (gap ~0.25s)
+Stage 2 (rate 4→0):   slot ĐẦU thưa, CUỐI rất thưa (slot cuối ~t=8.6s)
+
+=> Đọc log debug biết "đang fire slot dày hay thưa"
+=> Nếu http_req_duration tăng vọt khi slot dày
+   -> server không chịu nổi rate đỉnh, cần tối ưu server
+```
+
+**Tóm gọn 1 dòng**:
+
+```text
+"Rate từng stage" = INPUT để TÍNH SLOT + SIZING VU + DIAGNOSE DROP
+
+Không có rate từng stage:
+  - không biết chuẩn bị bao nhiêu VU
+  - không biết test đáng lẽ có bao nhiêu iter
+  - không biết drop (nếu có) xảy ra ở đâu trên timeline
+```
+
 **Quan sát quan trọng — rate nối liên tục giữa các stage**:
 
 ```text
@@ -4844,22 +4925,12 @@ stage — đường rate(t) trên đồ thị là đường gấp khúc liên t�
 => Rate KHÔNG nhảy bậc tại biên (= nguyên tắc của ramping)
 ```
 
-**Tính rate(t) tại 1 thời điểm cụ thể bằng đường thẳng nội suy** (Công thức 4):
+**Tính rate(t) tại 1 thời điểm cụ thể** (vd "rate ở giữa stage 1 là bao
+nhiêu?"): xem **Công thức 4** ở dưới — đây là chỗ giải thích đường thẳng
+nội suy `rate(t) = rate_đầu + slope × (t - thời_điểm_đầu_stage)`.
 
-```text
-rate(t) = rate_đầu + slope × (t - thời_điểm_đầu_stage)
-slope   = (rate_cuối - rate_đầu) / duration
-
-Áp vào stage 1 (ramp 10 → 4 trong 5s):
-  slope = (4 - 10) / 5 = -1.2 (rate giảm 1.2/s mỗi giây)
-
-  t=2.0s (đầu stage 1): rate = 10 + (-1.2)×0   = 10/s
-  t=4.0s (giữa stage 1): rate = 10 + (-1.2)×2  = 7.6/s
-  t=7.0s (cuối stage 1): rate = 10 + (-1.2)×5  = 4/s
-```
-
-(Thời điểm `t` ở đây là wall-clock từ scenario start — tương đương biên
-stage 1 bắt đầu tại t=2s, kết thúc tại t=7s.)
+Trong Công thức 3 này, chỉ cần biết `rate_đầu` và `rate_cuối` (= 2 đầu
+stage) là đủ để áp công thức diện tích hình thang.
 
 **Đây là công thức diện tích hình thang** đã thấy ở Section 3.1
 (`scheduled_iterations_i = d_i × (λ_prev + λ_next) / 2`).
