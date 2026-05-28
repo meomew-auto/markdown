@@ -26,7 +26,7 @@ import { SharedArray } from "k6/data";
 // Config
 // ─────────────────────────────────────────────────────────────────
 
-const BASE_URL = __ENV.BASE_URL || "https://quickpizza.grafana.com";
+const BASE_URL = __ENV.BASE_URL || "http://localhost:80";
 const VUS = 30;
 const ITERS_PER_VU = 5;
 // Total iterations = 30 × 5 = 150 journey replays
