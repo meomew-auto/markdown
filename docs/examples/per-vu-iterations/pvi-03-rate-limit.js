@@ -20,7 +20,7 @@ import http from "k6/http";
 import { check } from "k6";
 import { Counter } from "k6/metrics";
 
-const BASE_URL = __ENV.BASE_URL || "https://quickpizza.grafana.com";
+const BASE_URL = __ENV.BASE_URL || "http://localhost:80";
 const VUS = 5;
 const REQUESTS_PER_VU = 150;
 // Mỗi VU = 1 user, gửi 150 request không sleep
@@ -52,13 +52,16 @@ export default function () {
     console.log(`[VU=${__VU}] start spam test, token=${userToken}`);
   }
 
-  const res = http.get(`${BASE_URL}/api/quotes`, {
-    headers: {
-      "Authorization": `Bearer ${userToken}`,
-      "X-Request-Index": String(__ITER),
+  const res = http.get(
+    `${BASE_URL}/api/sim/products?limit=10&cpu_ms=1&db_rows=1`,
+    {
+      headers: {
+        "Authorization": `Bearer ${userToken}`,
+        "X-Request-Index": String(__ITER),
+      },
+      tags: { name: "rate_limit_test", iter: String(__ITER) },
     },
-    tags: { name: "rate_limit_test", iter: String(__ITER) },
-  });
+  );
 
   // Count theo status
   if (res.status === 200) {

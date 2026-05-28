@@ -19,7 +19,7 @@ import http from "k6/http";
 import { check, sleep } from "k6";
 import { Counter } from "k6/metrics";
 
-const BASE_URL = __ENV.BASE_URL || "https://quickpizza.grafana.com";
+const BASE_URL = __ENV.BASE_URL || "http://localhost:80";
 const VUS = 100;             // 100 users (50 + 50)
 const VIEWS_PER_VU = 5;      // mỗi user xem 5 trang
 // Total = 500 views
@@ -56,8 +56,9 @@ export default function () {
   }
 
   // GET homefeed với variant header
+  // Real endpoint: GET /api/sim/products/homefeed
   const res = http.get(
-    `${BASE_URL}/api/quotes?personalized=1`,
+    `${BASE_URL}/api/sim/products/homefeed?personalized=1&cpu_ms=2&db_rows=5`,
     {
       headers: {
         "X-User-Segment": userSegment,
@@ -82,8 +83,9 @@ export default function () {
 
   // Recommendation request (chỉ variant A có)
   if (userVariant === "a") {
+    const productId = ((__VU + __ITER) % 5) + 1;
     http.get(
-      `${BASE_URL}/api/quotes?algorithm=collaborative`,
+      `${BASE_URL}/api/sim/products/${productId}/recommendations?algorithm=collaborative&cpu_ms=3&db_rows=3`,
       {
         headers: { "X-Ab-Variant": "a" },
         tags: { name: "recommendations", variant: "a" },

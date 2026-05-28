@@ -23,7 +23,7 @@ import http from "k6/http";
 import { check, sleep } from "k6";
 import { Counter } from "k6/metrics";
 
-const BASE_URL = __ENV.BASE_URL || "https://quickpizza.grafana.com";
+const BASE_URL = __ENV.BASE_URL || "http://localhost:80";
 const VUS = 10;
 const ACTIONS_PER_VU = 20;
 // Mock: token TTL = 5s -> sau iter 10 sẽ expire (giả lập)
@@ -55,10 +55,9 @@ let refreshToken = null;
 let tokenIssuedAtIter = 0;
 
 function login() {
-  // Production: POST /api/sim/auth/login
   const res = http.post(
-    `${BASE_URL}/api/quotes`,
-    JSON.stringify({ user: `user-${__VU}` }),
+    `${BASE_URL}/api/sim/auth/login?cpu_ms=2&db_rows=1`,
+    JSON.stringify({ username: `user-${__VU}`, password: `pass-${__VU}` }),
     {
       headers: { "Content-Type": "application/json" },
       tags: { name: "login" },
@@ -73,12 +72,15 @@ function login() {
 }
 
 function callMe(token, expectedStatus = 200) {
-  // Production: GET /api/sim/auth/me
-  // Mock: nếu __ITER > TOKEN_TTL_AFTER_ITER và chưa refresh -> giả lập 401
-  const res = http.get(`${BASE_URL}/api/quotes`, {
-    headers: { "Authorization": `Bearer ${token}` },
-    tags: { name: "auth_me", expected: String(expectedStatus) },
-  });
+  // Real endpoint: GET /api/sim/auth/me
+  // Mock client-side: simulate token expire sau N iter
+  const res = http.get(
+    `${BASE_URL}/api/sim/auth/me?cpu_ms=1&db_rows=1`,
+    {
+      headers: { "Authorization": `Bearer ${token}` },
+      tags: { name: "auth_me", expected: String(expectedStatus) },
+    },
+  );
 
   // Mock client-side simulation token expire
   const simulated_status =
@@ -91,9 +93,9 @@ function callMe(token, expectedStatus = 200) {
 }
 
 function refresh(rToken) {
-  // Production: POST /api/sim/auth/refresh
+  // Real endpoint: POST /api/sim/auth/refresh
   const res = http.post(
-    `${BASE_URL}/api/quotes`,
+    `${BASE_URL}/api/sim/auth/refresh?cpu_ms=2&db_writes=1`,
     JSON.stringify({ refresh_token: rToken }),
     {
       headers: { "Content-Type": "application/json" },
@@ -109,11 +111,14 @@ function refresh(rToken) {
 }
 
 function doAction(token) {
-  // Production: GET /api/sim/products
-  return http.get(`${BASE_URL}/api/quotes`, {
-    headers: { "Authorization": `Bearer ${token}` },
-    tags: { name: "user_action", iter: String(__ITER) },
-  });
+  // Real endpoint: GET /api/sim/products
+  return http.get(
+    `${BASE_URL}/api/sim/products?limit=5&cpu_ms=1&db_rows=2`,
+    {
+      headers: { "Authorization": `Bearer ${token}` },
+      tags: { name: "user_action", iter: String(__ITER) },
+    },
+  );
 }
 
 export default function () {

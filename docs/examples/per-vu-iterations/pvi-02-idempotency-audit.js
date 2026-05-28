@@ -26,7 +26,7 @@ import { Counter } from "k6/metrics";
 // Config
 // ─────────────────────────────────────────────────────────────────
 
-const BASE_URL = __ENV.BASE_URL || "https://quickpizza.grafana.com";
+const BASE_URL = __ENV.BASE_URL || "http://localhost:80";
 const VUS = 20;
 const RETRIES_PER_CUSTOMER = 5;
 // Total = 20 customers × 5 retry = 100 confirm calls
@@ -83,8 +83,8 @@ export default function () {
 
   // Mọi iter (kể cả iter 0): gửi confirm với CÙNG idempotency key
   const res = http.post(
-    `${BASE_URL}/api/quotes`,
-    JSON.stringify({ order_id: orderId, retry_attempt: __ITER }),
+    `${BASE_URL}/api/sim/orders/${orderId}/confirm?cpu_ms=0&db_writes=4&external_ms=180`,
+    JSON.stringify({ retry_attempt: __ITER }),
     {
       headers: {
         "Content-Type": "application/json",

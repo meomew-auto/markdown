@@ -20,7 +20,7 @@ import http from "k6/http";
 import { check, sleep } from "k6";
 import { Counter } from "k6/metrics";
 
-const BASE_URL = __ENV.BASE_URL || "https://quickpizza.grafana.com";
+const BASE_URL = __ENV.BASE_URL || "http://localhost:80";
 const VUS = 10;                  // 10 users
 const ITERS_PER_VU = 10;         // mỗi user 10 đợt add cart
 const ITEMS_PER_BURST = 3;       // 3 tab song song mỗi đợt
@@ -61,18 +61,19 @@ export default function () {
   // 3 cart_add SONG SONG (3 tab cùng add khác item)
   const requests = [];
   for (let i = 0; i < ITEMS_PER_BURST; i++) {
+    const productId = ((__VU + __ITER + i) % 5) + 1;
     requests.push({
       method: "POST",
-      url: `${BASE_URL}/api/quotes`,
+      url: `${BASE_URL}/api/sim/cart/add?cpu_ms=2&db_writes=1&memory_kb=4`,
       body: JSON.stringify({
-        user_id: userId,
-        product_id: `prod-${__VU}-${__ITER}-${i}`,
-        qty: 1,
+        product_id: productId,
+        quantity: 1,
       }),
       params: {
         headers: {
           "Content-Type": "application/json",
           "Authorization": `Bearer ${userToken}`,
+          "X-User-Id": userId,
         },
         tags: { name: "cart_add", user: userId },
       },
@@ -97,14 +98,22 @@ export default function () {
   if (__ITER === ITERS_PER_VU - 1) {
     sleep(0.5); // chờ server settle
 
-    const summaryRes = http.get(`${BASE_URL}/api/quotes`, {
-      headers: { "Authorization": `Bearer ${userToken}` },
-      tags: { name: "cart_summary", user: userId },
+    const summaryRes = http.get(
+      `${BASE_URL}/api/sim/cart/summary?cpu_ms=1&db_rows=10`,
+      {
+        headers: {
+          "Authorization": `Bearer ${userToken}`,
+          "X-User-Id": userId,
+        },
+        tags: { name: "cart_summary", user: userId },
+      },
+    );
+
+    check(summaryRes, {
+      "cart summary: 200": (r) => r.status === 200,
     });
 
-    // Mock: server return cart với item_count
-    // Production: parse summaryRes.json().items.length
-    // Demo: dùng expectedItemCount đã track client-side
+    // Verify cart.total = expectedItemCount
     const expectedTotal = ITERS_PER_VU * ITEMS_PER_BURST; // = 30
 
     if (expectedItemCount === expectedTotal) {

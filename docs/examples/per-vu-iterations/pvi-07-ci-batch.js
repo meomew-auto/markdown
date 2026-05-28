@@ -23,7 +23,7 @@
 import http from "k6/http";
 import { check, sleep } from "k6";
 
-const BASE_URL = __ENV.BASE_URL || "https://quickpizza.grafana.com";
+const BASE_URL = __ENV.BASE_URL || "http://localhost:80";
 const VUS = 50;
 const ITERS_PER_VU = 20;
 // Total = 50 × 20 = 1000 iterations
@@ -62,15 +62,24 @@ export const options = {
 
 export default function () {
   // Iter mọi lần: 2 request cố định để CI có baseline ổn định
-  const r1 = http.get(`${BASE_URL}/`, {
-    tags: { name: "homepage", critical: "true" },
-  });
-  check(r1, { "homepage 200": (r) => r.status === 200 });
+  const r1 = http.get(
+    `${BASE_URL}/api/sim/products?limit=10&cpu_ms=2&db_rows=4`,
+    {
+      tags: { name: "products_list", critical: "true" },
+    },
+  );
+  check(r1, { "products_list 200": (r) => r.status === 200 });
 
-  const r2 = http.get(`${BASE_URL}/api/quotes`, {
-    tags: { name: "api_quotes", critical: "true" },
-  });
-  check(r2, { "api_quotes 200": (r) => r.status === 200 });
+  const productId = ((__VU + __ITER) % 5) + 1;
+  const r2 = http.post(
+    `${BASE_URL}/api/sim/cart/add?cpu_ms=2&db_writes=1`,
+    JSON.stringify({ product_id: productId, quantity: 1 }),
+    {
+      headers: { "Content-Type": "application/json" },
+      tags: { name: "cart_add", critical: "true" },
+    },
+  );
+  check(r2, { "cart_add 200": (r) => r.status === 200 });
 
   // Sleep cố định để tránh burst
   sleep(0.1);
