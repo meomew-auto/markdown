@@ -76,12 +76,16 @@ let totalCartItems = 0;   // tích lũy qua iter
 // ─────────────────────────────────────────────────────────────────
 
 function login() {
-  // QuickPizza demo không có /api/auth/login, dùng GET / làm proxy login
-  // Production: thay bằng POST /api/sim/auth/login với body username/password
+  // Real load-target endpoint: POST /api/sim/auth/login
   const user = users[(__VU - 1) % users.length];
-  const res = http.get(`${BASE_URL}/`, {
-    tags: { name: "01_login_proxy" },
-  });
+  const res = http.post(
+    `${BASE_URL}/api/sim/auth/login?cpu_ms=2&db_rows=1`,
+    JSON.stringify({ username: user.username, password: user.password }),
+    {
+      headers: { "Content-Type": "application/json" },
+      tags: { name: "01_login" },
+    },
+  );
   check(res, {
     "login: status 200": (r) => r.status === 200,
   });
@@ -93,21 +97,25 @@ function login() {
 }
 
 function browseProducts() {
-  // Lấy danh sách sản phẩm
-  const res = http.get(`${BASE_URL}/api/quotes`, {
-    tags: { name: "02_browse_products" },
-  });
+  // Real endpoint: GET /api/sim/products
+  const res = http.get(
+    `${BASE_URL}/api/sim/products?limit=10&sort=popular&view=grid&cpu_ms=2&db_rows=4`,
+    { tags: { name: "02_browse_products" } },
+  );
   check(res, {
     "browse: status 200": (r) => r.status === 200,
     "browse: has body": (r) => r.body && r.body.length > 0,
   });
-  return res.json();
+  return res.status === 200 ? res.json() : null;
 }
 
 function viewProductDetail(productId) {
-  const res = http.get(`${BASE_URL}/api/quotes`, {
-    tags: { name: "03_view_detail", product_id: String(productId) },
-  });
+  // Use a real numeric id (1-5 are seeded by load-target).
+  const id = ((__VU + __ITER) % 5) + 1;
+  const res = http.get(
+    `${BASE_URL}/api/sim/products/${id}?view=full&include_reviews=1&cpu_ms=2&db_rows=2`,
+    { tags: { name: "03_view_detail", product_id: String(id) } },
+  );
   check(res, {
     "detail: status 200": (r) => r.status === 200,
   });
@@ -115,11 +123,16 @@ function viewProductDetail(productId) {
 }
 
 function addToCart(productId) {
-  // Production: POST /api/sim/cart/add
-  // Demo: dùng GET làm placeholder vì QuickPizza không có endpoint này
-  const res = http.get(`${BASE_URL}/api/quotes`, {
-    tags: { name: "04_add_to_cart", product_id: String(productId) },
-  });
+  // Real endpoint: POST /api/sim/cart/add
+  const id = ((__VU + __ITER) % 5) + 1;
+  const res = http.post(
+    `${BASE_URL}/api/sim/cart/add?cpu_ms=2&db_writes=1&memory_kb=4`,
+    JSON.stringify({ product_id: id, quantity: 1 }),
+    {
+      headers: { "Content-Type": "application/json" },
+      tags: { name: "04_add_to_cart", product_id: String(id) },
+    },
+  );
   check(res, {
     "cart add: status 200": (r) => r.status === 200,
   });
@@ -128,14 +141,21 @@ function addToCart(productId) {
 }
 
 function checkout(idempotencyKey) {
-  // Production: POST /api/sim/checkout với header Idempotency-Key
-  // Demo: GET với header để verify k6 truyền header đúng
-  const res = http.get(`${BASE_URL}/api/quotes`, {
-    headers: {
-      "Idempotency-Key": idempotencyKey,
+  // Real endpoint: POST /api/sim/checkout with Idempotency-Key
+  const res = http.post(
+    `${BASE_URL}/api/sim/checkout?cpu_ms=5&db_writes=3&external_ms=80`,
+    JSON.stringify({
+      payment_method: "card",
+      items: [{ id: 1, qty: 1 }, { id: 2, qty: 1 }],
+    }),
+    {
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": idempotencyKey,
+      },
+      tags: { name: "05_checkout" },
     },
-    tags: { name: "05_checkout" },
-  });
+  );
   check(res, {
     "checkout: status 200": (r) => r.status === 200,
   });
@@ -143,10 +163,19 @@ function checkout(idempotencyKey) {
 }
 
 function confirmOrder(orderId) {
-  // Production: POST /api/sim/orders/:id/confirm
-  const res = http.get(`${BASE_URL}/api/quotes`, {
-    tags: { name: "06_confirm_order", order_id: orderId },
-  });
+  // Real endpoint: POST /api/sim/orders/:id/confirm
+  const idemKey = `idem-confirm-${orderId}`;
+  const res = http.post(
+    `${BASE_URL}/api/sim/orders/${orderId}/confirm?cpu_ms=0&db_writes=4&external_ms=180&external_fail_rate=0`,
+    JSON.stringify({}),
+    {
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": idemKey,
+      },
+      tags: { name: "06_confirm_order", order_id: orderId },
+    },
+  );
   check(res, {
     "confirm: status 200": (r) => r.status === 200,
   });
