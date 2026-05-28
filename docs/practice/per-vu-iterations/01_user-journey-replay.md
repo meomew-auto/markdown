@@ -94,13 +94,40 @@ xuyên suốt nhiều iter.
 
 ## Cách chạy
 
-```bash
-# Mặc định dùng QuickPizza demo
-k6 run examples/per-vu-iterations/pvi-01-user-journey-replay.js
+> Stack setup chung: xem [RUN_GUIDE.md](RUN_GUIDE.md). Phần dưới chỉ ghi
+> vars + command đặc thù cho case này.
 
-# Đổi BASE_URL nếu cần
-BASE_URL=https://my-staging.example.com \
-  k6 run examples/per-vu-iterations/pvi-01-user-journey-replay.js
+```powershell
+# 1. Đảm bảo stack đã start (xem RUN_GUIDE)
+# 2. Set env vars
+$env:BASE_URL = "http://localhost:80"
+$env:K6_CLOUD_HOST = "http://localhost:18080"
+$env:K6_CLOUD_TOKEN = "student-token-1234567890"   # case này dùng student token
+
+# 3. Run với cloud output (xem result trên UI)
+cd "E:\Khoa hoc\k6"
+k6 run -o cloud .\examples\per-vu-iterations\pvi-01-user-journey-replay.js
+
+# Hoặc run local nếu không cần UI
+k6 run .\examples\per-vu-iterations\pvi-01-user-journey-replay.js
+```
+
+**Token nào dùng?**
+
+```text
+student-token-1234567890   <- case này (test user journey thường)
+                              role=student đủ để gọi /api/sim/products,
+                              /api/sim/cart/*, /api/sim/checkout
+```
+
+**Verify trên UI** (sau khi run xong):
+
+```text
+1. Mở http://localhost:13001
+2. Paste student-token-1234567890
+3. Click vào run mới nhất
+4. Tile "iterations" hiển thị 150 ✓
+5. Tile "http_req_duration" hiển thị p95 < 2000ms ✓
 ```
 
 ## Expected output

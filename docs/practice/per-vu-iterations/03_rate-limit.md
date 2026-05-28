@@ -107,14 +107,34 @@ Iter 100-149:
 
 ## Cách chạy
 
-```bash
-k6 run examples/per-vu-iterations/pvi-03-rate-limit.js
+> Stack setup chung: xem [RUN_GUIDE.md](RUN_GUIDE.md).
 
-# Output kỳ vọng:
-#   ✓ count_200: 500
-#   ✓ count_429: 250
-#   ✓ 429 has Retry-After header
+```powershell
+$env:BASE_URL = "http://localhost:80"
+$env:K6_CLOUD_HOST = "http://localhost:18080"
+$env:K6_CLOUD_TOKEN = "student-token-1234567890"   # mỗi VU dùng token riêng giả lập trong code
+
+cd "E:\Khoa hoc\k6"
+k6 run -o cloud .\examples\per-vu-iterations\pvi-03-rate-limit.js
 ```
+
+**Verify trên UI**:
+
+```text
+1. Paste token, click run mới nhất → tab Custom metrics
+2. count_200: 500 ✓     (5 user × 100 req đầu)
+3. count_429: 250 ✓     (5 user × 50 req sau bị throttle)
+4. checks "429 has Retry-After header": 100% pass ✓
+
+Output kỳ vọng:
+  ✓ count_200: 500
+  ✓ count_429: 250
+  ✓ 429 has Retry-After header
+```
+
+**Lưu ý**: case này `http_req_failed` sẽ là ~33% (vì 429 tính là failed).
+KHÔNG phải lỗi nghiệp vụ — đây là response mong đợi. Custom threshold
+nếu cần loại 429 ra: `http_req_failed{status:!429} < 1%`.
 
 ## Áp 5 bước phân tích output
 

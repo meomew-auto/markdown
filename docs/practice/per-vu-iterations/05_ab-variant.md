@@ -93,12 +93,27 @@ Nếu variant=a:
 
 ## Cách chạy
 
-```bash
-k6 run examples/per-vu-iterations/pvi-05-ab-variant.js
+> Stack setup chung: xem [RUN_GUIDE.md](RUN_GUIDE.md).
 
-# Verify exposure trong tags:
-#   k6_iterations{variant=a} = 250
-#   k6_iterations{variant=control} = 250
+```powershell
+$env:BASE_URL = "http://localhost:80"
+$env:K6_CLOUD_HOST = "http://localhost:18080"
+$env:K6_CLOUD_TOKEN = "student-token-1234567890"
+
+cd "E:\Khoa hoc\k6"
+k6 run -o cloud .\examples\per-vu-iterations\pvi-05-ab-variant.js
+```
+
+**Verify trên UI**:
+
+```text
+1. Paste token, click run mới nhất → tab Custom metrics
+2. variant_a_count: 250 ✓
+3. variant_control_count: 250 ✓
+4. Hai con số EQUAL → exposure balanced
+5. Tab "Tags" → group theo variant để xem latency riêng:
+   - http_req_duration{variant=a}
+   - http_req_duration{variant=control}
 ```
 
 ## Mở rộng

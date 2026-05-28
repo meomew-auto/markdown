@@ -96,13 +96,30 @@ Iter 1-4 (cùng VU):
 
 ## Cách chạy
 
-```bash
-k6 run examples/per-vu-iterations/pvi-02-idempotency-audit.js
+> Stack setup chung: xem [RUN_GUIDE.md](RUN_GUIDE.md).
 
-# Output kỳ vọng:
-#   ✓ idem_fresh_count: 20
-#   ✓ idem_reuse_count: 80
-#   ✓ idem replay: same status as first
+```powershell
+$env:BASE_URL = "http://localhost:80"
+$env:K6_CLOUD_HOST = "http://localhost:18080"
+$env:K6_CLOUD_TOKEN = "student-token-1234567890"   # đủ quyền POST /api/sim/orders/:id/confirm
+
+cd "E:\Khoa hoc\k6"
+k6 run -o cloud .\examples\per-vu-iterations\pvi-02-idempotency-audit.js
+```
+
+**Verify trên UI**:
+
+```text
+1. Mở http://localhost:13001, paste token
+2. Click run mới nhất → tab Custom metrics
+3. idem_fresh_count: 20 ✓
+4. idem_reuse_count: 80 ✓
+5. http_req_failed: 0% ✓
+
+Output kỳ vọng:
+  ✓ idem_fresh_count: 20
+  ✓ idem_reuse_count: 80
+  ✓ idem replay: same status as first
 ```
 
 ## Áp 5 bước phân tích output

@@ -92,8 +92,29 @@ const failedAfterRefresh = new Counter("failed_after_refresh");
 
 ## Cách chạy
 
-```bash
-k6 run examples/per-vu-iterations/pvi-04-session-lifecycle.js
+> Stack setup chung: xem [RUN_GUIDE.md](RUN_GUIDE.md).
+
+```powershell
+$env:BASE_URL = "http://localhost:80"
+$env:K6_CLOUD_HOST = "http://localhost:18080"
+$env:K6_CLOUD_TOKEN = "student-token-1234567890"   # session test với student token
+
+cd "E:\Khoa hoc\k6"
+k6 run -o cloud .\examples\per-vu-iterations\pvi-04-session-lifecycle.js
+```
+
+**Verify trên UI**:
+
+```text
+1. Paste token, click run mới nhất → tab Custom metrics
+2. login_count: 10 ✓               (1 login per user)
+3. refresh_count: 10 ✓             (1 refresh per user)
+4. failed_after_refresh: 0 ✓       (refresh xong work tiếp)
+
+Output kỳ vọng trong console:
+  [VU=1] login successful
+  [VU=1] iter#10 token expired, refreshing...
+  ... (cho cả 10 VU)
 ```
 
 ## Phân tích output
