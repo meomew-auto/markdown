@@ -2,9 +2,28 @@
 
 ## Tình huống thực tế
 
-QA team chuẩn bị release version mới. Họ cần đảm bảo flow nghiệp vụ chính
-(login → browse → add to cart → checkout → confirm order) **không bị
-regression** so với version trước.
+QA team chuẩn bị release version mới. Họ cần đảm bảo các flow nghiệp vụ
+chính (login → browse → add to cart → checkout → confirm order)
+**vẫn hoạt động đúng như version cũ** — không bị "regression".
+
+> **Regression là gì?** = lỗi xuất hiện ở chức năng đã chạy đúng trước
+> đây, sau khi code thay đổi (bug cũ quay lại, hoặc feature cũ bị hỏng
+> do code mới).
+>
+> ```text
+> Version 1.0: login OK, checkout OK
+> Version 1.1: login OK, checkout BỊ LỖI (do code mới)
+>                              ↑
+>                              "regression" ở checkout
+> ```
+>
+> **Đời thường**: sửa xe đổi phanh mới → quên test đèn xi-nhan → đèn hỏng
+> (do động vào dây điện) → đèn bị "regression". QA phải test LẠI cả
+> phanh + đèn + còi + ... mỗi lần sửa xe.
+>
+> **Regression test** = replay TẤT CẢ flow nghiệp vụ chính (không skip)
+> với input giống lần trước, so kết quả với baseline. Nếu lệch → có
+> regression → không release.
 
 Yêu cầu cụ thể:
 
