@@ -10,7 +10,7 @@ và mỗi loại đọc / tính theo công thức nào
 Nếu đang học từ đầu hoặc muốn xem phần giải thích rất chi tiết theo core, đọc thêm:
 
 ```text
-docs/20260520_k6-metrics-types-builtins-core-guide.md
+docs/20260520_00_k6-metrics-types-builtins-core-guide.md
 ```
 
 File này giữ vai trò bản tra nhanh, nhưng vẫn có ví dụ cực ngắn ngay trong từng loại:
@@ -30,7 +30,7 @@ Phạm vi của file:
 Xem thêm bài so sánh thuật ngữ:
 
 ```text
-docs/20260515_tps-throughput-jmeter-vs-k6.md
+docs/20260515_06_tps-throughput-jmeter-vs-k6.md
 ```
 
 ## 1. Bốn loại metric chính trong k6

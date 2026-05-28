@@ -3,36 +3,36 @@
 File này là bản điều hướng nhanh cho doc dài:
 
 ```text
-docs/20260514_per-vu-iterations-tham-so-cong-thuc.md
+docs/20260514_02_per-vu-iterations-tham-so-cong-thuc.md
 ```
 
 ## Đọc theo nhu cầu
 
 | Tôi muốn xem | Link |
 | --- | --- |
-| Ý tưởng chính của `per-vu-iterations` | [Ý tưởng chính](./20260514_per-vu-iterations-tham-so-cong-thuc.md#1-ý-tưởng-chính) |
-| Bài dạy học ngắn: khai báo và nhiều scenario | [Khai báo nhiều scenario](./20260521_per-vu-iterations-khai-bao-nhieu-scenario.md) |
-| Khi nào dùng `per-vu-iterations` ngoài thực tế | [Khi nào dùng thực tế](./20260514_per-vu-iterations-tham-so-cong-thuc.md#11-khi-nào-dùng-thực-tế) |
-| Core chạy như nào | [Core chạy như nào](./20260514_per-vu-iterations-tham-so-cong-thuc.md#12-core-chạy-như-nào) |
-| Tên tham số tiếng Việt | [Bảng tham số](./20260514_per-vu-iterations-tham-so-cong-thuc.md#2-bảng-tham-số-tiếng-việt) |
-| Công thức nền | [Công thức nền](./20260514_per-vu-iterations-tham-so-cong-thuc.md#3-công-thức-nền) |
-| `iteration_duration` gồm gì | [`js_iteration_time_i`](./20260514_per-vu-iterations-tham-so-cong-thuc.md#4-js_iteration_time_i-gồm-những-gì) |
-| Vì sao docs nói peak đạt được nhưng không giữ được | [Reached but not maintained](./20260514_per-vu-iterations-tham-so-cong-thuc.md#vì-sao-docs-nói-maximum-throughput-is-reached-but-not-maintained) |
-| Demo mô phỏng VU nhanh/chậm | [Demo của ta](./20260514_per-vu-iterations-tham-so-cong-thuc.md#6-demo-của-ta) |
-| Demo `dropped_iterations` do `maxDuration` | [Dropped iterations](./20260514_per-vu-iterations-tham-so-cong-thuc.md#demo-dropped-iterations-do-maxduration) |
-| Cách đọc output k6 | [Chạy trực tiếp](./20260514_per-vu-iterations-tham-so-cong-thuc.md#7-chạy-trực-tiếp-thì-tìm-tham-số-ở-đâu) |
-| QuickPizza 1 request / iteration | [Demo QuickPizza](./20260514_per-vu-iterations-tham-so-cong-thuc.md#77-demo-chạy-thật-với-quickpizza) |
-| Bảng map output QuickPizza về công thức | [Map ngược output](./20260514_per-vu-iterations-tham-so-cong-thuc.md#772-map-ngược-từ-output-về-các-giá-trị-ở-đầu-file) |
-| Công thức `http_reqs: count rate/s` | [`http_reqs` formula](./20260514_per-vu-iterations-tham-so-cong-thuc.md#d1-công-thức-riêng-cho-http_reqs-12--2780988s) |
-| Dùng `summary runtime base` để suy ra các rate/count | [`summary_runtime_base` làm gốc](./20260514_per-vu-iterations-tham-so-cong-thuc.md#d2-nếu-lấy-summary_runtime_base-làm-gốc-thì-suy-ra-gì) |
-| Công thức `1 VU chạy bao nhiêu iteration/s` | [`per_vu_rate`](./20260514_per-vu-iterations-tham-so-cong-thuc.md#e2-nếu-đã-biết-iteration_duration-thì-1-vu-1-giây-chạy-được-bao-nhiêu-iteration) |
-| Các loại metric và công thức tổng quát | [k6 metrics căn bản](./20260520_k6-metrics-types-builtins-core-guide.md) |
-| TPS, RPS, peak vs average throughput | [TPS / Throughput](./20260515_tps-throughput-jmeter-vs-k6.md) |
-| QuickPizza 2 requests / iteration | [2 HTTP requests demo](./20260514_per-vu-iterations-tham-so-cong-thuc.md#773-demo-quickpizza-với-1-iteration--2-http-requests) |
-| Worked example riêng cho QuickPizza 2 requests | [QuickPizza 2 requests worked example](./20260515_quickpizza_two_requests_worked_example.md) |
-| So sánh 1 request vs 2 requests | [So sánh](./20260514_per-vu-iterations-tham-so-cong-thuc.md#774-khác-gì-so-với-case-1-iteration--1-http-request) |
-| `sample`, `Gauge`, `vus`, `vus_max` | [`vus` và `vus_max`](./20260514_per-vu-iterations-tham-so-cong-thuc.md#78-sample-gauge-vus-vus_max-là-gì) |
-| Cheat sheet cuối file | [Cheat sheet](./20260514_per-vu-iterations-tham-so-cong-thuc.md#8-cheat-sheet-ngắn) |
+| Ý tưởng chính của `per-vu-iterations` | [Ý tưởng chính](./20260514_02_per-vu-iterations-tham-so-cong-thuc.md#1-ý-tưởng-chính) |
+| Bài dạy học ngắn: khai báo và nhiều scenario | [Khai báo nhiều scenario](./20260521_00_per-vu-iterations-khai-bao-nhieu-scenario.md) |
+| Khi nào dùng `per-vu-iterations` ngoài thực tế | [Khi nào dùng thực tế](./20260514_02_per-vu-iterations-tham-so-cong-thuc.md#11-khi-nào-dùng-thực-tế) |
+| Core chạy như nào | [Core chạy như nào](./20260514_02_per-vu-iterations-tham-so-cong-thuc.md#12-core-chạy-như-nào) |
+| Tên tham số tiếng Việt | [Bảng tham số](./20260514_02_per-vu-iterations-tham-so-cong-thuc.md#2-bảng-tham-số-tiếng-việt) |
+| Công thức nền | [Công thức nền](./20260514_02_per-vu-iterations-tham-so-cong-thuc.md#3-công-thức-nền) |
+| `iteration_duration` gồm gì | [`js_iteration_time_i`](./20260514_02_per-vu-iterations-tham-so-cong-thuc.md#4-js_iteration_time_i-gồm-những-gì) |
+| Vì sao docs nói peak đạt được nhưng không giữ được | [Reached but not maintained](./20260514_02_per-vu-iterations-tham-so-cong-thuc.md#vì-sao-docs-nói-maximum-throughput-is-reached-but-not-maintained) |
+| Demo mô phỏng VU nhanh/chậm | [Demo của ta](./20260514_02_per-vu-iterations-tham-so-cong-thuc.md#6-demo-của-ta) |
+| Demo `dropped_iterations` do `maxDuration` | [Dropped iterations](./20260514_02_per-vu-iterations-tham-so-cong-thuc.md#demo-dropped-iterations-do-maxduration) |
+| Cách đọc output k6 | [Chạy trực tiếp](./20260514_02_per-vu-iterations-tham-so-cong-thuc.md#7-chạy-trực-tiếp-thì-tìm-tham-số-ở-đâu) |
+| QuickPizza 1 request / iteration | [Demo QuickPizza](./20260514_02_per-vu-iterations-tham-so-cong-thuc.md#77-demo-chạy-thật-với-quickpizza) |
+| Bảng map output QuickPizza về công thức | [Map ngược output](./20260514_02_per-vu-iterations-tham-so-cong-thuc.md#772-map-ngược-từ-output-về-các-giá-trị-ở-đầu-file) |
+| Công thức `http_reqs: count rate/s` | [`http_reqs` formula](./20260514_02_per-vu-iterations-tham-so-cong-thuc.md#d1-công-thức-riêng-cho-http_reqs-12--2780988s) |
+| Dùng `summary runtime base` để suy ra các rate/count | [`summary_runtime_base` làm gốc](./20260514_02_per-vu-iterations-tham-so-cong-thuc.md#d2-nếu-lấy-summary_runtime_base-làm-gốc-thì-suy-ra-gì) |
+| Công thức `1 VU chạy bao nhiêu iteration/s` | [`per_vu_rate`](./20260514_02_per-vu-iterations-tham-so-cong-thuc.md#e2-nếu-đã-biết-iteration_duration-thì-1-vu-1-giây-chạy-được-bao-nhiêu-iteration) |
+| Các loại metric và công thức tổng quát | [k6 metrics căn bản](./20260520_00_k6-metrics-types-builtins-core-guide.md) |
+| TPS, RPS, peak vs average throughput | [TPS / Throughput](./20260515_06_tps-throughput-jmeter-vs-k6.md) |
+| QuickPizza 2 requests / iteration | [2 HTTP requests demo](./20260514_02_per-vu-iterations-tham-so-cong-thuc.md#773-demo-quickpizza-với-1-iteration--2-http-requests) |
+| Worked example riêng cho QuickPizza 2 requests | [QuickPizza 2 requests worked example](./20260515_05_quickpizza-two-requests-worked-example.md) |
+| So sánh 1 request vs 2 requests | [So sánh](./20260514_02_per-vu-iterations-tham-so-cong-thuc.md#774-khác-gì-so-với-case-1-iteration--1-http-request) |
+| `sample`, `Gauge`, `vus`, `vus_max` | [`vus` và `vus_max`](./20260514_02_per-vu-iterations-tham-so-cong-thuc.md#78-sample-gauge-vus-vus_max-là-gì) |
+| Cheat sheet cuối file | [Cheat sheet](./20260514_02_per-vu-iterations-tham-so-cong-thuc.md#8-cheat-sheet-ngắn) |
 
 ## File demo để chạy
 

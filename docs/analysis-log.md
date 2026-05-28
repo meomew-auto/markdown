@@ -216,15 +216,15 @@
 ### 2026-05-16 00:34
 - Context: Expand `constant-vus` notes to match the structure and depth of `per-vu-iterations` and `shared-iterations`.
 - Findings: Added a parameter/formula doc, quick index, QuickPizza worked example, and a fast/slow VU count demo. Key formulas: `executor_wall_time_after_start = duration + gracefulStop`, `scenario_end_from_test_start = startTime + duration + gracefulStop`, `per_vu_rate_i = 1 / t_i`, `peak_iteration_rate_if_all_vus_active = sum(1/t_i)`, `average_iteration_rate = completed_iterations / summary_runtime_base`, and `summary_runtime_base = counter_count / counter_rate`.
-- Evidence: `docs/20260516_constant-vus-tham-so-cong-thuc.md`, `docs/20260516_constant-vus-quick-index.md`, `docs/20260516_constant_vus_quickpizza_two_requests_worked_example.md`, `examples/constant_vus_vu_speed_count_demo.js`, run output from `rtk k6 run .\examples\constant_vus_vu_speed_count_demo.js`.
-- Decision: Keep the older `docs/20260115_constant-vus-executor.md` as core-flow notes and point it to the newer formula/example docs.
+- Evidence: `docs/20260516_02_constant-vus-tham-so-cong-thuc.md`, `docs/20260516_01_constant-vus-quick-index.md`, `docs/20260516_03_constant-vus-quickpizza-two-requests-worked-example.md`, `examples/constant_vus_vu_speed_count_demo.js`, run output from `rtk k6 run .\examples\constant_vus_vu_speed_count_demo.js`.
+- Decision: Keep the older `docs/20260115_00_constant-vus-executor.md` as core-flow notes and point it to the newer formula/example docs.
 - Next: Use the same doc pattern for the next executor.
 
 ### 2026-05-16 00:52
 - Context: Review whether all important `constant-vus` formulas and core-code caveats were captured.
 - Findings: Added the missing core caveats: `startTime` is added by `ScenarioConfigs.GetFullExecutionRequirements()` and waited by scheduler before `Run()`, `effective_vus` can be scaled by `ExecutionTuple.ScaleInt64()`, `vus`/`vus_max` are scheduler-emitted Gauge samples from active/initialized counters, `BaseConfig` supplies `exec/env/tags/options`, and `iterations` counts only completed iterations while interrupted iterations are tracked separately.
 - Evidence: `lib/executor/constant_vus.go:54-98,125-202`, `lib/executor/base_config.go:27-45,85-123`, `lib/executor/helpers.go:77-152,224-238`, `lib/executors.go:249-260`, `internal/execution/scheduler.go:199-224,329-363`, `lib/execution.go:462-481,544-550`, `internal/js/runner.go:885-899,977-998`.
-- Decision: Treat `docs/20260516_constant-vus-tham-so-cong-thuc.md` section `3.9` as the review checklist for core-derived notes.
+- Decision: Treat `docs/20260516_02_constant-vus-tham-so-cong-thuc.md` section `3.9` as the review checklist for core-derived notes.
 - Next: If more precision is needed, add a `startTime` demo scenario.
 
 ### 2026-05-16 10:42

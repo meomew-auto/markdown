@@ -1872,7 +1872,7 @@ iterations = 12
 Worked example riêng:
 
 ```text
-docs/20260515_shared_iterations_quickpizza_two_requests_worked_example.md
+docs/20260515_03_shared-iterations-quickpizza-two-requests-worked-example.md
 ```
 
 Output chính:

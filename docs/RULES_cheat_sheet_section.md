@@ -1,6 +1,6 @@
 # Rule cho Section Cheat Sheet beginner-friendly
 
-> Reference doc: `docs/20260518_ramping-arrival-rate-tham-so-cong-thuc.md` Section 6
+> Reference doc: `docs/20260518_02_ramping-arrival-rate-tham-so-cong-thuc.md` Section 6
 
 ## Cấu trúc 8 sub-section bắt buộc
 

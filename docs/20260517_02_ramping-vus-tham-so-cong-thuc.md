@@ -3,9 +3,9 @@
 File này là bài song song với:
 
 ```text
-docs/20260514_per-vu-iterations-tham-so-cong-thuc.md
-docs/20260515_shared-iterations-tham-so-cong-thuc.md
-docs/20260516_constant-vus-tham-so-cong-thuc.md
+docs/20260514_02_per-vu-iterations-tham-so-cong-thuc.md
+docs/20260515_02_shared-iterations-tham-so-cong-thuc.md
+docs/20260516_02_constant-vus-tham-so-cong-thuc.md
 ```
 
 nhưng dành cho executor:
@@ -20,13 +20,13 @@ Nguồn docs Grafana:
 Nếu chỉ muốn tra nhanh, mở:
 
 ```text
-docs/20260517_ramping-vus-quick-index.md
+docs/20260517_01_ramping-vus-quick-index.md
 ```
 
 Worked example QuickPizza:
 
 ```text
-docs/20260517_ramping_vus_quickpizza_two_requests_worked_example.md
+docs/20260517_03_ramping-vus-quickpizza-two-requests-worked-example.md
 ```
 
 ## Mục lục nhanh

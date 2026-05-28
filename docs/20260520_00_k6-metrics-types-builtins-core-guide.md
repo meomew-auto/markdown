@@ -16,7 +16,7 @@ có demo chi tiết cho từng loại metric
 Bài này khác bài công thức ngắn:
 
 ```text
-docs/20260515_k6_metric_types_and_formulas.md
+docs/20260515_04_k6-metric-types-and-formulas.md
 ```
 
 File cũ dùng để tra nhanh. File này giải thích từ đầu và list đầy đủ hơn theo official docs và core code.

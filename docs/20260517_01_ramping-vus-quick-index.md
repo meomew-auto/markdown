@@ -3,30 +3,30 @@
 File chính:
 
 ```text
-docs/20260517_ramping-vus-tham-so-cong-thuc.md
+docs/20260517_02_ramping-vus-tham-so-cong-thuc.md
 ```
 
 Worked example QuickPizza:
 
 ```text
-docs/20260517_ramping_vus_quickpizza_two_requests_worked_example.md
+docs/20260517_03_ramping-vus-quickpizza-two-requests-worked-example.md
 ```
 
 ## Link nhanh
 
-- [Ý tưởng chính](./20260517_ramping-vus-tham-so-cong-thuc.md#1-ý-tưởng-chính)
-- [Khi nào dùng thực tế](./20260517_ramping-vus-tham-so-cong-thuc.md#11-khi-nào-dùng-thực-tế)
-- [Core chạy như nào](./20260517_ramping-vus-tham-so-cong-thuc.md#12-core-chạy-như-nào)
-- [Bảng tham số tiếng Việt](./20260517_ramping-vus-tham-so-cong-thuc.md#2-bảng-tham-số-tiếng-việt)
-- [Công thức nền](./20260517_ramping-vus-tham-so-cong-thuc.md#3-công-thức-nền)
-- [Checklist core đã lọc](./20260517_ramping-vus-tham-so-cong-thuc.md#39-checklist-core-đã-lọc-cho-ramping-vus)
-- [Thêm nhầm field của executor khác](./20260517_ramping-vus-tham-so-cong-thuc.md#310-thêm-nhầm-field-của-executor-khác-có-lỗi-không)
-- [Demo stage timeline](./20260517_ramping-vus-tham-so-cong-thuc.md#4-demo-stage-timeline)
-- [Demo VU nhanh/chậm](./20260517_ramping-vus-tham-so-cong-thuc.md#5-demo-vu-nhanhchậm)
-- [Demo gracefulRampDown và interrupted](./20260517_ramping-vus-tham-so-cong-thuc.md#6-demo-gracefulrampdown-và-interrupted)
-- [Demo QuickPizza 2 requests / iteration](./20260517_ramping-vus-tham-so-cong-thuc.md#7-demo-quickpizza-2-requests--iteration)
-- [So sánh với constant-vus per-vu shared arrival-rate](./20260517_ramping-vus-tham-so-cong-thuc.md#8-so-sánh-với-constant-vus-per-vu-shared-arrival-rate)
-- [Cheat sheet](./20260517_ramping-vus-tham-so-cong-thuc.md#9-cheat-sheet)
+- [Ý tưởng chính](./20260517_02_ramping-vus-tham-so-cong-thuc.md#1-ý-tưởng-chính)
+- [Khi nào dùng thực tế](./20260517_02_ramping-vus-tham-so-cong-thuc.md#11-khi-nào-dùng-thực-tế)
+- [Core chạy như nào](./20260517_02_ramping-vus-tham-so-cong-thuc.md#12-core-chạy-như-nào)
+- [Bảng tham số tiếng Việt](./20260517_02_ramping-vus-tham-so-cong-thuc.md#2-bảng-tham-số-tiếng-việt)
+- [Công thức nền](./20260517_02_ramping-vus-tham-so-cong-thuc.md#3-công-thức-nền)
+- [Checklist core đã lọc](./20260517_02_ramping-vus-tham-so-cong-thuc.md#39-checklist-core-đã-lọc-cho-ramping-vus)
+- [Thêm nhầm field của executor khác](./20260517_02_ramping-vus-tham-so-cong-thuc.md#310-thêm-nhầm-field-của-executor-khác-có-lỗi-không)
+- [Demo stage timeline](./20260517_02_ramping-vus-tham-so-cong-thuc.md#4-demo-stage-timeline)
+- [Demo VU nhanh/chậm](./20260517_02_ramping-vus-tham-so-cong-thuc.md#5-demo-vu-nhanhchậm)
+- [Demo gracefulRampDown và interrupted](./20260517_02_ramping-vus-tham-so-cong-thuc.md#6-demo-gracefulrampdown-và-interrupted)
+- [Demo QuickPizza 2 requests / iteration](./20260517_02_ramping-vus-tham-so-cong-thuc.md#7-demo-quickpizza-2-requests--iteration)
+- [So sánh với constant-vus per-vu shared arrival-rate](./20260517_02_ramping-vus-tham-so-cong-thuc.md#8-so-sánh-với-constant-vus-per-vu-shared-arrival-rate)
+- [Cheat sheet](./20260517_02_ramping-vus-tham-so-cong-thuc.md#9-cheat-sheet)
 
 ## File demo
 

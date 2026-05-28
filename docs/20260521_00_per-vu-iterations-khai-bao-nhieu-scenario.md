@@ -2,7 +2,7 @@
 
 Bài này là bản ngắn để dạy học, tách từ bài chi tiết:
 
-`docs/20260514_per-vu-iterations-tham-so-cong-thuc.md`
+`docs/20260514_02_per-vu-iterations-tham-so-cong-thuc.md`
 
 Mục tiêu:
 

@@ -3,8 +3,8 @@
 File này là bài song song với:
 
 ```text
-docs/20260514_per-vu-iterations-tham-so-cong-thuc.md
-docs/20260515_shared-iterations-tham-so-cong-thuc.md
+docs/20260514_02_per-vu-iterations-tham-so-cong-thuc.md
+docs/20260515_02_shared-iterations-tham-so-cong-thuc.md
 ```
 
 nhưng dành cho executor:
@@ -19,7 +19,7 @@ Nguồn docs Grafana:
 Nếu chỉ muốn tra nhanh, mở:
 
 ```text
-docs/20260516_constant-vus-quick-index.md
+docs/20260516_01_constant-vus-quick-index.md
 ```
 
 ## Mục lục nhanh
@@ -2574,7 +2574,7 @@ examples/constant_vus_quickpizza_two_requests_demo.js
 Worked example chi tiết nằm ở:
 
 ```text
-docs/20260516_constant_vus_quickpizza_two_requests_worked_example.md
+docs/20260516_03_constant-vus-quickpizza-two-requests-worked-example.md
 ```
 
 Output chính đã chạy:

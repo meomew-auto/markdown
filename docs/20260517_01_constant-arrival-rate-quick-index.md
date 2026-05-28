@@ -3,36 +3,36 @@
 File chính:
 
 ```text
-docs/20260517_constant-arrival-rate-tham-so-cong-thuc.md
+docs/20260517_02_constant-arrival-rate-tham-so-cong-thuc.md
 ```
 
 Worked example QuickPizza:
 
 ```text
-docs/20260517_constant_arrival_rate_quickpizza_two_requests_worked_example.md
+docs/20260517_03_constant-arrival-rate-quickpizza-two-requests-worked-example.md
 ```
 
 ## Link nhanh
 
-- [Ý tưởng chính](./20260517_constant-arrival-rate-tham-so-cong-thuc.md#1-ý-tưởng-chính)
-- [Khi nào dùng thực tế](./20260517_constant-arrival-rate-tham-so-cong-thuc.md#11-khi-nào-dùng-thực-tế)
-- [Core chạy như nào](./20260517_constant-arrival-rate-tham-so-cong-thuc.md#12-core-chạy-như-nào)
-- [Bảng tham số tiếng Việt](./20260517_constant-arrival-rate-tham-so-cong-thuc.md#2-bảng-tham-số-tiếng-việt)
-- [Công thức nền](./20260517_constant-arrival-rate-tham-so-cong-thuc.md#3-công-thức-nền)
-- [Checklist core đã lọc](./20260517_constant-arrival-rate-tham-so-cong-thuc.md#39-checklist-core-đã-lọc-cho-constant-arrival-rate)
-- [Đọc vus và vus_max theo core](./20260517_constant-arrival-rate-tham-so-cong-thuc.md#391-đọc-vus-và-vus_max-theo-core)
-- [Đọc iterations và iteration_duration theo core](./20260517_constant-arrival-rate-tham-so-cong-thuc.md#392-đọc-iterations-và-iteration_duration-theo-core)
-- [Execution segment và rate scaling](./20260517_constant-arrival-rate-tham-so-cong-thuc.md#393-execution-segment-và-rate-scaling)
-- [Bảng đối chiếu core truth](./20260517_constant-arrival-rate-tham-so-cong-thuc.md#394-bảng-đối-chiếu-core-truth)
-- [Source map core đã đối chiếu](./20260517_constant-arrival-rate-tham-so-cong-thuc.md#395-source-map-core-đã-đối-chiếu)
-- [Thêm nhầm field của executor khác](./20260517_constant-arrival-rate-tham-so-cong-thuc.md#310-thêm-nhầm-field-của-executor-khác-có-lỗi-không)
-- [Demo fixed start schedule](./20260517_constant-arrival-rate-tham-so-cong-thuc.md#4-demo-fixed-start-schedule-đủ-vu)
-- [Demo thiếu VU và dropped_iterations](./20260517_constant-arrival-rate-tham-so-cong-thuc.md#5-demo-thiếu-vu-và-dropped_iterations)
-- [Demo preAllocatedVUs vs maxVUs](./20260517_constant-arrival-rate-tham-so-cong-thuc.md#6-demo-preallocatedvus-vs-maxvus)
-- [Demo interrupt cuối scenario](./20260517_constant-arrival-rate-tham-so-cong-thuc.md#7-demo-interrupt-cuối-scenario)
-- [Demo QuickPizza 2 requests / iteration](./20260517_constant-arrival-rate-tham-so-cong-thuc.md#8-demo-quickpizza-2-requests--iteration)
-- [So sánh với closed-model executors](./20260517_constant-arrival-rate-tham-so-cong-thuc.md#9-so-sánh-với-constant-vus-ramping-vus-per-vu-shared)
-- [Cheat sheet](./20260517_constant-arrival-rate-tham-so-cong-thuc.md#10-cheat-sheet)
+- [Ý tưởng chính](./20260517_02_constant-arrival-rate-tham-so-cong-thuc.md#1-ý-tưởng-chính)
+- [Khi nào dùng thực tế](./20260517_02_constant-arrival-rate-tham-so-cong-thuc.md#11-khi-nào-dùng-thực-tế)
+- [Core chạy như nào](./20260517_02_constant-arrival-rate-tham-so-cong-thuc.md#12-core-chạy-như-nào)
+- [Bảng tham số tiếng Việt](./20260517_02_constant-arrival-rate-tham-so-cong-thuc.md#2-bảng-tham-số-tiếng-việt)
+- [Công thức nền](./20260517_02_constant-arrival-rate-tham-so-cong-thuc.md#3-công-thức-nền)
+- [Checklist core đã lọc](./20260517_02_constant-arrival-rate-tham-so-cong-thuc.md#39-checklist-core-đã-lọc-cho-constant-arrival-rate)
+- [Đọc vus và vus_max theo core](./20260517_02_constant-arrival-rate-tham-so-cong-thuc.md#391-đọc-vus-và-vus_max-theo-core)
+- [Đọc iterations và iteration_duration theo core](./20260517_02_constant-arrival-rate-tham-so-cong-thuc.md#392-đọc-iterations-và-iteration_duration-theo-core)
+- [Execution segment và rate scaling](./20260517_02_constant-arrival-rate-tham-so-cong-thuc.md#393-execution-segment-và-rate-scaling)
+- [Bảng đối chiếu core truth](./20260517_02_constant-arrival-rate-tham-so-cong-thuc.md#394-bảng-đối-chiếu-core-truth)
+- [Source map core đã đối chiếu](./20260517_02_constant-arrival-rate-tham-so-cong-thuc.md#395-source-map-core-đã-đối-chiếu)
+- [Thêm nhầm field của executor khác](./20260517_02_constant-arrival-rate-tham-so-cong-thuc.md#310-thêm-nhầm-field-của-executor-khác-có-lỗi-không)
+- [Demo fixed start schedule](./20260517_02_constant-arrival-rate-tham-so-cong-thuc.md#4-demo-fixed-start-schedule-đủ-vu)
+- [Demo thiếu VU và dropped_iterations](./20260517_02_constant-arrival-rate-tham-so-cong-thuc.md#5-demo-thiếu-vu-và-dropped_iterations)
+- [Demo preAllocatedVUs vs maxVUs](./20260517_02_constant-arrival-rate-tham-so-cong-thuc.md#6-demo-preallocatedvus-vs-maxvus)
+- [Demo interrupt cuối scenario](./20260517_02_constant-arrival-rate-tham-so-cong-thuc.md#7-demo-interrupt-cuối-scenario)
+- [Demo QuickPizza 2 requests / iteration](./20260517_02_constant-arrival-rate-tham-so-cong-thuc.md#8-demo-quickpizza-2-requests--iteration)
+- [So sánh với closed-model executors](./20260517_02_constant-arrival-rate-tham-so-cong-thuc.md#9-so-sánh-với-constant-vus-ramping-vus-per-vu-shared)
+- [Cheat sheet](./20260517_02_constant-arrival-rate-tham-so-cong-thuc.md#10-cheat-sheet)
 
 ## File demo
 

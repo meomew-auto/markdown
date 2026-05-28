@@ -9,13 +9,13 @@ ramping-arrival-rate
 Nếu chỉ muốn tra nhanh, mở:
 
 ```text
-docs/20260518_ramping-arrival-rate-quick-index.md
+docs/20260518_01_ramping-arrival-rate-quick-index.md
 ```
 
 Worked example:
 
 ```text
-docs/20260518_ramping_arrival_rate_worked_example.md
+docs/20260518_03_ramping-arrival-rate-worked-example.md
 ```
 
 ## Mục lục nhanh
