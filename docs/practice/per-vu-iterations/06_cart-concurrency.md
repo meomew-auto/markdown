@@ -94,8 +94,28 @@ const responses = http.batch(requests);
 
 ## Cách chạy
 
-```bash
-k6 run examples/per-vu-iterations/pvi-06-cart-concurrency.js
+> Stack setup chung: xem [RUN_GUIDE.md](RUN_GUIDE.md).
+
+```powershell
+$env:BASE_URL = "http://localhost:80"
+$env:K6_CLOUD_HOST = "http://localhost:18080"
+$env:K6_CLOUD_TOKEN = "student-token-1234567890"
+
+cd "E:\Khoa hoc\k6"
+k6 run -o cloud .\examples\per-vu-iterations\pvi-06-cart-concurrency.js
+```
+
+**Verify trên UI**:
+
+```text
+1. Paste token, click run mới nhất → tab Custom metrics
+2. cart_total_match: 10 ✓     (mọi user có cart đủ)
+3. cart_total_lost: 0 ✓       (không lost-update)
+4. http_req_failed: 0% ✓
+
+Output console:
+  [VU=N] ✓ cart total match: 30/30
+  ... cho cả 10 VU
 ```
 
 ## Mở rộng

@@ -70,16 +70,35 @@ Total: 2 req × 1000 iter = 2000 req
 
 ## CI integration
 
-```bash
-# Set baseline từ lần chạy ổn định trước
-BASELINE_P95_MS=500 k6 run pvi-07-ci-batch.js
+```powershell
+# Set baseline từ lần chạy ổn định trước (commit vào repo CI config)
+$env:BASE_URL = "http://localhost:80"
+$env:K6_CLOUD_HOST = "http://localhost:18080"
+$env:K6_CLOUD_TOKEN = "student-token-1234567890"
+$env:BASELINE_P95_MS = "500"
 
-# CI script:
-k6 run --quiet pvi-07-ci-batch.js
-if [ $? -ne 0 ]; then
-  echo "CI gate FAILED: regression detected"
+cd "E:\Khoa hoc\k6"
+k6 run -o cloud .\examples\per-vu-iterations\pvi-07-ci-batch.js
+
+# Local run không cần cloud upload
+k6 run --quiet .\examples\per-vu-iterations\pvi-07-ci-batch.js
+
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "CI gate FAILED: regression detected"
   exit 1
-fi
+}
+```
+
+> Stack setup chung: xem [RUN_GUIDE.md](RUN_GUIDE.md).
+
+**Verify trên UI** (dùng cloud output):
+
+```text
+1. Paste token, click run mới nhất
+2. Tile "iterations": 1000 ✓ (chính xác)
+3. Tile "http_reqs": 2000 ✓ (chính xác)
+4. http_req_duration{name=homepage} p95 < 550ms (baseline 500 + 10%)
+5. http_req_duration{name=api_quotes} p95 < 550ms
 ```
 
 ## Update baseline khi cần
