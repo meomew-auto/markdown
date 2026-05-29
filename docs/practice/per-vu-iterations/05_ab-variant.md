@@ -16,22 +16,128 @@ Yêu cầu:
 - Sau test: variant_a_count == variant_control_count == 250
 ```
 
-## Why per-vu-iterations?
+## Vì sao "A/B test" buộc chọn per-vu-iterations?
+
+Trước khi vào kỹ thuật, hiểu **A/B test** là gì:
 
 ```text
-Variant assignment cần DETERMINISTIC:
-  - userVariant = __VU % 2 (0=A, 1=control)
-  - 1 user = 1 variant cố định qua tất cả iter
-  - Iter 0 lưu variant, iter 1-4 dùng cùng variant đó
+A/B test = chia user thành 2 nhóm, mỗi nhóm thấy 1 phiên bản khác nhau,
+           rồi so nhóm nào "tốt hơn" (mua nhiều hơn, ở lại lâu hơn).
 
-ramping-vus skew exposure:
-  - Variant lazy assign theo time -> số user A/control không đều
-  - vd: ramping 0->100 trong 1 phút, 30s đầu chỉ có VU 1-50 (toàn A)
+Đời thường:
+  Quán thử 2 công thức phở: nhóm A nếm vị mới, nhóm B (control) vị cũ
+  -> đếm nhóm nào gọi thêm tô nhiều hơn
 
-constant-vus với short duration:
-  - VU pool random pick -> 1 user có thể bị spam, 1 user không xuất hiện
-  - Exposure không balance
+Điều kiện để kết quả ĐÁNG TIN:
+  - Mỗi khách CHỈ nếm 1 vị (không đổi giữa chừng -> loạn cảm nhận)
+  - 2 nhóm số lượng BẰNG NHAU (50/50 -> so sánh fair)
 ```
+
+Để A/B test **có giá trị thống kê**, phải đảm bảo **2 yêu cầu cốt lõi**.
+Chỉ per-vu-iterations mới thỏa mãn cả 2.
+
+### Yêu cầu (a): VARIANT STICKY PER USER (1 user 1 variant cố định)
+
+**Ý nghĩa**: Mỗi user phải thấy CÙNG variant qua tất cả lần truy cập. Nếu
+user lúc thấy A lúc thấy control → trải nghiệm loạn → dữ liệu vô nghĩa.
+
+```text
+Flow đúng (variant sticky theo user):
+  User VU=2 (chẵn): variant=A    -> cả 5 lần xem đều variant A
+  User VU=3 (lẻ):   variant=control -> cả 5 lần đều control
+
+Vì sao per-vu đảm bảo?
+  - userVariant = __VU % 2 (deterministic theo VU)
+  - Tính 1 lần ở iter 0, lưu biến per-VU
+  - 5 iter sau cùng VU -> cùng variant
+  - __VU cố định cho 1 user -> variant không bao giờ đổi
+```
+
+**Vì sao executor khác fail?**
+
+```text
+✗ random variant mỗi iter (Math.random()):
+  - User xem 5 trang với variant nhảy lung tung
+  - Không đo được "variant A có giữ chân user không"
+
+✗ constant-vus / arrival-rate:
+  - __VU không stable cho 1 user -> variant nhảy theo VU pool
+  - User cảm nhận 2 phiên bản trộn lẫn -> ô nhiễm dữ liệu
+```
+
+### Yêu cầu (b): EXPOSURE BALANCED (2 nhóm bằng nhau, đếm chính xác)
+
+**Ý nghĩa**: Số user nhóm A phải BẰNG nhóm control (50/50). Lệch → so sánh
+không fair (nhóm đông tự nhiên có nhiều conversion hơn).
+
+**3 nguyên nhân kỹ thuật khiến exposure bị lệch (skew)**:
+
+#### Nguyên nhân 1: LAZY ASSIGNMENT SKEW (gán variant theo thời gian đến)
+
+**Lazy assignment**: server gán variant khi user ĐẾN (theo thứ tự), không
+gán trước. Nếu user đến không đều theo thời gian → lệch.
+
+```text
+Server gán luân phiên A, control, A, control... theo thứ tự đến:
+  Nếu dùng ramping-vus (VU tăng dần 0->100):
+    - 30s đầu: chỉ VU 1-50 active -> gán A,control,A,control... -> OK
+    - NHƯNG nếu server gán theo "batch đến cùng lúc":
+      50 VU đến gần như đồng thời -> gán lệch do race
+  -> nhóm A có thể 60, control 40 -> skew 60/40
+
+→ per-vu: TẤT CẢ VU start gần như đồng thời ở t=0, variant gán theo
+  __VU%2 (không theo thời gian đến) -> luôn 50/50
+```
+
+#### Nguyên nhân 2: HASH BUCKET IMBALANCE (chia nhóm bằng hash bị lệch)
+
+**Cách phổ biến**: gán variant = `hash(user_id) % 2`. Nếu hàm hash không
+phân bố đều → nhóm lệch.
+
+```text
+Bug: hash kém phân bố
+  hash("user-1") % 2 = 0 -> A
+  hash("user-2") % 2 = 0 -> A   (xui, cũng 0)
+  hash("user-3") % 2 = 0 -> A   (lại 0)
+  -> nếu user_id có pattern (toàn số chẵn) -> hash lệch -> 70/30
+
+Fix: dùng hash tốt (murmur, sha) + user_id ngẫu nhiên
+
+→ Test phải verify phân bố thực tế = 50/50 với user pool đã biết
+→ per-vu: __VU chạy 1,2,3...100 đều đặn -> %2 cho đúng 50 chẵn + 50 lẻ
+  -> exposure CHÍNH XÁC 50/50, dễ verify
+```
+
+#### Nguyên nhân 3: COOKIE/SESSION LOSS (mất variant giữa chừng)
+
+**Vấn đề**: variant lưu trong cookie/session. Nếu user mất cookie (hết hạn,
+clear cache) → server gán lại variant → có thể đổi nhóm.
+
+```text
+Bug:
+  Lần 1: user nhận variant A, lưu cookie ab=A
+  Lần 3: cookie hết hạn -> server gán lại -> lần này control
+  -> user bị tính vào CẢ 2 nhóm -> double count -> skew
+
+Fix: variant assignment deterministic theo user_id (không phụ thuộc cookie)
+
+→ Test phải verify variant ổn định qua nhiều lần truy cập
+→ per-vu: variant tính theo __VU (không cookie) -> luôn ổn định, dễ verify
+```
+
+#### Tổng kết: chỉ per-vu thỏa mãn cả (a) và (b)
+
+| Executor | (a) Variant sticky per user | (b) Exposure balanced 50/50 | Verdict |
+| --- | --- | --- | --- |
+| **per-vu-iterations** | ✓ variant theo __VU cố định | ✓ __VU%2 chia đều chính xác | ✅ DÙNG |
+| shared-iterations | ✗ VU pick random | ✗ phân phối iter không đều | ❌ |
+| constant-vus (duration) | ✗ __VU không stable | ✗ user xuất hiện không đều | ❌ |
+| constant-arrival-rate | ✗ identity rời VU | ✗ rate-driven, khó balance | ❌ |
+| ramping-vus | ✗ VU spawn theo time | ✗ lazy assign skew theo thời gian | ❌ |
+| ramping-arrival-rate | ✗ rate-driven | ✗ exposure lệch theo rate | ❌ |
+
+→ Chỉ **per-vu-iterations** đảm bảo "mỗi user 1 variant cố định + 2 nhóm
+chính xác 50/50", điều kiện BẮT BUỘC để A/B test có giá trị thống kê.
 
 ## Config
 

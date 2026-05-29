@@ -14,19 +14,129 @@ Yêu cầu test:
   - Sau refresh, /me phải trả 200 (không bị 401 lần nữa)
 ```
 
-## Why per-vu-iterations?
+## Vì sao "session lifecycle test" buộc chọn per-vu-iterations?
+
+Trước khi vào kỹ thuật, hiểu **session lifecycle** là gì:
 
 ```text
-Token lifecycle bound theo VU:
-  - 1 user = 1 access_token + 1 refresh_token
-  - Phải GIỮ token qua 20 iter
-  - Phải DETECT 401, gọi refresh, UPDATE token
+Session lifecycle = vòng đời 1 phiên đăng nhập:
+  login -> nhận access_token (TTL ngắn) + refresh_token (TTL dài)
+  -> dùng access_token cho mọi request
+  -> access_token HẾT HẠN -> dùng refresh_token xin token mới
+  -> KHÔNG cần login lại
 
-Không executor nào khác làm được:
-  - constant-vus: VU pool random, token mất giữa iter
-  - shared-iterations: 200 iter chung, không có concept "20 iter per user"
-  - arrival-rate: rate-driven, không bound user-VU
+Đời thường:
+  Vé vào cổng (access_token) hết hạn sau 15 phút
+  Thẻ thành viên (refresh_token) đổi vé mới mà không cần mua lại
 ```
+
+Để test vòng đời này **đúng**, phải đảm bảo **2 yêu cầu cốt lõi**.
+Chỉ per-vu-iterations mới thỏa mãn cả 2.
+
+### Yêu cầu (a): TOKEN BOUND VÀO VU (1 user giữ 1 cặp token)
+
+**Ý nghĩa**: Mỗi user phải GIỮ access_token + refresh_token RIÊNG qua nhiều
+thao tác. Khi token expire, phải refresh và UPDATE token của chính user đó.
+
+```text
+Flow đúng (cùng user giữ token qua iter):
+  Iter 0: login -> access_token="A1", refresh_token="R1" (lưu per-VU)
+  Iter 1-9: dùng A1 -> OK
+  Iter 10: A1 expired -> refresh bằng R1 -> nhận A2 (update biến per-VU)
+  Iter 11-19: dùng A2 -> OK
+
+Vì sao per-vu đảm bảo?
+  - 1 VU = 1 user, biến accessToken/refreshToken sống qua iter
+  - Detect 401 ở iter N -> refresh -> ghi đè token -> iter N+1 dùng token mới
+  - State per-VU là điều kiện BẮT BUỘC để mô phỏng lifecycle
+```
+
+**Vì sao executor khác fail?**
+
+```text
+✗ constant-vus / arrival-rate:
+  - VU pool tái sử dụng -> token của user A bị user B ghi đè
+  - Hoặc biến global -> mọi VU share 1 token -> không test lifecycle riêng
+  - Không có concept "cùng user qua 20 thao tác"
+```
+
+### Yêu cầu (b): CHẠY ĐỦ ITER ĐỂ TOKEN EXPIRE + REFRESH
+
+**Ý nghĩa**: Phải chạy đủ số thao tác để token thật sự expire, rồi verify
+refresh hoạt động. Nếu test ngắn (token chưa expire) → không test được refresh.
+
+**3 nguyên nhân kỹ thuật của bug refresh token**:
+
+#### Nguyên nhân 1: REFRESH TOKEN ROTATION (refresh token cũ phải bị thu hồi)
+
+**Rotation là gì?** Mỗi lần refresh, server cấp refresh_token MỚI và thu hồi
+cái cũ (chống token bị đánh cắp dùng lại).
+
+```text
+Flow đúng:
+  Iter 10: refresh bằng R1 -> nhận A2 + R2, server thu hồi R1
+  Iter 20: refresh bằng R2 -> nhận A3 + R3, server thu hồi R2
+
+Bug: server KHÔNG thu hồi R1
+  -> R1 vẫn dùng được sau khi đã rotate
+  -> nếu R1 bị lộ, attacker refresh vô hạn -> chiếm tài khoản
+
+→ Test phải refresh ÍT NHẤT 2 lần (R1->R2->R3) để verify rotation
+→ per-vu: kiểm soát số iter -> đảm bảo token rotate đủ số lần
+```
+
+#### Nguyên nhân 2: CONCURRENT REFRESH RACE (2 request cùng refresh)
+
+**Vấn đề**: Khi token sắp expire, 2 request song song cùng phát hiện 401 và
+cùng gọi refresh → race condition.
+
+```text
+Race:
+  Request 1 (t=0.00s): A1 expired -> refresh bằng R1 -> nhận A2, thu hồi R1
+  Request 2 (t=0.01s): A1 expired -> refresh bằng R1 (đã bị thu hồi!)
+                       -> 403 Forbidden -> user bị logout oan
+
+Fix đúng: refresh lock per-user, hoặc grace period cho refresh token cũ
+
+→ Test tuần tự -> không trigger race
+→ Phải gửi 2 request song song lúc token sắp hết (http.batch)
+→ per-vu + batch: tạo race chính xác cho cùng user
+```
+
+#### Nguyên nhân 3: CLOCK SKEW (lệch giờ giữa client và server)
+
+**Vấn đề**: access_token có field `exp` (thời điểm hết hạn). Nếu giờ server
+lệch giờ client → token bị coi expired sớm/muộn.
+
+```text
+Clock skew:
+  Server cấp token exp=12:00:00
+  Client giờ chạy nhanh 30s -> client nghĩ token expired lúc 11:59:30
+  -> client refresh SỚM 30s -> tăng tải refresh endpoint vô ích
+
+Hoặc ngược lại:
+  Client chậm 30s -> dùng token đã expired -> server trả 401 bất ngờ
+  -> nếu client không handle 401 -> request fail
+
+Fix: dùng leeway (cho phép lệch ±60s), sync NTP
+
+→ Test phải chạy đủ dài qua mốc expire để phát hiện skew
+→ per-vu: iter cố định + track tokenIssuedAtIter -> mô phỏng expire chính xác
+```
+
+#### Tổng kết: chỉ per-vu thỏa mãn cả (a) và (b)
+
+| Executor | (a) Token bound vào VU | (b) Chạy đủ iter để expire | Verdict |
+| --- | --- | --- | --- |
+| **per-vu-iterations** | ✓ token sống qua iter | ✓ mỗi VU chạy đủ N iter | ✅ DÙNG |
+| shared-iterations | ✗ token mất khi đổi VU | ✗ phân phối iter không đều | ❌ |
+| constant-vus (duration) | ✗ VU pool ghi đè token | ✗ số iter phụ thuộc latency | ❌ |
+| constant-arrival-rate | ✗ identity rời VU | ✗ rate-driven, iter rời rạc | ❌ |
+| ramping-vus | ✗ VU spawn/despawn mất token | ✗ iter biến thiên | ❌ |
+| ramping-arrival-rate | ✗ rate-driven | ✗ không bound user | ❌ |
+
+→ Chỉ **per-vu-iterations** đảm bảo "1 user giữ token qua đủ N thao tác",
+điều kiện BẮT BUỘC để mô phỏng token expire + refresh lifecycle.
 
 ## Config
 

@@ -14,22 +14,135 @@ Yêu cầu test:
   - Tổng: 10 user × 30 items = 300 cart_add request
 ```
 
-## Why per-vu-iterations?
+## Vì sao "cart race test" buộc chọn per-vu-iterations?
+
+Trước khi vào kỹ thuật, hiểu **race condition** và **lost update** là gì:
 
 ```text
-Race condition CHỈ test được khi cùng user-id concurrent:
-  - 1 VU = 1 user
-  - http.batch() trong iter -> 3 request song song CÙNG user
-  - Server: phải atomic update cart per user
+Race condition = 2 thao tác chạy ĐỒNG THỜI lên cùng dữ liệu, kết quả
+                 phụ thuộc "ai xong trước" -> không đoán trước được.
 
-shared-iterations:
-  ❌ random VU pick -> 1 user có thể bị 1 VU spam, user khác 0
-  ❌ Không tạo được "same user, 3 tab concurrent"
+Lost update = 1 dạng race: 2 update đọc cùng giá trị cũ, ghi đè lẫn nhau
+              -> 1 update bị MẤT.
 
-constant-vus:
-  ❌ Không cố định số burst per user
-  ❌ VU pool race với nhau, không phải user pool
+Đời thường:
+  Sổ tiết kiệm có 100k. Vợ và chồng cùng nạp 50k đúng lúc:
+    Vợ đọc số dư 100k -> +50k -> ghi 150k
+    Chồng đọc số dư 100k (cùng lúc) -> +50k -> ghi 150k
+  Kết quả: 150k (lẽ ra phải 200k) -> MẤT 50k của 1 người
 ```
+
+Để test race này **đúng**, phải đảm bảo **2 yêu cầu cốt lõi**.
+Chỉ per-vu-iterations mới thỏa mãn cả 2.
+
+### Yêu cầu (a): CÙNG USER-ID GỬI REQUEST ĐỒNG THỜI
+
+**Ý nghĩa**: Lost update chỉ xảy ra khi nhiều request thao tác lên cart của
+CÙNG 1 user. Phải tạo được "cùng user, nhiều request song song".
+
+```text
+Flow đúng (cùng user, 3 tab song song):
+  User VU=1: http.batch([
+    POST /cart/add (product 1),   ┐
+    POST /cart/add (product 2),   ├─ 3 request CÙNG user, ĐỒNG THỜI
+    POST /cart/add (product 3),   ┘
+  ])
+  -> server phải atomic update cart user 1 -> đủ 3 item
+
+Vì sao per-vu đảm bảo?
+  - 1 VU = 1 user (X-User-Id cố định theo __VU)
+  - http.batch() trong iter -> 3 request song song CÙNG user-id
+  - Đây CHÍNH XÁC là điều kiện trigger lost update
+```
+
+**Vì sao executor khác fail?**
+
+```text
+✗ shared-iterations / constant-vus:
+  - VU pool race với NHAU, nhưng mỗi VU là user KHÁC
+  - VU1=userA, VU2=userB cùng add -> KHÔNG đụng cart (khác user)
+  - Server lock per-user -> không có contention -> không trigger bug
+  - Test "pass" giả vì không tạo được same-user race
+```
+
+### Yêu cầu (b): ĐỦ BURST ĐỂ TRIGGER LOST UPDATE
+
+**Ý nghĩa**: Race là xác suất — không phải lần nào cũng xảy ra. Phải lặp
+nhiều đợt (burst) để tăng khả năng trigger và verify tổng cuối.
+
+**3 nguyên nhân kỹ thuật của lost update**:
+
+#### Nguyên nhân 1: READ-MODIFY-WRITE RACE (đọc-sửa-ghi không atomic)
+
+**Vấn đề kinh điển**: thêm item vào cart = đọc cart hiện tại, thêm item, ghi
+lại. Nếu 2 request làm cùng lúc → ghi đè nhau.
+
+```text
+Cart user A đang có [item1]:
+  Request 2 (add item2): đọc [item1]              ┐ cùng đọc
+  Request 3 (add item3): đọc [item1]              ┘ [item1]
+  Request 2: ghi [item1, item2]
+  Request 3: ghi [item1, item3]   <- ghi đè, MẤT item2
+  Kết quả: [item1, item3] -> mất item2 (lost update)
+
+Fix đúng:
+  - Atomic: UPDATE cart SET items = items || item WHERE user=A
+  - Hoặc dùng SELECT FOR UPDATE (pessimistic lock)
+
+→ Test phải gửi nhiều add SONG SONG cùng user -> trigger
+→ per-vu + http.batch: tạo đồng thời chính xác
+```
+
+#### Nguyên nhân 2: OPTIMISTIC LOCK MISS (thiếu version check)
+
+**Optimistic lock**: mỗi cart có `version`, update phải kèm version đang giữ.
+Nếu code quên check version → lost update.
+
+```text
+Có optimistic lock đúng:
+  UPDATE cart SET items=?, version=version+1
+  WHERE user=A AND version=5
+  -> nếu version đã đổi (request khác update trước) -> affected_rows=0
+  -> retry với version mới
+
+Bug: quên điều kiện "AND version=5"
+  -> UPDATE luôn thành công -> ghi đè -> lost update
+
+→ Test phát hiện bằng cách verify tổng item cuối = tổng đã gửi
+→ per-vu: biết chính xác đã gửi 30 item -> so cart.total cuối = 30?
+```
+
+#### Nguyên nhân 3: CACHE-DB INCONSISTENCY (cache và DB lệch nhau)
+
+**Vấn đề**: cart ghi vào cache (Redis) trước, sync DB sau. 2 request song
+song → cache và DB lệch.
+
+```text
+Write-back cache:
+  Request 2: ghi cache [item1,item2], chưa sync DB
+  Request 3: đọc DB (chưa có item2) -> [item1] -> ghi [item1,item3]
+  -> cache: [item1,item2], DB: [item1,item3] -> LỆCH
+  -> lần đọc sau tùy nguồn (cache hay DB) -> kết quả khác nhau
+
+Fix: write-through (ghi cache + DB atomic), hoặc invalidate đúng cách
+
+→ Test verify bằng GET /cart/summary cuối (đọc nguồn thật)
+→ per-vu: iter cuối check tổng -> phát hiện lệch cache-DB
+```
+
+#### Tổng kết: chỉ per-vu thỏa mãn cả (a) và (b)
+
+| Executor | (a) Cùng user-id đồng thời | (b) Đủ burst trigger race | Verdict |
+| --- | --- | --- | --- |
+| **per-vu-iterations** | ✓ 1 VU=1 user + http.batch | ✓ mỗi VU đủ N burst | ✅ DÙNG |
+| shared-iterations | ✗ VU khác = user khác | ✗ phân phối burst không đều | ❌ |
+| constant-vus (duration) | ✗ race giữa user khác nhau | ✗ số burst phụ thuộc latency | ❌ |
+| constant-arrival-rate | ✗ identity rời VU | ✗ rate-driven, khó đồng thời | ❌ |
+| ramping-vus | ✗ VU = user khác | ✗ burst biến thiên | ❌ |
+| ramping-arrival-rate | ✗ rate-driven | ✗ không bound user | ❌ |
+
+→ Chỉ **per-vu-iterations** đảm bảo "cùng user-id gửi nhiều request đồng
+thời đủ số burst", điều kiện BẮT BUỘC để trigger và verify lost update.
 
 ## Config
 

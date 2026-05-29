@@ -13,15 +13,131 @@ Pre-merge gate trong CI/CD pipeline. Cần test:
 
 CI cần con số ổn định để compare baseline qua các lần PR.
 
-## Why per-vu-iterations?
+## Vì sao "CI gate" buộc chọn per-vu-iterations?
+
+Trước khi vào kỹ thuật, hiểu **CI gate** và **baseline** là gì:
 
 ```text
-CI cần DETERMINISTIC count, không phải duration-based:
-  - per-vu: total = vus × iters = 1000 (chính xác)
-  - constant-vus 5m duration: không biết bao nhiêu request
-  - constant-arrival-rate có thể drop -> count thiếu
-  - shared-iterations: count chính xác nhưng không control per-VU
+CI gate = "cổng kiểm tra tự động" trước khi merge code:
+  - Mỗi PR chạy test -> so với baseline (lần chạy chuẩn trước đó)
+  - Nếu chậm hơn baseline > 10% -> CHẶN merge (fail PR)
+  - Mục đích: bắt regression performance TRƯỚC khi lên production
+
+Baseline = "mốc chuẩn" để so sánh:
+  - vd baseline p95 = 500ms (đo từ lần chạy ổn định)
+  - PR mới p95 = 560ms -> tăng 12% -> fail
+
+Đời thường:
+  Cân sức khỏe mỗi tháng. Để so "béo lên hay không" thì lần nào
+  cũng phải cân CÙNG ĐIỀU KIỆN (sáng, đói, cùng cân) -> mới fair.
 ```
+
+Để CI gate **không báo nhầm** (flaky), phải đảm bảo **2 yêu cầu cốt lõi**.
+Chỉ per-vu-iterations mới thỏa mãn cả 2.
+
+### Yêu cầu (a): COUNT CHÍNH XÁC (cùng workload mỗi lần chạy)
+
+**Ý nghĩa**: Mỗi lần CI chạy phải gửi ĐÚNG cùng số request. Nếu count biến
+thiên → p95 đo trên tập khác nhau → so baseline vô nghĩa.
+
+```text
+Flow đúng (count cố định tuyệt đối):
+  PR #1: 1000 iter, 2000 req, p95=500ms  (baseline)
+  PR #2: 1000 iter, 2000 req, p95=560ms  -> tăng 12%, regression thật
+  PR #3: 1000 iter, 2000 req, p95=490ms  -> OK
+
+Vì sao per-vu đảm bảo?
+  - total = vus × iterations = 50 × 20 = 1000 (TUYỆT ĐỐI)
+  - Mỗi lần chạy luôn đúng 1000, bất kể server nhanh/chậm
+  - p95 đo trên cùng 1000 mẫu -> so baseline fair
+```
+
+**Vì sao executor khác fail?**
+
+```text
+✗ constant-vus duration "5m":
+  - count = 5min × throughput -> biến thiên theo latency
+  - PR #1: 4800 req (server nhanh), PR #2: 4200 req (server chậm)
+  - p95 đo trên tập KHÁC nhau -> không so được
+  - CI báo "regression" nhầm dù code không đổi -> FLAKY
+
+✗ constant-arrival-rate:
+  - Có thể drop -> count = 9000 hoặc 8500 tùy lần
+  - Tập mẫu khác -> baseline drift
+```
+
+### Yêu cầu (b): REPRODUCIBLE RPS (tải tái lập được, không flaky)
+
+**Ý nghĩa**: Pattern tải (bao nhiêu request đồng thời, theo nhịp nào) phải
+giống nhau mỗi lần. Nếu pattern đổi → p95 đổi → false alarm.
+
+**3 nguyên nhân kỹ thuật khiến CI gate bị flaky**:
+
+#### Nguyên nhân 1: COUNT BIẾN THIÊN → FALSE REGRESSION
+
+**Vấn đề**: nếu số request mỗi lần khác nhau, p95 tính trên tập khác → dao
+động tự nhiên bị hiểu nhầm thành regression.
+
+```text
+Ví dụ p95 nhạy với số mẫu:
+  Lần A: 4200 request, p95 = 480ms (ít mẫu, ít outlier)
+  Lần B: 4800 request, p95 = 540ms (nhiều mẫu, dính outlier đuôi)
+  -> chênh 12% NHƯNG do số mẫu khác, KHÔNG phải code chậm
+  -> CI fail nhầm -> dev mất thời gian debug "bug ma"
+
+→ per-vu: count cố định 1000 -> p95 luôn trên cùng cỡ mẫu -> ổn định
+```
+
+#### Nguyên nhân 2: BASELINE DRIFT (mốc chuẩn trôi dần)
+
+**Vấn đề**: nếu mỗi lần update baseline từ 1 lần chạy có count khác nhau,
+mốc chuẩn "trôi" dần → mất ý nghĩa.
+
+```text
+Baseline drift:
+  Tuần 1: baseline = p95 của 4800 req = 500ms
+  Tuần 2: update baseline = p95 của 4200 req = 470ms
+  Tuần 3: update baseline = p95 của 5000 req = 530ms
+  -> baseline nhảy 470-530, không biết đâu là chuẩn thật
+  -> threshold 10% áp lên mốc trôi -> vô nghĩa
+
+→ per-vu: mọi lần chạy đúng 1000 req -> baseline ổn định -> threshold đáng tin
+```
+
+#### Nguyên nhân 3: WARMUP CONTAMINATION (mẫu warmup làm bẩn p95)
+
+**Vấn đề**: request đầu (JIT compile, cold cache, connection setup) chậm bất
+thường. Nếu tỷ lệ warmup/total đổi mỗi lần → p95 đổi.
+
+```text
+Ví dụ:
+  Lần A: 100 req, 30 req warmup chậm -> warmup chiếm 30% -> p95 cao
+  Lần B: 1000 req, 30 req warmup -> warmup chiếm 3% -> p95 thấp
+  -> cùng server, p95 khác nhau chỉ vì tỷ lệ warmup
+
+Fix: count cố định -> tỷ lệ warmup cố định -> p95 so được
+     (hoặc tag riêng warmup để loại khỏi threshold)
+
+→ per-vu: 1000 iter mỗi lần -> 30/1000 warmup cố định -> p95 nhất quán
+```
+
+#### Tổng kết: chỉ per-vu thỏa mãn cả (a) và (b)
+
+| Executor | (a) Count chính xác | (b) Reproducible RPS | Verdict |
+| --- | --- | --- | --- |
+| **per-vu-iterations** | ✓ vus × iters tuyệt đối | ✓ pattern cố định mỗi lần | ✅ DÙNG |
+| shared-iterations | ✓ count cố định | ✗ phân phối VU không đều -> RPS lệch | ⚠️ gần được |
+| constant-vus (duration) | ✗ count theo latency | ✗ RPS theo throughput biến thiên | ❌ |
+| constant-arrival-rate | ✗ có thể drop | ✓ RPS cố định (nếu không drop) | ❌ |
+| ramping-vus | ✗ count biến thiên | ✗ RPS thay đổi theo stage | ❌ |
+| ramping-arrival-rate | ✗ count biến thiên | ✗ RPS thay đổi theo stage | ❌ |
+
+**Lưu ý case này**: `shared-iterations` cũng có count cố định (a), nhưng thua
+ở (b) — phân phối iter giữa VU không đều khiến RPS dao động. `per-vu` cho
+cả count VÀ pattern phân bố đều nhất → baseline ổn định nhất.
+
+→ Chỉ **per-vu-iterations** đảm bảo "count chính xác + RPS tái lập", điều
+kiện BẮT BUỘC để CI gate không báo nhầm (flaky).
 
 ## Config
 
