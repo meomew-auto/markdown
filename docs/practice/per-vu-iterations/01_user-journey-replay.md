@@ -8,56 +8,152 @@ chính (login → browse → add to cart → checkout → confirm order)
 
 ### Vì sao "regression test" buộc chọn per-vu-iterations?
 
-Regression test có **2 yêu cầu cốt lõi**, chỉ per-vu mới thỏa mãn cả 2:
+Trước khi vào kỹ thuật, hiểu **mục tiêu** của regression test trước:
+
+```text
+Regression test = "test lại tất cả những gì đã chạy đúng trước đây"
+                  để đảm bảo code mới KHÔNG làm hỏng feature cũ.
+
+Đời thường:
+  Sửa xe đổi phanh mới (= deploy v1.1)
+  -> Phải kiểm tra LẠI:
+       phanh (= feature mới)        ← chắc chắn test
+       đèn xi-nhan (= feature cũ)   ← QUÊN test thì có thể đã hỏng
+       còi (= feature cũ)
+       điều hòa (= feature cũ)
+  -> Nếu KHÔNG test lại đèn xi-nhan, mai chạy đêm mới phát hiện hỏng
+     -> đó là "regression đã lọt"
+```
+
+Để regression test **có giá trị**, nó phải đảm bảo **2 yêu cầu cốt lõi**.
+Chỉ per-vu-iterations mới thỏa mãn cả 2.
 
 #### Yêu cầu (a): REPRODUCIBLE INPUT (input giống nhau qua các release)
 
-```text
-Lý do: muốn compare v1.0 vs v1.1 fair thì PHẢI cùng workload.
-  - v1.0: 150 journey, p95=1.8s
-  - v1.1: 150 journey, p95=2.1s    <- tăng 17%, regression!
-  - v1.1: 200 journey, p95=2.1s    <- không biết tăng do code hay do
-                                      workload khác
+**Ý nghĩa**: Mỗi lần test phải dùng **CÙNG workload** (cùng số journey,
+cùng pattern user) để compare baseline mới fair.
 
-→ COUNT phải CHÍNH XÁC, không phụ thuộc latency
-→ Loại constant-vus với duration (count = duration / iter_time, biến thiên)
+**Ví dụ cụ thể**:
+
+```text
+Senario: team đo p95 latency để biết v1.1 có chậm hơn v1.0 không
+
+Trường hợp A (workload GIỐNG NHAU):
+  v1.0: 150 journey, p95 = 1.8s
+  v1.1: 150 journey, p95 = 2.1s
+  → Kết luận: v1.1 chậm hơn 17%, có regression -> rollback
+
+Trường hợp B (workload KHÁC NHAU - bug):
+  v1.0: 150 journey, p95 = 1.8s
+  v1.1: 200 journey, p95 = 2.1s   <- 200 journey nặng hơn, oan cho v1.1?
+  v1.1: 100 journey, p95 = 1.5s   <- 100 journey nhẹ, có thể v1.1 vẫn chậm
+                                     hơn v1.0 ở cùng load 150
+  → KHÔNG kết luận được, test không có giá trị
+```
+
+**Vì sao count phải chính xác?**
+
+```text
+Nếu count phụ thuộc latency:
+  - latency cao  -> ít journey hoàn thành (vd 100)
+  - latency thấp -> nhiều journey hoàn thành (vd 200)
+  - mỗi lần test count khác -> không compare được
+
+Loại các executor có count biến thiên:
+  ✗ constant-vus duration "5m":
+    count = 5min × throughput, mà throughput = vus / iter_time
+    iter_time biến thiên 5-30% -> count biến thiên cùng
+    Lần 1: 145 journey (server hơi chậm)
+    Lần 2: 168 journey (server nhanh hơn)
+    -> không compare được
+
+  ✗ constant-arrival-rate "30/s for 5m":
+    Có thể drop nếu sizing thiếu -> count không đủ
+    Lần 1: 9000 / 9000 (đủ)
+    Lần 2: 8500 / 9000 (drop 5.5% do server slow)
+    -> không compare được
+
+→ COUNT phải CHÍNH XÁC, KHÔNG phụ thuộc latency
+→ Chỉ executor đếm theo "vus × iters" hoặc "iterations cố định" mới đạt
 ```
 
 #### Yêu cầu (b): COVER MỌI BUG STATEFUL
 
-Bug stateful = bug chỉ xuất hiện sau N lần thao tác liên tiếp cùng 1 account,
-không xuất hiện ở lần đầu.
+**Ý nghĩa**: Có một loại bug **chỉ xuất hiện sau N lần thao tác** với
+cùng 1 user, không xuất hiện ở lần đầu. Test phải đảm bảo **mỗi user**
+chạy đủ N lần để bắt được loại bug này.
+
+**Bug stateful là gì?**
 
 ```text
-Ví dụ thực tế:
-  Lần 1 mua: OK
-  Lần 2 mua: OK
-  Lần 3 mua: cart bỗng rỗng -> BUG
+Bug bình thường (stateless):
+  Lần 1 mua: 500 Internal Server Error
+  Lần 2 mua: 500 Internal Server Error
+  → Bug rõ ràng, test 1 lần là phát hiện
 
-Nguyên nhân thường gặp:
-  - Cache cart bị overflow sau N items
-  - Database session pool bị recycled
-  - JWT chứa cart_version, sau N update bị desync
+Bug stateful (chỉ xuất hiện sau N lần):
+  Lần 1 mua: OK (200, cart cleared correctly)
+  Lần 2 mua: OK (200, cart cleared correctly)
+  Lần 3 mua: OK status code, NHƯNG cart bỗng RỖNG -> mất hàng
 
-→ MỖI account phải chạy ĐỦ M lần (vd 5) liên tiếp để bắt bug này
-→ Mỗi account chạy M = đều nhau, không lệch
-→ Loại shared-iterations vì 100 iter chia 30 VU không đều:
-  - Account fast nhận 10 lần
-  - Account slow nhận 0 lần
-  - Bỏ sót bug ở account slow
+  → Test 1 lần không phát hiện. Phải chạy ≥3 lần MỚI thấy bug.
+```
+
+**3 nguyên nhân kỹ thuật của bug stateful**:
+
+```text
+1. CACHE OVERFLOW
+   - Server cache cart trong Redis với LRU cap 1000 items
+   - Lần 1-1000: cache hit, OK
+   - Lần 1001: oldest entry bị evict -> cart user X bị mất
+   - Test 1 lần per user -> không trigger overflow -> bỏ sót
+
+2. DATABASE SESSION POOL RECYCLE
+   - DB connection pool 50 connections, recycle mỗi 100 query
+   - Connection được tái dùng có state cũ (vd transaction chưa commit)
+   - Lần thứ N (khi pool recycle) -> state lẫn lộn -> data sai
+
+3. JWT VERSION DESYNC
+   - JWT chứa cart_version, server tăng version mỗi update
+   - Bug: version increment không atomic
+   - Sau N update -> client_version != server_version -> 401 hoặc data cũ
+```
+
+**Vì sao mỗi account phải chạy đủ M lần ĐỀU NHAU?**
+
+```text
+Yêu cầu: bắt được bug "lần 3 mới hỏng" cho TẤT CẢ account.
+
+Nếu phân phối không đều:
+  ✗ shared-iterations (100 iter chia 30 VU):
+    - VU fast (network nhanh, server response nhanh) nhận 8-10 iter
+    - VU slow nhận 1-2 iter
+    - Với VU slow: chỉ chạy 1-2 lần -> KHÔNG TRIGGER bug "lần 3 mới hỏng"
+    - 28/30 account "chưa test đủ" -> bỏ sót bug
+
+  ✗ constant-vus duration:
+    - Tương tự, account fast chạy nhiều lần, account slow chạy ít
+    - Đặc biệt nếu test ngắn (<1 phút)
+
+→ MỖI VU phải chạy ĐÚNG M lần (không lệch)
+→ Chỉ per-vu-iterations đảm bảo (vì vòng lặp cứng `for i := 0; i < M; i++`)
 ```
 
 #### Tổng kết: chỉ per-vu thỏa mãn cả (a) và (b)
 
-| Executor | Reproducible count | Mỗi account đủ M lần | Verdict |
+| Executor | (a) Reproducible count | (b) Mỗi account đủ M lần | Verdict |
 | --- | --- | --- | --- |
-| **per-vu-iterations** | ✓ vus × iters | ✓ mỗi VU chạy M lần | ✅ DÙNG |
-| shared-iterations | ✓ count cố định | ✗ phân phối không đều | ❌ |
-| constant-vus (duration) | ✗ phụ thuộc latency | ✗ random VU pick | ❌ |
-| constant-arrival-rate | ✗ có thể drop | ✗ identity không bound VU | ❌ |
-| ramping-vus | ✗ count biến thiên | ✗ VU spawn lệch theo time | ❌ |
+| **per-vu-iterations** | ✓ vus × iters cố định | ✓ mỗi VU chạy đúng M lần | ✅ DÙNG |
+| shared-iterations | ✓ count cố định | ✗ phân phối không đều giữa VU | ❌ |
+| constant-vus (duration) | ✗ count phụ thuộc latency | ✗ random VU pick | ❌ |
+| constant-arrival-rate | ✗ có thể drop | ✗ identity không bound vào VU | ❌ |
+| ramping-vus | ✗ count biến thiên theo time | ✗ VU spawn lệch theo timeline | ❌ |
+| ramping-arrival-rate | ✗ count biến thiên + drop | ✗ rate-driven, không bound user | ❌ |
 
-### 3 nguyên nhân nghiệp vụ dẫn tới chọn per-vu-iterations
+→ Chỉ **per-vu-iterations** thỏa mãn cả 2 yêu cầu, các executor khác
+đều fail ở ít nhất 1 trong 2.
+
+### 3 nguyên nhân nghiệp vụ cụ thể (= 3 thông số config)
 
 ```text
 1. TEST DATA CỐ ĐỊNH (fixed N accounts):
