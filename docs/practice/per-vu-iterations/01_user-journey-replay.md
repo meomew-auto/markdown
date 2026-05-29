@@ -166,23 +166,201 @@ Bug stateful (chỉ xuất hiện sau N lần):
 
 **3 nguyên nhân kỹ thuật của bug stateful**:
 
+#### Nguyên nhân 1: CACHE OVERFLOW
+
+**Cache là gì?** Server lưu cart user trong RAM (Redis) để tránh query database
+mỗi lần. Nhưng RAM giới hạn → cache có "cap" (tối đa 1000 items).
+
+**LRU = Least Recently Used**: khi đầy, evict (xóa) entry "ít dùng nhất gần đây".
+
 ```text
-1. CACHE OVERFLOW
-   - Server cache cart trong Redis với LRU cap 1000 items
-   - Lần 1-1000: cache hit, OK
-   - Lần 1001: oldest entry bị evict -> cart user X bị mất
-   - Test 1 lần per user -> không trigger overflow -> bỏ sót
+Tưởng tượng tủ đồ 1000 ngăn:
+  - Mỗi user có 1 ngăn chứa cart
+  - User 1001 đến -> ngăn đầy -> phải đẩy 1 user RA
+  - Quy tắc: ai ít dùng nhất gần đây -> bị đẩy ra trước
 
-2. DATABASE SESSION POOL RECYCLE
-   - DB connection pool 50 connections, recycle mỗi 100 query
-   - Connection được tái dùng có state cũ (vd transaction chưa commit)
-   - Lần thứ N (khi pool recycle) -> state lẫn lộn -> data sai
-
-3. JWT VERSION DESYNC
-   - JWT chứa cart_version, server tăng version mỗi update
-   - Bug: version increment không atomic
-   - Sau N update -> client_version != server_version -> 401 hoặc data cũ
+Bug:
+  Lần 1-1000: tất cả 1000 user đều có ngăn riêng, cart OK
+  Lần 1001: user mới đến, server evict cart user "ít dùng nhất"
+            (giả sử user X)
+  Lần 1002: user X login lại -> cart không còn trong cache
+            -> server LẼ RA phải fallback đọc từ database
+            -> NHƯNG bug ở chỗ: code chỉ đọc cache, không có fallback
+            -> trả về cart RỖNG cho user X
 ```
+
+**Vì sao test 1 lần per user không bắt được?**
+
+```text
+Test với 30 user, mỗi user 1 lần:
+  - Tổng 30 entry trong cache
+  - Cap 1000 chưa đầy -> không trigger evict
+  - 30 user đều OK -> bug không xuất hiện
+  - Đến production có 5000 user thì BÙM, mất cart hàng loạt
+
+Test với 30 user × 5 lần = 150 entries (vẫn chưa overflow):
+  - Vẫn không bắt được trực tiếp
+  - NHƯNG có thể chỉnh test data để evict sớm:
+    - Set cap = 50 (test config)
+    - 30 user × 5 lần = 150 thao tác -> evict liên tục
+    - Lần 4-5 của user 1 sẽ bị evict bởi user 30
+    - Bug lộ ra: lần 5 mua cart user 1 rỗng
+```
+
+**Cách phát hiện**: monitor log có entry `cache_miss_after_set` cho cùng user.
+
+#### Nguyên nhân 2: DATABASE SESSION POOL RECYCLE
+
+**Connection pool là gì?** Server không tạo connection mới mỗi query (tốn ~50ms
+TCP handshake). Thay vào đó, init sẵn 50 connection, query xong "trả về pool"
+để query khác dùng tiếp.
+
+**Recycle là gì?** Mỗi connection có giới hạn lifetime (vd 100 query). Sau đó
+phải đóng và tạo mới (tránh memory leak, kết nối stale với DB).
+
+```text
+Pool 50 connection, mỗi connection cap 100 query:
+  Query 1-100   của connection #1: OK
+  Query 101     của connection #1: LIB AUTO-RECYCLE
+                                   - đóng connection cũ
+                                   - tạo connection mới
+                                   - giao cho query 101
+
+Bug stateful (race condition khi recycle):
+  Khi connection được "trả về pool" sau query 100:
+    - LIB chuẩn: connection.reset() -> clear transaction state
+    - LIB BUG : quên reset -> connection còn state cũ
+
+  Query 101 dùng connection có state cũ:
+    - Nếu query 100 đang trong transaction CHƯA COMMIT
+    - Query 101 (của user khác) thấy data dở dang
+    - Hoặc bị "READ UNCOMMITTED" data
+    - Hoặc INSERT của user A bị attribute cho user B
+```
+
+**Ví dụ thực tế trong code Java/Hibernate**:
+
+```java
+// Bug: AutoCommit không reset khi recycle
+@Transactional
+public void buy(User u) {
+  // begin transaction
+  cart.update(u);            // query 1
+  // bug: ngay sau dòng này, connection bị recycle
+  payment.charge(u);          // query 2 - chạy trên CONNECTION KHÁC
+  // commit
+}
+// Kết quả: cart.update committed, payment.charge rollback
+// User mất hàng nhưng vẫn bị trừ tiền
+```
+
+**Vì sao test 1 lần per user không bắt được?**
+
+```text
+Lần 1 mua:
+  - Connection #1 query 1-3 -> OK
+  - Lifetime mới 3/100 -> chưa recycle
+  - Test pass
+
+Lần 2 mua:
+  - Connection #1 query 4-6 -> OK
+  - Vẫn chưa recycle
+  - Test pass
+
+Lần thứ N (khi tổng query đạt 100):
+  - Connection recycle giữa transaction
+  - State lẫn lộn -> data sai
+  - Bug lộ ra
+
+→ Test 1 lần × 30 user = 30×3 = 90 query
+→ Chưa đạt 100 -> không trigger recycle
+→ Production có 1000 user/giờ -> trigger nhanh -> production bị bug
+```
+
+**Cách phát hiện**: monitor metric `db_connection_recycled_count`. Test phải đảm
+bảo `query_total > pool_size × recycle_threshold` để trigger recycle ít nhất 1 lần.
+
+#### Nguyên nhân 3: JWT VERSION DESYNC
+
+**JWT là gì?** Token mà server cấp cho client để xác thực. Trong JWT có
+thể nhúng metadata như `cart_version`:
+
+```json
+{
+  "user_id": "user-1",
+  "cart_version": 5,           ← server tăng lên mỗi lần update cart
+  "exp": 1716800000
+}
+```
+
+**Why version?** Để chống "double spend": user gửi 2 request cùng lúc thay
+đổi cart, server phải biết cái nào là cart "mới nhất".
+
+```text
+Flow đúng:
+  Lần 1: client gửi cart_version=5
+         server check: server_version=5 -> OK, update -> server_version=6
+         server cấp JWT mới với cart_version=6
+  Lần 2: client gửi cart_version=6 (JWT mới)
+         server: 6 == 6 -> OK
+```
+
+**Bug: increment KHÔNG ATOMIC**:
+
+```text
+2 request đồng thời (race condition):
+  Request A: read server_version=5
+  Request B: read server_version=5    (cùng lúc)
+  Request A: increment + write -> server_version=6
+  Request B: increment + write -> server_version=6  ← oops, cũng 6
+                                                      lẽ ra phải là 7
+
+Kết quả: 2 update nhưng version chỉ tăng 1 lần
+  Server cấp JWT có cart_version=6 cho cả A và B
+  -> client đều có "cart_version=6" trong JWT
+  -> nhưng cart trong DB thực ra đã update 2 lần
+  -> request thứ 3 của user A: gửi cart_version=6
+     server check: 6 vs 6 -> tưởng OK, NHƯNG cart đã có data của B trộn vào
+```
+
+**Code anti-pattern (Java/Spring)**:
+
+```java
+// SAI: read-modify-write không atomic
+@Transactional(isolation = READ_COMMITTED)
+public void updateCart(User u) {
+  int v = db.getVersion(u);     // read
+  // ... thao tác cart
+  db.setVersion(u, v + 1);       // write (race tại đây)
+}
+
+// ĐÚNG: dùng UPDATE WHERE atomic
+db.execute(
+  "UPDATE cart SET version=version+1, items=? WHERE user=? AND version=?",
+  newItems, userId, currentVersion
+);
+// affected_rows = 0 -> version đã thay đổi -> retry
+```
+
+**Vì sao test 1 lần per user không bắt được?**
+
+```text
+Lần 1: 1 request -> không có race -> OK
+Lần 2: 1 request -> không có race -> OK
+...
+Mãi không trigger được race condition
+
+Phải đảm bảo:
+  - Cùng user (cùng JWT)
+  - Nhiều request liên tiếp
+  - Có thể song song (2 tab, http.batch)
+
+→ per-vu-iterations + http.batch trong iter -> tạo race chính xác cho cùng user
+→ Xem case 06 (cart-concurrency) cho pattern này
+```
+
+**Cách phát hiện**: monitor `jwt_version_mismatch_count`. Test phải có ít nhất
+2 request song song cùng user trong 1 iter để trigger race.
 
 **Vì sao mỗi account phải chạy đủ M lần ĐỀU NHAU?**
 
