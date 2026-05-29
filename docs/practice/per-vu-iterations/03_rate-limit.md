@@ -14,32 +14,125 @@ limiter mới, cần verify SLA chính xác:
 - KHÔNG có request nào nhầm scope (user A bị limit do user B spam)
 ```
 
-## Why per-vu-iterations?
+## Vì sao "rate limit test" buộc chọn per-vu-iterations?
+
+Trước khi vào kỹ thuật, hiểu **rate limit** là gì:
 
 ```text
-Rate limit count THEO USER (theo token), không phải global.
-Phải đảm bảo:
-  - Mỗi VU = 1 user phân biệt
-  - VU đó SPAM 150 lần liên tục với cùng token
-  - Hit ngưỡng 100 -> bị throttle
+Rate limit = "giới hạn số request mỗi user trong 1 khoảng thời gian".
 
-per-vu-iterations đảm bảo:
-  - vus=5 -> đúng 5 user phân biệt
-  - iterations=150 per VU -> mỗi user spam đủ 150
-  - Total = 5 × 150 = 750 request, deterministic
+Đời thường:
+  Quầy vé chỉ bán tối đa 100 vé/người/ngày
+  Mua vé thứ 101 -> "hết hạn mức, mai quay lại" (= HTTP 429)
 
-Nếu dùng constant-vus 5 VU × 30s:
-  ❌ Không biết bao nhiêu request mỗi user gửi
-  ❌ Khó verify "user X bị limit ở request thứ 101"
-
-Nếu dùng shared-iterations 750:
-  ❌ 5 VU chia chung 750 -> phân phối lệch
-  ❌ User nhanh có thể spam 200 lần, user chậm chỉ 50
-
-Nếu dùng constant-arrival-rate:
-  ❌ Rate-driven, không bound user với VU
-  ❌ Không đảm bảo "1 user = 150 req"
+Vì sao đếm THEO USER, không phải global?
+  - SLA: "100 req/phút mỗi token"
+  - User A spam không được làm ảnh hưởng hạn mức user B
+  - Mỗi token có bộ đếm RIÊNG
 ```
+
+Để verify rate limiter **đúng**, test phải đảm bảo **2 yêu cầu cốt lõi**.
+Chỉ per-vu-iterations mới thỏa mãn cả 2.
+
+### Yêu cầu (a): CÙNG TOKEN SPAM ĐỦ N REQUEST (vượt ngưỡng)
+
+**Ý nghĩa**: Phải có 1 user gửi đủ >100 request với CÙNG token để hit ngưỡng.
+Nếu request rải rác nhiều token → không token nào đạt ngưỡng → không test được.
+
+```text
+Flow đúng (cùng user, spam liên tục):
+  User A (VU 1): req 1-100  với token-A -> 200 OK
+  User A (VU 1): req 101-150 với token-A -> 429 (vượt ngưỡng)
+
+Vì sao per-vu đảm bảo?
+  - 1 VU = 1 user = 1 token cố định (lưu ở iter 0)
+  - iterations=150 -> VU đó gửi đúng 150 req với cùng token
+  - Bộ đếm server cho token-A chắc chắn đạt 150 -> trigger 429
+```
+
+**Vì sao executor khác fail?**
+
+```text
+✗ constant-vus / arrival-rate:
+  - VU pool random -> token không cố định cho 1 user qua các req
+  - Request rải đều nhiều token -> mỗi token chỉ ~30 req -> KHÔNG ai đạt 100
+  - 429 không bao giờ xuất hiện -> test "pass" giả (false negative)
+```
+
+### Yêu cầu (b): COUNT REQUEST PER USER CHÍNH XÁC
+
+**Ý nghĩa**: Phải biết CHÍNH XÁC user gửi bao nhiêu req để verify "req thứ
+101 bắt đầu 429". Nếu count biến thiên → không verify được ranh giới.
+
+**3 nguyên nhân kỹ thuật khiến rate limiter dễ sai**:
+
+#### Nguyên nhân 1: SLIDING vs FIXED WINDOW (ranh giới đếm khác nhau)
+
+**2 kiểu đếm phổ biến**, hành vi ở ranh giới rất khác:
+
+```text
+FIXED WINDOW (đơn giản, có burst bug):
+  - Chia thời gian thành ô cố định: [0-60s], [60-120s]
+  - Đếm lại từ 0 mỗi ô
+  - BUG: user gửi 100 req ở giây 59 + 100 req ở giây 61
+         -> 200 req trong 2 giây nhưng KHÔNG bị limit
+         (vì rơi vào 2 window khác nhau)
+
+SLIDING WINDOW (chính xác hơn):
+  - Đếm 60s GẦN NHẤT tính từ thời điểm request
+  - req thứ 101 trong bất kỳ 60s nào -> 429
+
+→ Test phải gửi đủ req để CHẠM ranh giới window
+→ per-vu: kiểm soát chính xác số req + thời điểm -> test được cả 2 kiểu
+```
+
+#### Nguyên nhân 2: DISTRIBUTED COUNTER LAG (nhiều server đếm lệch)
+
+**Vấn đề**: Production có nhiều instance server, mỗi instance giữ counter
+riêng, sync về Redis chậm → user có thể vượt ngưỡng tạm thời.
+
+```text
+2 server, load balancer chia request:
+  Server 1: đếm token-A = 50 (chưa sync)
+  Server 2: đếm token-A = 50 (chưa sync)
+  Redis tổng: lẽ ra 100, nhưng mỗi server tưởng mới 50
+  -> user gửi được 150 req trước khi sync kịp -> vượt SLA
+
+Fix: atomic INCR trên Redis trung tâm (không đếm local)
+
+→ Test 1 user gửi nhiều req nhanh -> phát hiện counter lag
+→ per-vu: cùng token spam liên tục -> stress counter sync
+```
+
+#### Nguyên nhân 3: TOKEN BUCKET REFILL (hồi hạn mức sai nhịp)
+
+**Token bucket** = thuật toán phổ biến: mỗi user có "xô" chứa N token,
+mỗi request tiêu 1 token, xô tự refill R token/giây.
+
+```text
+Bucket cap=100, refill=10/s:
+  - Spam 100 req tức thì -> xô cạn -> req 101 bị 429
+  - Chờ 1s -> refill 10 token -> gửi thêm 10 req OK
+  - BUG: refill tính sai (vd refill mỗi request thay vì mỗi giây)
+         -> hạn mức không bao giờ cạn -> SLA vô dụng
+
+→ Test phải spam đủ để cạn bucket, rồi verify refill đúng nhịp
+→ per-vu: iterations cố định -> biết chính xác bao nhiêu req đã tiêu
+```
+
+#### Tổng kết: chỉ per-vu thỏa mãn cả (a) và (b)
+
+| Executor | (a) Cùng token spam đủ N | (b) Count per user chính xác | Verdict |
+| --- | --- | --- | --- |
+| **per-vu-iterations** | ✓ token cố định, N req | ✓ vus × iters chính xác | ✅ DÙNG |
+| shared-iterations | ✗ token random theo VU | ✗ phân phối req không đều | ❌ |
+| constant-vus (duration) | ✗ token không cố định | ✗ count phụ thuộc latency | ❌ |
+| constant-arrival-rate | ✗ rate-driven, rải token | ✗ không bound user-token | ❌ |
+| ramping-vus | ✗ VU spawn lệch | ✗ count biến thiên | ❌ |
+| ramping-arrival-rate | ✗ rate-driven | ✗ không bound user | ❌ |
+
+→ Chỉ **per-vu-iterations** đảm bảo "1 user spam đủ N req với cùng token",
+điều kiện BẮT BUỘC để hit ngưỡng và verify rate limiter chính xác.
 
 ## Config
 
