@@ -58,24 +58,89 @@ Nếu count phụ thuộc latency:
   - latency cao  -> ít journey hoàn thành (vd 100)
   - latency thấp -> nhiều journey hoàn thành (vd 200)
   - mỗi lần test count khác -> không compare được
+```
 
-Loại các executor có count biến thiên:
-  ✗ constant-vus duration "5m":
-    count = 5min × throughput, mà throughput = vus / iter_time
-    iter_time biến thiên 5-30% -> count biến thiên cùng
-    Lần 1: 145 journey (server hơi chậm)
-    Lần 2: 168 journey (server nhanh hơn)
-    -> không compare được
+**Phân tích sâu: vì sao 2 executor "duration-based" không đảm bảo count?**
 
-  ✗ constant-arrival-rate "30/s for 5m":
-    Có thể drop nếu sizing thiếu -> count không đủ
-    Lần 1: 9000 / 9000 (đủ)
-    Lần 2: 8500 / 9000 (drop 5.5% do server slow)
-    -> không compare được
+`constant-vus` với `duration: "5m"`:
+
+```text
+Công thức count khi chạy:
+  count_journey = duration × throughput
+                = 300s × (vus / iter_time)
+                = 300s × (30 / iter_time)
+                = 9000 / iter_time
+
+iter_time KHÔNG cố định, biến thiên do:
+  - HTTP latency (mạng, server load, GC pause)
+  - DB query time (cache hit/miss, lock contention)
+  - External API (payment gateway, captcha service)
+  - JS V8 warmup ở 30s đầu
+
+Ví dụ thực tế chạy 3 lần liên tiếp cùng config:
+  Lần 1: server vừa restart, cache cold
+    iter_time avg = 2.07s -> count = 9000/2.07 = 4348 journey
+  Lần 2: cache đã warm, network ổn
+    iter_time avg = 1.79s -> count = 9000/1.79 = 5028 journey
+  Lần 3: GC pause 200ms ở giữa test
+    iter_time avg = 2.34s -> count = 9000/2.34 = 3846 journey
+
+  Range: 3846 - 5028 (chênh 30%)
+  -> Không thể compare baseline qua 3 lần này
+```
+
+`constant-arrival-rate` với `rate: 30/s, duration: "5m"`:
+
+```text
+Mục tiêu config: "30 journey/s × 300s = 9000 journey TOTAL"
+
+Nhưng KHÔNG đảm bảo đạt 9000 vì có thể DROP slot:
+  - Khi rate target > năng lực VU pool
+  - Khi server chậm bất thường ở 1 đoạn (database lock, GC)
+  - Khi spawn VU không kịp lúc đầu
+
+Công thức thực tế:
+  N_done = N_sched - N_drop - N_int
+         = 9000 - N_drop - N_int
+
+Ví dụ thực tế:
+  Lần 1: pool vừa khít, không drop
+    N_drop = 0, N_done = 9000  (perfect)
+  Lần 2: server có 30s chậm ở giữa (database backup)
+    N_drop = 500, N_done = 8500
+  Lần 3: cache cold ở 60s đầu
+    N_drop = 250, N_int = 50, N_done = 8700
+
+  Range: 8500 - 9000 (chênh 5.5%)
+  -> Vẫn không thể compare baseline fair
+```
+
+**Trong khi đó với `per-vu-iterations`**:
+
+```text
+Config: vus=30, iterations=5
+N_done = vus × iterations = 30 × 5 = 150 (TUYỆT ĐỐI)
+
+Lần 1: server chậm  -> 150 journey, T_run=180s, p95=2.5s
+Lần 2: server nhanh -> 150 journey, T_run=110s, p95=1.5s
+Lần 3: server bình thường -> 150 journey, T_run=140s, p95=1.9s
+
+Count CỐ ĐỊNH ở 150 mỗi lần.
+Chỉ có T_run + latency thay đổi -> đó CHÍNH LÀ cái cần đo!
+
+→ p95 latency là biến quan tâm, count là constant -> compare fair được
+```
+
+**Tóm tắt 3 executor về count**:
+
+| Executor | Count formula | Có biến thiên không? |
+| --- | --- | --- |
+| **per-vu-iterations** | `vus × iterations` | KHÔNG (tuyệt đối) |
+| constant-vus (duration) | `duration × vus / iter_time` | CÓ (do iter_time) |
+| constant-arrival-rate | `N_sched - N_drop - N_int` | CÓ (do drop/int) |
 
 → COUNT phải CHÍNH XÁC, KHÔNG phụ thuộc latency
 → Chỉ executor đếm theo "vus × iters" hoặc "iterations cố định" mới đạt
-```
 
 #### Yêu cầu (b): COVER MỌI BUG STATEFUL
 
