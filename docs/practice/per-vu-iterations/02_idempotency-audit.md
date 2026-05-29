@@ -14,22 +14,134 @@ Yêu cầu nghiệp vụ:
   - Idempotency-Key bound vào customer + order, KHÔNG đổi giữa retry
 ```
 
-## Why per-vu-iterations?
+## Vì sao "idempotency audit" buộc chọn per-vu-iterations?
+
+Trước khi vào kỹ thuật, hiểu **idempotency** là gì:
 
 ```text
-Mỗi VU = 1 customer:
-  - Idempotency-Key tính 1 LẦN ở iter 0
-  - 4 iter sau dùng CÙNG key
-  - server PHẢI nhận ra "đây là retry" và dedupe
+Idempotency = "gửi lại nhiều lần CŨNG CHỈ tính 1 lần".
 
-Nếu dùng constant-vus:
-  - VU random pick -> 1 customer có thể bị 1 VU spam, customer khác 0 lần
-  - hoặc __VU không stable trên session-level -> key không đoán được
+Đời thường:
+  Bấm thang máy 5 lần -> thang vẫn chỉ đến 1 lần (không đến 5 lần)
+  Idempotency-Key = "lời hứa": cùng key -> server xử lý ĐÚNG 1 lần
 
-Nếu dùng shared-iterations:
-  - 100 iter chia chung 20 VU -> không đảm bảo "mỗi customer 5 retry"
-  - VU nhanh có thể nhận 10 retry, VU chậm chỉ 2 -> audit sai
+Vì sao quan trọng với payment?
+  - User bấm "Thanh toán", mạng lag, user bấm lại
+  - Không có idempotency -> charge 2 lần -> khách mất tiền oan
+  - Có idempotency -> lần 2 server nhận ra key cũ -> trả kết quả cũ,
+    KHÔNG charge lại
 ```
+
+Để audit cơ chế này **có giá trị**, test phải đảm bảo **2 yêu cầu cốt lõi**.
+Chỉ per-vu-iterations mới thỏa mãn cả 2.
+
+### Yêu cầu (a): KEY STABLE PER CUSTOMER (key không đổi giữa các retry)
+
+**Ý nghĩa**: Mỗi customer phải gửi **CÙNG Idempotency-Key** qua tất cả lần
+retry. Nếu key đổi → server tưởng là request mới → charge lại → test sai.
+
+```text
+Flow đúng (cùng customer, cùng key):
+  Customer A, iter 0: key="idem-A-order123" -> charge FRESH
+  Customer A, iter 1: key="idem-A-order123" -> server thấy key cũ -> REUSE
+  Customer A, iter 2-4: cùng key -> REUSE
+  => 1 fresh + 4 reuse
+
+Vì sao per-vu đảm bảo điều này?
+  - 1 VU = 1 customer
+  - Key tính 1 LẦN ở iter 0, lưu vào biến per-VU
+  - 4 iter sau cùng VU -> đọc lại biến đó -> CÙNG key
+  - State per-VU sống qua iter -> key bound chắc vào customer
+```
+
+**Vì sao executor khác fail?**
+
+```text
+✗ constant-vus / arrival-rate:
+  - __VU không stable cho 1 customer qua các iter
+  - VU pool tái sử dụng -> iter này VU 3 là customer A, iter sau là customer B
+  - Key tính theo __VU -> bị nhảy -> server thấy toàn key mới -> charge hết
+  - Audit cho kết quả SAI: 100 fresh thay vì 20 fresh + 80 reuse
+```
+
+### Yêu cầu (b): MỖI CUSTOMER RETRY ĐỦ N LẦN
+
+**Ý nghĩa**: Bug idempotency thường chỉ lộ ở lần retry thứ 2, 3... (không
+phải lần đầu). Mỗi customer phải retry đủ N lần để bắt được.
+
+**3 nguyên nhân kỹ thuật của bug idempotency**:
+
+#### Nguyên nhân 1: CACHE TTL EXPIRY (key hết hạn quá sớm)
+
+**Cache idempotency là gì?** Server lưu `key -> response` trong cache (Redis)
+để lần retry sau trả lại response cũ. Cache có TTL (time-to-live), vd 60s.
+
+```text
+Bug: TTL quá ngắn so với retry window
+  Iter 0 (t=0s):   key="idem-A", charge, lưu cache TTL=10s
+  Iter 1 (t=3s):   key cũ còn trong cache -> REUSE OK
+  Iter 2 (t=12s):  key đã HẾT HẠN (>10s) -> cache miss
+                   -> server tưởng request mới -> CHARGE LẠI
+                   -> DOUBLE CHARGE
+
+→ Test 2 lần liên tiếp nhanh (< TTL) -> không bắt được
+→ Phải retry đủ N lần kéo dài qua TTL -> mới lộ bug
+→ per-vu: kiểm soát được số retry + thời gian giữa retry
+```
+
+#### Nguyên nhân 2: RACE ON FIRST WRITE (2 retry đầu đến cùng lúc)
+
+**Vấn đề**: Nếu 2 request CÙNG key đến gần như đồng thời (trước khi lần đầu
+kịp lưu cache), cả 2 đều thấy "cache miss" → cả 2 đều charge.
+
+```text
+Race condition:
+  Request 1 (t=0.000s): check cache -> miss -> bắt đầu charge
+  Request 2 (t=0.001s): check cache -> vẫn miss (R1 chưa lưu xong)
+                        -> cũng bắt đầu charge
+  Request 1 (t=0.050s): charge xong, lưu cache
+  Request 2 (t=0.051s): charge xong, ghi đè cache
+  => DOUBLE CHARGE dù cùng key
+
+Fix đúng: dùng atomic SETNX (set if not exists) hoặc DB unique constraint
+
+→ Test tuần tự (sleep giữa retry) -> không bao giờ trigger race
+→ Phải gửi song song (http.batch) cùng key -> mới lộ bug
+→ per-vu + http.batch: tạo race chính xác cho cùng customer (xem Variation A)
+```
+
+#### Nguyên nhân 3: KEY SCOPE COLLISION (key trùng giữa customer)
+
+**Vấn đề**: Nếu key chỉ là `order_id` (không kèm customer_id), 2 customer
+khác nhau có cùng order_id (do reset counter) → server nhầm là retry.
+
+```text
+Bug scope:
+  Customer A: key="order-1" -> charge $100
+  Customer B: key="order-1" (trùng do counter reset) -> server thấy key cũ
+              -> REUSE response của A -> B KHÔNG bị charge
+              -> B nhận hàng MIỄN PHÍ (hoặc thấy đơn của A)
+
+Fix đúng: key phải kèm scope -> "customer-A-order-1" vs "customer-B-order-1"
+
+→ Test 1 customer -> không bao giờ thấy collision
+→ Phải test nhiều customer ĐỒNG THỜI với key pattern rõ ràng
+→ per-vu: mỗi VU = customer riêng -> verify key scope không đụng nhau
+```
+
+#### Tổng kết: chỉ per-vu thỏa mãn cả (a) và (b)
+
+| Executor | (a) Key stable per customer | (b) Mỗi customer đủ N retry | Verdict |
+| --- | --- | --- | --- |
+| **per-vu-iterations** | ✓ key bound vào VU | ✓ mỗi VU retry đúng N lần | ✅ DÙNG |
+| shared-iterations | ✗ VU pick random key | ✗ phân phối retry không đều | ❌ |
+| constant-vus (duration) | ✗ __VU không stable | ✗ số retry phụ thuộc latency | ❌ |
+| constant-arrival-rate | ✗ identity rời VU | ✗ rate-driven, retry rời rạc | ❌ |
+| ramping-vus | ✗ VU spawn/despawn | ✗ số retry biến thiên | ❌ |
+| ramping-arrival-rate | ✗ rate-driven | ✗ retry không bound customer | ❌ |
+
+→ Chỉ **per-vu-iterations** đảm bảo "cùng customer gửi cùng key đủ N lần",
+điều kiện BẮT BUỘC để audit idempotency chính xác.
 
 ## Config
 
