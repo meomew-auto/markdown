@@ -6,6 +6,32 @@ QA team chuẩn bị release version mới. Họ cần đảm bảo các flow ng
 chính (login → browse → add to cart → checkout → confirm order)
 **vẫn hoạt động đúng như version cũ** — không bị "regression".
 
+### 3 nguyên nhân nghiệp vụ dẫn tới chọn per-vu-iterations
+
+```text
+1. TEST DATA CỐ ĐỊNH (fixed N accounts):
+   - QA có database test với đúng 30 accounts (qa-user-1 .. qa-user-30)
+   - Mỗi account đã seed sẵn: history orders, saved cart, address book
+   - Test phải dùng ĐÚNG 30 accounts này, không tạo random user
+   → vus = 30 (số account cố định)
+   → __VU map sang qa-user-${__VU} (identity bound)
+
+2. COVERAGE PER ACCOUNT (mỗi account verify state qua nhiều lần):
+   - Yêu cầu: mỗi account chạy ≥ 5 journey để chắc chắn state consistency
+     (vd kiểm tra bug "lần thứ 3 mua thì cart bị reset")
+   - 1 journey không đủ phát hiện bug stateful
+   → iterations = 5 (mỗi VU = mỗi account chạy 5 lần)
+   → KHÔNG shared-iterations vì account nhanh sẽ "cướp" lần của account chậm
+
+3. REPRODUCIBLE BASELINE (so sánh qua các release):
+   - v1.0: 150 journey, baseline p95=1.8s
+   - v1.1: 150 journey, baseline p95=2.1s
+   - Compare ĐÚNG cùng workload mới fair
+   → total = vus × iterations = 150 (DETERMINISTIC)
+   → KHÔNG constant-vus với duration vì count phụ thuộc latency,
+     mỗi release count khác nhau, không compare được
+```
+
 > **Regression là gì?** = lỗi xuất hiện ở chức năng đã chạy đúng trước
 > đây, sau khi code thay đổi (bug cũ quay lại, hoặc feature cũ bị hỏng
 > do code mới).
