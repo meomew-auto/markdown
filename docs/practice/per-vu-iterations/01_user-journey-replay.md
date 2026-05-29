@@ -6,6 +6,57 @@ QA team chuẩn bị release version mới. Họ cần đảm bảo các flow ng
 chính (login → browse → add to cart → checkout → confirm order)
 **vẫn hoạt động đúng như version cũ** — không bị "regression".
 
+### Vì sao "regression test" buộc chọn per-vu-iterations?
+
+Regression test có **2 yêu cầu cốt lõi**, chỉ per-vu mới thỏa mãn cả 2:
+
+#### Yêu cầu (a): REPRODUCIBLE INPUT (input giống nhau qua các release)
+
+```text
+Lý do: muốn compare v1.0 vs v1.1 fair thì PHẢI cùng workload.
+  - v1.0: 150 journey, p95=1.8s
+  - v1.1: 150 journey, p95=2.1s    <- tăng 17%, regression!
+  - v1.1: 200 journey, p95=2.1s    <- không biết tăng do code hay do
+                                      workload khác
+
+→ COUNT phải CHÍNH XÁC, không phụ thuộc latency
+→ Loại constant-vus với duration (count = duration / iter_time, biến thiên)
+```
+
+#### Yêu cầu (b): COVER MỌI BUG STATEFUL
+
+Bug stateful = bug chỉ xuất hiện sau N lần thao tác liên tiếp cùng 1 account,
+không xuất hiện ở lần đầu.
+
+```text
+Ví dụ thực tế:
+  Lần 1 mua: OK
+  Lần 2 mua: OK
+  Lần 3 mua: cart bỗng rỗng -> BUG
+
+Nguyên nhân thường gặp:
+  - Cache cart bị overflow sau N items
+  - Database session pool bị recycled
+  - JWT chứa cart_version, sau N update bị desync
+
+→ MỖI account phải chạy ĐỦ M lần (vd 5) liên tiếp để bắt bug này
+→ Mỗi account chạy M = đều nhau, không lệch
+→ Loại shared-iterations vì 100 iter chia 30 VU không đều:
+  - Account fast nhận 10 lần
+  - Account slow nhận 0 lần
+  - Bỏ sót bug ở account slow
+```
+
+#### Tổng kết: chỉ per-vu thỏa mãn cả (a) và (b)
+
+| Executor | Reproducible count | Mỗi account đủ M lần | Verdict |
+| --- | --- | --- | --- |
+| **per-vu-iterations** | ✓ vus × iters | ✓ mỗi VU chạy M lần | ✅ DÙNG |
+| shared-iterations | ✓ count cố định | ✗ phân phối không đều | ❌ |
+| constant-vus (duration) | ✗ phụ thuộc latency | ✗ random VU pick | ❌ |
+| constant-arrival-rate | ✗ có thể drop | ✗ identity không bound VU | ❌ |
+| ramping-vus | ✗ count biến thiên | ✗ VU spawn lệch theo time | ❌ |
+
 ### 3 nguyên nhân nghiệp vụ dẫn tới chọn per-vu-iterations
 
 ```text
