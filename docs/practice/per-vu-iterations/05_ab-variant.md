@@ -160,14 +160,52 @@ export const options = {
 
 ## Variant assignment
 
+**Code thật từ file pvi-05-ab-variant.js**:
+
 ```js
+// ───── Module-level scope (GIỮ qua 5 view) ─────
 let userVariant = null;
 let userSegment = null;
 
-if (__ITER === 0) {
-  userVariant = __VU % 2 === 0 ? "a" : "control";
-  userSegment = __VU < 50 ? "premium" : "free";
+// ───── Trong default() ─────
+export default function () {
+  // Iter 0: assign variant -> LƯU VÀO MODULE-LEVEL
+  if (__ITER === 0) {
+    userVariant = __VU % 2 === 0 ? "a" : "control";  // ← GIỮ
+    userSegment = __VU < 50 ? "premium" : "free";      // ← GIỮ
+  }
+
+  // Mọi iter: gửi request với variant ĐÃ GHI TỪ ITER 0
+  const res = http.get(`${BASE_URL}/api/sim/products/homefeed`, {
+    headers: {
+      "X-User-Segment": userSegment,
+      "X-Ab-Variant": userVariant,
+    },
+  });
+
+  if (userVariant === "a") variantA.add(1);
+  else variantControl.add(1);
 }
+```
+
+**Trace execution cho VU=2 và VU=3**:
+
+```text
+VU=2 (chẵn):
+  Iter 0: userVariant = "a"
+  Iter 1: userVariant VẪN = "a"   ← ĐỌC TỪ MODULE-LEVEL
+  Iter 2-4: vẫn "a"
+  → variantA count nhận 5 view
+
+VU=3 (lẻ):
+  Iter 0: userVariant = "control"
+  Iter 1: userVariant VẪN = "control"  ← ĐỌC TỪ MODULE-LEVEL
+  Iter 2-4: vẫn "control"
+  → variantControl count nhận 5 view
+
+→ 50 VU chẵn (A) × 5 view = 250
+  50 VU lẻ (control) × 5 view = 250
+  Balanced 50/50 ✓
 ```
 
 → VU=1 → control, VU=2 → A, VU=3 → control, ... balanced 50/50.

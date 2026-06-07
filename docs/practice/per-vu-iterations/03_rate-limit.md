@@ -164,16 +164,50 @@ const count429 = new Counter("count_429");
 
 ## Per-VU state
 
-```js
-let userToken = null;  // tính ở iter 0, dùng 150 lần
+**Code thật từ file pvi-03-rate-limit.js**:
 
-if (__ITER === 0) {
-  userToken = `user-token-${__VU}`;
+```js
+// ───── Module-level scope (GIỮ qua 150 lần spam) ─────
+let userToken = null;
+
+// ───── Trong default() ─────
+export default function () {
+  if (__ITER === 0) {
+    userToken = `user-token-${__VU}`;
+    // ↑ module-level: GHI ở iter 0, ĐỌC ở iter 1-149
+  }
+
+  const res = http.get(`${BASE_URL}/api/sim/products`, {
+    headers: { "Authorization": `Bearer ${userToken}` },
+    tags: { name: "rate_limit_test", iter: String(__ITER) },
+  });
+
+  if (res.status === 200) count200.add(1);
+  else if (res.status === 429) count429.add(1);
 }
 ```
 
+**Trace execution cho VU=1 qua 150 iter**:
+
+```text
+Iter 0:   userToken = "user-token-1"     ← GHI module-level
+          req#1  với token "user-token-1" -> 200
+
+Iter 50:  userToken VẪN = "user-token-1" ← ĐỌC TỪ MODULE-LEVEL
+          req#51 với token "user-token-1" -> 200
+
+Iter 100: req#101 -> 200 (vẫn OK, chưa vượt ngưỡng 100)
+Iter 101: req#102 -> 429 (VƯỢT NGƯỠNG!)
+          header "Retry-After" có mặt -> ✓
+Iter 149: req#150 -> 429
+
+→ 100 × 200, 50 × 429 -> đúng SLA 100 req/phút
+→ token KHÔNG ĐỔI suốt 150 req -> bộ đếm server cho token này
+   tăng liên tục -> hit ngưỡng
+```
+
 > **Tại sao token không mất sau 150 lần spam?** Cùng cơ chế case 01:
-> module-level variable GIỮ qua iter trong cùng V8 isolate. Xem
+> module-level variable GIỮ qua iter. Xem
 > [case 01 / Per-VU state](./01_user-journey-replay.md#per-vu-state).
 
 ## Endpoint flow

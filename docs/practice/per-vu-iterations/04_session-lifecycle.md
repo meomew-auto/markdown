@@ -160,15 +160,62 @@ export const options = {
 
 ## Per-VU state
 
+**Code thật từ file pvi-04-session-lifecycle.js**:
+
 ```js
+// ───── Module-level scope (GIỮ qua 20 thao tác, kể cả khi refresh) ─────
 let accessToken = null;
 let refreshToken = null;
-let tokenIssuedAtIter = 0;  // track khi nào token cấp -> tính TTL
+let tokenIssuedAtIter = 0;   // track iter nào token được cấp
+
+// ───── Trong default() ─────
+export default function () {
+  // Iter 0: login -> ghi accessToken, refreshToken vào module-level
+  if (__ITER === 0) {
+    const tokens = login();
+    accessToken = tokens.access_token;     // ← module-level: GIỮ
+    refreshToken = tokens.refresh_token;   // ← module-level: GIỮ
+    tokenIssuedAtIter = 0;                 // ← module-level: GIỮ
+  }
+
+  // Mọi iter: gọi /me, nếu 401 -> refresh -> GHI ĐÈ module-level
+  const { res, simulated_status } = callMe(accessToken);
+
+  if (simulated_status === 401) {
+    const tokens = refresh(refreshToken);
+    accessToken = tokens.access_token;      // ← GHI ĐÈ token mới
+    refreshToken = tokens.refresh_token;    // ← GHI ĐÈ token mới
+    tokenIssuedAtIter = __ITER;             // ← update mốc cấp mới
+  }
+
+  doAction(accessToken);  // dùng token hiện tại (cũ hoặc vừa refresh)
+}
+```
+
+**Trace execution cho VU=1 qua 20 iter**:
+
+```text
+Iter 0: login -> accessToken="A1", refreshToken="R1", issuedAt=0
+        callMe("A1") -> 200
+        doAction("A1") -> OK
+
+Iter 1-9: callMe("A1") -> 200 -> OK
+          (token chưa expire)
+
+Iter 10: callMe("A1") -> 401 (token expired, đã qua TTL)
+         refresh("R1") -> accessToken="A2", refreshToken="R2"
+         ↑ GHI ĐÈ biến module-level
+         callMe("A2") -> 200 (verify refresh OK)
+         doAction("A2") -> OK
+
+Iter 11-19: callMe("A2") -> 200 -> OK
+            (token mới chưa expire)
 ```
 
 > **Tại sao token không mất sau khi refresh?** Cùng cơ chế case 01:
-> module-level variables GIỮ qua iter, kể cả khi ghi đè token mới
-> sau refresh. Xem [case 01 / Per-VU state](./01_user-journey-replay.md#per-vu-state).
+> module-level variables GIỮ qua iter — refresh ghi đè giá trị mới
+> lên CÙNG biến, iter sau đọc được token mới. Xem
+> [case 01 / Per-VU state](./01_user-journey-replay.md#per-vu-state).
 
 ## Endpoint flow
 

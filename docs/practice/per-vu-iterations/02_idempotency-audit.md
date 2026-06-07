@@ -174,16 +174,58 @@ const idemReuseCount = new Counter("idem_reuse_count");
 
 ## Per-VU state (sống qua 5 iter)
 
+**Code thật từ file pvi-02-idempotency-audit.js**:
+
 ```js
+// ───── Module-level scope (GIỮ qua 5 retry) ─────
 let customerToken = null;
 let orderId = null;
-let idempotencyKey = null;       // tính ở iter 0, dùng cả 5 lần
-let firstResponseSnapshot = null; // verify retry response giống fresh
+let idempotencyKey = null;        // tính 1 LẦN ở iter 0, dùng cả 5 lần
+let firstResponseSnapshot = null;  // snapshot response lần đầu -> verify retry
+
+// ───── Trong default() ─────
+export default function () {
+  if (__ITER === 0) {
+    customerToken = `cust-token-${__VU}`;
+    orderId = `order-${__VU}-${Date.now()}`;
+    idempotencyKey = `idem-${__VU}-${orderId}`;
+    // ↑ 3 biến module-level được GHI ở iter 0, ĐỌC ở iter 1-4
+  }
+
+  // Mọi iter: dùng CÙNG idempotencyKey (đã ghi từ iter 0)
+  const res = http.post(`/api/sim/orders/${orderId}/confirm`, ..., {
+    headers: { "Idempotency-Key": idempotencyKey },
+  });
+
+  if (__ITER === 0) {
+    firstResponseSnapshot = { status: res.status, body_len: res.body?.length };
+    idemFreshCount.add(1);       // fresh charge
+  } else {
+    idemReuseCount.add(1);       // retry -> dedupe
+    // Verify response giống lần đầu
+    check(res, { "same status as first": (r) => r.status === firstResponseSnapshot.status });
+  }
+}
 ```
 
-> **Tại sao state không mất?** Cùng cơ chế như case 01: mỗi VU có
-> JS isolate riêng, module-level variables GIỮ qua iter. Chi tiết xem
-> [case 01 / Per-VU state](./01_user-journey-replay.md#per-vu-state).
+**Trace execution cho VU=1 qua 5 iter**:
+
+```text
+Iter 0: idempotencyKey = "idem-1-order-1-1716800000"
+        gửi confirm -> fresh charge -> snapshot response
+        idemFreshCount=1, idemReuseCount=0
+
+Iter 1: idempotencyKey VẪN = "idem-1-order-1-1716800000"  ← ĐỌC TỪ MODULE-LEVEL
+        gửi confirm với CÙNG key -> server dedupe
+        verify response == firstResponseSnapshot -> OK
+        idemFreshCount=1, idemReuseCount=1
+
+Iter 2-4: tương tự -> idemReuseCount=2,3,4
+```
+
+> **Tại sao key không đổi qua 5 retry?** Cùng cơ chế case 01:
+> module-level variable GIỮ qua iter trong cùng V8 isolate.
+> Xem [case 01 / Per-VU state](./01_user-journey-replay.md#per-vu-state).
 
 ## Endpoint flow
 

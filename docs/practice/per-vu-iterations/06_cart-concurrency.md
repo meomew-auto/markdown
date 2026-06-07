@@ -175,9 +175,69 @@ Iter 9 (cuối): GET /cart/summary
   - Nếu < 30: lost-update detected
 ```
 
-> **Tại sao cùng user gửi request suốt 10 burst?** Cơ chế per-VU state
-> giống case 01: `let userId, userToken, expectedItemCount` ở module-level
-> GIỮ qua iter — user identity không đổi, cart count tích lũy. Xem
+**Code thật từ file pvi-06-cart-concurrency.js** — per-VU state mechanism:
+
+```js
+// ───── Module-level scope (GIỮ qua 10 burst) ─────
+let userId = null;
+let userToken = null;
+let expectedItemCount = 0;    // tích lũy số item đã add qua iter
+
+// ───── Trong default() ─────
+export default function () {
+  // Iter 0: setup identity
+  if (__ITER === 0) {
+    userId = `user-${__VU}`;           // ← GIỮ: user identity
+    userToken = `token-${__VU}`;       // ← GIỮ: auth token
+    expectedItemCount = 0;             // ← GIỮ: reset counter
+  }
+
+  // 3 cart_add SONG SONG (cùng user, 3 tab)
+  const requests = [];
+  for (let i = 0; i < 3; i++) {
+    requests.push({
+      method: "POST",
+      url: `/api/sim/cart/add`,
+      body: JSON.stringify({ product_id: ..., quantity: 1 }),
+      params: { headers: {
+        "Authorization": `Bearer ${userToken}`,
+        "X-User-Id": userId,
+      }},
+    });
+  }
+  const responses = http.batch(requests);
+  expectedItemCount += responses.filter(r => r.status === 200).length;
+
+  // Iter cuối: verify cart.total
+  if (__ITER === 9) {
+    const summary = http.get(`/api/sim/cart/summary`, {
+      headers: { "X-User-Id": userId },
+    });
+    // expectedItemCount = 10 burst × 3 items = 30
+    // nếu cart chỉ có 28 -> lost-update!
+  }
+}
+```
+
+**Trace execution cho VU=1 qua 10 iter**:
+
+```text
+Iter 0: userId = "user-1", userToken = "token-1"
+        batch add ×3 -> expectedItemCount = 3
+
+Iter 1: userId VẪN = "user-1" ← ĐỌC TỪ MODULE-LEVEL
+        batch add ×3 -> expectedItemCount = 6
+
+...Iter 2-8: expectedItemCount = 9, 12, 15, 18, 21, 24, 27
+
+Iter 9: batch add ×3 -> expectedItemCount = 30
+        GET /cart/summary -> verify cart.total == 30
+        ✓ cart total match: 30/30
+```
+
+> **Tại sao cùng user gửi request suốt 10 burst?** Cùng cơ chế case 01:
+> `let userId, userToken, expectedItemCount` ở module-level GIỮ qua iter
+> — user identity không đổi, cart count tích lũy. Xem
 > [case 01 / Per-VU state](./01_user-journey-replay.md#per-vu-state).
 
 ## Pattern http.batch
