@@ -508,6 +508,100 @@ let totalCartItems = 0;   // tích lũy qua iter
 → Đây là điểm mạnh của per-vu-iterations: state sống trong cùng VU
 xuyên suốt nhiều iter.
 
+### Vì sao state KHÔNG bị mất khi VU chạy iteration tiếp theo?
+
+Đây là cơ chế quan trọng nhất của `per-vu-iterations` — là lý do cả
+7 case trong series này chạy đúng.
+
+Trong k6, mỗi VU có 1 JS RUNTIME RIÊNG (V8 isolate). Module-level code
+chạy 1 LẦN duy nhất trong init phase. Sau đó, VU chỉ gọi LẠI default()
+nhiều lần — các biến ở module-level KHÔNG bị reset.
+
+**Code thật từ file pvi-01-user-journey-replay.js**:
+
+```js
+// ───── Module-level scope (top file) ─────
+// Chạy 1 LẦN trong init phase, GIỮ giá trị qua MỌI iter của VU này
+
+let session = null;       // ← GIỮ: iter 0 ghi, iter 1-4 đọc lại được
+let totalCartItems = 0;   // ← GIỮ: tích lũy +1 mỗi lần addToCart()
+
+// ───── Local scope (trong default()) ─────
+// RESET mỗi lần default() được gọi
+
+export default function () {
+  // Iter đầu: login (chỉ 1 lần per VU)
+  if (__ITER === 0) {
+    session = login();         // ← ghi vào module-level -> GIỮ
+  }
+
+  const idempotencyKey = `idem-${__VU}-${__ITER}`;  // ← local, RESET mỗi iter
+  const order = checkout(idempotencyKey);
+
+  addToCart(`prod-${__VU}-${__ITER}-a`);   // gọi hàm dùng session.token
+  totalCartItems += 1;                     // ← ghi vào module-level -> GIỮ
+
+  // Log: đọc session từ module-level (đã ghi từ iter 0)
+  console.log(`user=${session?.user.username} | cart_items=${totalCartItems}`);
+}
+```
+
+**Trace execution cho VU=1 qua 5 iter**:
+
+```text
+Init phase: let session = null, let totalCartItems = 0   (1 lần duy nhất)
+
+Iter 0: __ITER=0 -> session = login() -> session = {token: "A1", user:...}
+        addToCart ×2 -> totalCartItems = 2
+        Log: "user=qa-user-1 | cart_items=2"
+
+Iter 1: __ITER=1 -> bỏ qua login (__ITER != 0)
+        session VẪN = {token: "A1"}    ← ĐỌC LẠI ĐƯỢC từ module-level
+        addToCart ×2 -> totalCartItems = 4 (tích lũy)
+        Log: "user=qa-user-1 | cart_items=4"
+
+Iter 2: totalCartItems = 6
+Iter 3: totalCartItems = 8
+Iter 4: totalCartItems = 10 (cuối)
+```
+
+**Phân biệt rõ**:
+
+```text
+Module-level scope (let ở top file):
+  - session, totalCartItems                ← GIỮ QUA ITER
+  - Chạy 1 lần trong init phase
+  - default() đọc/ghi -> giá trị tồn tại đến khi VU kết thúc
+
+Local scope (const/let TRONG default()):
+  - idempotencyKey, order, temp variables ← RESET MỖI ITER
+  - Mỗi lần default() gọi -> tạo mới
+  - Hết iter -> biến bị discard
+```
+
+**So sánh với executor khác**:
+
+```text
+shared-iterations:
+  iter 1 do VU=A, iter 2 do VU=B -> isolate KHÁC
+  -> session ở isolate A KHÔNG tồn tại trong isolate B
+  -> token "mất" -> mỗi iter phải login lại
+
+constant-vus:
+  mỗi VU cũng có isolate riêng, nhưng VU pool reuse
+  -> VU=A chạy iter của user X, xong chạy iter của user Y
+  -> session bị ghi đè bởi user khác -> "mất identity"
+
+per-vu-iterations:
+  VU=A LUÔN chạy iter của cùng identity A
+  -> isolate A giữ state của user A qua mọi iter -> KHÔNG MẤT
+```
+
+> **Áp dụng cho series**: mọi case sau (02-07) dùng cùng cơ chế này.
+> Khi thấy `let xxx = null` ở đầu file JS → đó là per-VU state sống
+> qua iter. Các case doc sau sẽ không giải thích lại, chỉ note "xem
+> case 01 / Per-VU state".
+
 ## Cách chạy
 
 > Stack setup chung: xem [RUN_GUIDE.md](RUN_GUIDE.md). Phần dưới chỉ ghi

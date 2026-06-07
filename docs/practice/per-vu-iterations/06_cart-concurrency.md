@@ -175,6 +175,11 @@ Iter 9 (cuối): GET /cart/summary
   - Nếu < 30: lost-update detected
 ```
 
+> **Tại sao cùng user gửi request suốt 10 burst?** Cơ chế per-VU state
+> giống case 01: `let userId, userToken, expectedItemCount` ở module-level
+> GIỮ qua iter — user identity không đổi, cart count tích lũy. Xem
+> [case 01 / Per-VU state](./01_user-journey-replay.md#per-vu-state).
+
 ## Pattern http.batch
 
 ```js

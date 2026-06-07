@@ -172,6 +172,10 @@ if (__ITER === 0) {
 
 → VU=1 → control, VU=2 → A, VU=3 → control, ... balanced 50/50.
 
+> **Tại sao variant không đổi khi VU chạy 5 view?** Cùng cơ chế case 01:
+> `let userVariant` ở module-level GIỮ qua iter. Gán 1 lần ở iter 0,
+> 4 iter sau đọc lại giá trị cũ. Xem [case 01 / Per-VU state](./01_user-journey-replay.md#per-vu-state).
+
 ## Endpoint flow
 
 ```text

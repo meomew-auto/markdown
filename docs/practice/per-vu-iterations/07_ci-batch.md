@@ -175,6 +175,12 @@ Mỗi iter:
 Total: 2 req × 1000 iter = 2000 req
 ```
 
+> **Case này KHÔNG dùng per-VU state**: mỗi iter là 2 request độc lập,
+> không có token, session, cart cần giữ qua iter. Đây là trường hợp
+> đặc biệt — per-vu được chọn vì count chính xác, không phải vì state
+> persistence. Các case khác (01-06) đều dùng state, xem
+> [case 01 / Per-VU state](./01_user-journey-replay.md#per-vu-state).
+
 ## Pass criteria (CI gate)
 
 ```text

@@ -181,6 +181,10 @@ let idempotencyKey = null;       // tính ở iter 0, dùng cả 5 lần
 let firstResponseSnapshot = null; // verify retry response giống fresh
 ```
 
+> **Tại sao state không mất?** Cùng cơ chế như case 01: mỗi VU có
+> JS isolate riêng, module-level variables GIỮ qua iter. Chi tiết xem
+> [case 01 / Per-VU state](./01_user-journey-replay.md#per-vu-state).
+
 ## Endpoint flow
 
 ```text

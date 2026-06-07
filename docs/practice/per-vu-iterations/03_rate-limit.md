@@ -172,6 +172,10 @@ if (__ITER === 0) {
 }
 ```
 
+> **Tại sao token không mất sau 150 lần spam?** Cùng cơ chế case 01:
+> module-level variable GIỮ qua iter trong cùng V8 isolate. Xem
+> [case 01 / Per-VU state](./01_user-journey-replay.md#per-vu-state).
+
 ## Endpoint flow
 
 ```text

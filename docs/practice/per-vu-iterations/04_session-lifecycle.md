@@ -166,6 +166,10 @@ let refreshToken = null;
 let tokenIssuedAtIter = 0;  // track khi nào token cấp -> tính TTL
 ```
 
+> **Tại sao token không mất sau khi refresh?** Cùng cơ chế case 01:
+> module-level variables GIỮ qua iter, kể cả khi ghi đè token mới
+> sau refresh. Xem [case 01 / Per-VU state](./01_user-journey-replay.md#per-vu-state).
+
 ## Endpoint flow
 
 ```text
