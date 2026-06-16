@@ -659,6 +659,76 @@ running (XX.Xs), 0/30 VUs, 150 complete and 0 interrupted iterations
     vus_max............: 30
 ```
 
+### Nghịch lý: 1 iter mất 2.45s nhưng 1 giây chạy được 3 iter?
+
+Đây là chỗ người mới hay nhầm khi đọc output:
+
+```text
+iteration_duration: avg=2.45s    <- 1 iter mất 2.45 giây
+iterations:         3.0/s         <- nhưng 1 giây ra 3 iter
+
+Sao 1 iter mất 2.45s mà mỗi giây lại ra được 3 iter?
+"Lẽ ra 2.45s mới ra 1 iter chứ?"
+```
+
+**Trả lời: vì NHIỀU VU chạy SONG SONG, không phải 1 VU.**
+
+Phân biệt 2 con số đo 2 thứ khác nhau:
+
+```text
+iteration_duration = thời gian 1 VU làm xong 1 iter
+                     (đo trên TỪNG iter riêng lẻ) = 2.45s
+
+iterations rate    = tổng iter hoàn thành / tổng thời gian
+                     (throughput của CẢ POOL VU cộng lại) = 3.0/s
+```
+
+**Công thức nối 2 con số** (chính là Little's Law):
+
+```text
+rate = vus / iter_time
+
+Kiểm chứng ngược với output:
+  iter_time = 2.45s, rate = 3.0/s
+  => vus = rate × iter_time = 3.0 × 2.45 ≈ 7.35 ≈ 8 VU
+  -> khớp với config VUS=8 ✓
+```
+
+**Ví dụ trực quan** (8 VU chạy song song):
+
+```text
+8 VU cùng start, mỗi VU mất 2.45s cho 1 iter:
+
+t=0.00s: VU1..VU8 cùng bắt đầu iter
+t=2.45s: VU1..VU8 cùng xong -> 8 iter trong 2.45s
+         => rate = 8 / 2.45 ≈ 3.27 iter/s
+
+Mỗi iter VẪN mất 2.45s (KHÔNG nhanh hơn).
+Nhưng 8 cái chạy CÙNG LÚC -> mỗi giây "gặt" được ~3 iter.
+```
+
+Đời thường:
+
+```text
+8 đầu bếp, mỗi người nấu 1 tô phở mất 2.45 phút:
+  - 1 tô VẪN mất 2.45 phút (không nhanh hơn)
+  - nhưng 8 người nấu song song -> mỗi phút ra ~3 tô
+```
+
+**Vì sao 3.0 chứ không đúng 3.27 (= 8/2.45)?**
+
+```text
+- Có sleep() giữa request -> iter_time đo đã gồm sleep, nhưng ramp +
+  login iter 0 làm rate thực thấp hơn lý thuyết
+- 8 VU không start đúng cùng t=0 tuyệt đối (ramp-up vài ms)
+- maxDuration cắt -> iter cuối chưa xong không được tính
+
+=> rate thực 3.0 hơi thấp hơn 3.27, lệch vài % là bình thường
+```
+
+→ Ghi nhớ: **iteration_duration là thời gian 1 iter; rate là throughput
+của cả pool**. Hai con số nối nhau bằng `rate = vus / iter_time`.
+
 ## Pass criteria
 
 ```text
