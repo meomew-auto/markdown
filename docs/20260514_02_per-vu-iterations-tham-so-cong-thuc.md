@@ -21,6 +21,7 @@ Các link hay dùng trong file này:
 - [Core chạy như nào](#12-core-chạy-như-nào)
 - [Checklist core đã lọc](#13-checklist-core-đã-lọc-cho-per-vu-iterations)
 - [Gom nhanh metric theo executor](#14-gom-nhanh-metric-theo-executor)
+- [Flow tổng hợp: 1 lần chạy per-vu diễn ra như nào](#15-flow-tổng-hợp-1-lần-chạy-per-vu-iterations-diễn-ra-như-nào)
 - [Bảng tham số tiếng Việt](#2-bảng-tham-số-tiếng-việt)
 - [Công thức nền](#3-công-thức-nền)
 - [Dùng `avg`, `med`, `p90`, `p95` của `iteration_duration`](#dùng-avg-med-p90-p95-của-iteration_duration-như-nào)
