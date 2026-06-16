@@ -406,6 +406,96 @@ Vì vậy khi xem summary của executor này, đọc theo thứ tự:
 4. rồi mới soi http_reqs, checks, data_sent, data_received
 ```
 
+### 1.5. Flow tổng hợp: 1 lần chạy `per-vu-iterations` diễn ra như nào?
+
+Phần này gom các mảnh rải rác ở trên (core chạy 1.2, metric 1.4, công thức
+mục 3) thành 1 mạch kể theo timeline, để hình dung trọn vẹn 1 lần chạy.
+
+**Ví dụ đời thường trước** (để bám theo cả flow):
+
+```text
+Lớp học có 8 học sinh (= 8 VU), mỗi em phải làm ĐÚNG 5 bài (= iterations).
+  - Phát đề: mỗi em nhận 1 xấp 5 bài RIÊNG
+  - Làm bài: 8 em làm SONG SONG, mỗi em làm tuần tự bài 1->5 của mình
+  - Em nào xong 5 bài thì NGỒI CHƠI (không làm hộ bạn)
+  - Hết giờ (maxDuration): em nào chưa xong -> bài còn lại bị BỎ (dropped)
+  - Lớp tan khi em CHẬM NHẤT làm xong (hoặc hết giờ)
+```
+
+**Timeline 6 giai đoạn** (config demo: `vus=8, iterations=5, sleep~2.45s/iter`):
+
+```text
+Giai đoạn 1 — INIT (trước khi tính giờ)
+  k6 tạo 8 V8 isolate (= 8 VU), mỗi isolate là 1 JS runtime riêng
+  -> chạy import + module-level scope 1 lần cho mỗi VU
+  -> let session=null, totalCartItems=0 khởi tạo (chưa có giá trị thật)
+  (thời gian init KHÔNG tính vào maxDuration — xem 1.2)
+
+Giai đoạn 2 — SPAWN (t=0, startTime bắt đầu)
+  executor lấy đúng 8 planned VU ra, start song song:
+    go handleVU(VU1) ... go handleVU(VU8)
+  -> 8 VU cùng vào vòng lặp riêng "for i in 0..5"
+
+Giai đoạn 3 — ITER 0 (mỗi VU setup state)
+  Mỗi VU chạy default() lần đầu (__ITER=0):
+    if (__ITER === 0) session = login();   // ghi vào module-level
+  -> session, token bây giờ CÓ giá trị thật, GIỮ cho các iter sau
+
+Giai đoạn 4 — ITER 1..4 (đọc lại state, không login lại)
+  Mỗi VU chạy default() tiếp, __ITER=1,2,3,4:
+    session VẪN còn (module-level sống qua iter) -> KHÔNG login lại
+    totalCartItems += 2 mỗi iter -> tích lũy 2,4,6,8,10
+  -> mỗi VU chạy TUẦN TỰ trong chính nó: iter0->1->2->3->4
+
+Giai đoạn 5 — VU XONG QUOTA -> IDLE
+  VU nhanh xong 5 iter trước -> NGỒI CHƠI (active nhưng không bận)
+  VU chậm vẫn đang chạy
+  -> phân biệt: "VU active" != "VU đang bận chạy iter" (xem 1.2)
+  -> nếu chạm maxDuration: VU chưa xong -> dropped_iterations += số iter còn lại
+
+Giai đoạn 6 — KẾT THÚC
+  Lớp tan khi VU chậm nhất xong (hoặc hết maxDuration)
+  Tổng iterations = 8 × 5 = 40 (nếu không drop)
+```
+
+**Code thật minh họa giai đoạn 3-4** (từ `examples/per-vu-iterations/pvi-01-user-journey-replay.js`):
+
+```js
+// Module-level: GIỮ qua iter (giai đoạn 1 khởi tạo, 3-4 dùng)
+let session = null;
+let totalCartItems = 0;
+
+export default function () {
+  // Giai đoạn 3: iter 0 setup state
+  if (__ITER === 0) {
+    session = login();        // ghi module-level -> sống qua iter
+  }
+
+  // Giai đoạn 4: iter 1-4 đọc lại state cũ
+  addToCart(...);             // totalCartItems += 1 (tích lũy)
+  // session vẫn dùng được, KHÔNG login lại
+}
+```
+
+**Throughput của flow này** (vì 8 VU song song — xem mục 3 + công thức):
+
+```text
+1 iter mất ~2.45s (iteration_duration), NHƯNG 8 VU chạy song song
+-> rate = vus / iter_time = 8 / 2.45 ≈ 3.27 iter/s
+
+Đừng nhầm: iteration_duration đo 1 iter LẺ, iterations rate đo CẢ POOL.
+(Chi tiết nghịch lý này: xem practice case 01, section "Nghịch lý throughput")
+```
+
+**Bản đồ tới các section chi tiết**:
+
+```text
+Giai đoạn 1-2 (init, spawn)     -> mục 1.2 "Core chạy như nào"
+Giai đoạn 3-4 (state qua iter)  -> practice case 01 "state KHÔNG mất"
+Giai đoạn 5 (idle, drop)        -> mục 1.4 + "Demo dropped iterations" dưới
+Throughput                       -> mục 3 "Công thức nền" + 8.1 CT throughput
+```
+
 ### Demo dropped iterations do `maxDuration`
 
 Grafana docs cho ý này:
