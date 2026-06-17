@@ -3540,6 +3540,59 @@ export const options = {
 
 ### 8.1. 5 công thức TOP cần thuộc lòng
 
+#### Bản đồ 5 công thức nối với nhau như nào (đọc cái này trước)
+
+Thay vì phải nhảy xuống cuối từng CT để đọc "Liên hệ với CT khác", nhìn
+1 sơ đồ này là thấy hết luồng phụ thuộc:
+
+```text
+            ┌── CT 1: total_iter = vus × iterations
+            │        (số iter THEO KẾ HOẠCH, không cần đo gì)
+ INPUT      │
+ (config) ──┤── CT 2: T_vu_i = iterations × iter_time_i
+            │        (cần iter_time -> phải ĐO iteration_duration)
+            │              │
+            │              ▼
+            └────── CT 3: T_max = max(T_vu_i)
+                          │   (VU chậm nhất quyết định)
+                          │
+        CT 4: peak_rate = vus / iter_time   (đứng RIÊNG, chỉ cần vus + iter_time)
+                          │
+                          ▼
+                   CT 5: T_total_max = min(maxDuration, T_max) + gracefulStop
+                          │   (trần wall-clock thực sự)
+                          ▼
+            ┌─────────────────────────────────────────────┐
+            │ SAU TEST verify (đọc summary):               │
+            │   N_done (= iterations count) so với:        │
+            │     • total_iter (CT 1) -> đủ hay thiếu?     │
+            │     • T_max (CT 3)      -> chạy đúng giờ?    │
+            │     • T_total_max (CT 5)-> footer running()? │
+            └─────────────────────────────────────────────┘
+```
+
+Đọc luồng theo lời:
+
+```text
+CT 1 ─────────────────────► CT 5   (total_iter là mốc kỳ vọng để verify N_done)
+CT 2 ──► CT 3 ────────────► CT 5   (T_vu_i -> T_max -> trần wall-clock)
+CT 4                                (độc lập, chỉ để ước lượng load đỉnh)
+```
+
+Hai nhóm CT theo lúc dùng:
+
+| Dùng được TRƯỚC test (chỉ cần config) | Phải ĐO mới có (cần `iter_time`) |
+| --- | --- |
+| CT 1 (total_iter) | CT 2 (T_vu_i) |
+| — | CT 3 (T_max, vì lấy từ CT 2) |
+| — | CT 4 (peak_rate, cần iter_time) |
+| CT 5 phần `maxDuration`, `gracefulStop` | CT 5 phần `T_max` (từ CT 3) |
+
+Ghi nhớ 1 câu: **CT 1 là cái duy nhất biết chắc trước khi chạy** (phép
+nhân 2 số config), 4 CT còn lại đều cần `iter_time` đo từ
+`iteration_duration`. Vì vậy CT 1 vừa dùng để sizing (trước), vừa dùng
+làm mốc verify (sau) — xem chi tiết ở cuối CT 1.
+
 #### Công thức 1: "Tổng việc cần làm?" (Total iterations)
 
 ```text
@@ -3594,9 +3647,31 @@ shared-iterations:
 **Liên hệ với CT khác**:
 
 ```text
-CT 1 (total_iter) -> input cho CT 5 (verify N_done == total_iter ?)
-CT 1 không phụ thuộc iter_time, nên dùng được CẢ TRƯỚC test (sizing) và
-    SAU test (verify).
+CT 1 (total_iter) -> mốc kỳ vọng để verify ở CT 5.
+
+Sau khi chạy, gọi N_done = số ở cột trái dòng `iterations` trong summary:
+  N_done == total_iter  -> chạy ĐỦ, không drop, không interrupt
+  N_done <  total_iter  -> THIẾU, đi tìm nguyên nhân:
+       thiếu = dropped_iterations + interrupted_iterations
+       (drop: iter chưa kịp start vì hết maxDuration -> xem CT 5 / CT 3)
+
+CT 1 KHÔNG phụ thuộc iter_time:
+  -> dùng TRƯỚC test  : sizing (chốt vus, iterations)
+  -> dùng SAU  test  : làm mốc so với summary
+  (4 CT còn lại đều cần iter_time đo được mới tính ra số)
+```
+
+Ví dụ verify bằng số:
+
+```text
+config: vus=10, iterations=20
+  -> total_iter = 10 × 20 = 200      (CT 1, biết trước khi chạy)
+
+Sau khi chạy, summary ghi: iterations....: 188
+  -> N_done = 188 < 200
+  -> thiếu 12 iter
+  -> nhìn thêm: dropped_iterations = 12  -> đúng là bị cắt ở maxDuration
+  -> sang CT 5 xem maxDuration có < T_max không (nguyên nhân drop)
 ```
 
 #### Công thức 2: "Mỗi nhân viên cần bao lâu?" (Per-VU runtime)
