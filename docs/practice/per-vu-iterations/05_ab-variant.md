@@ -264,9 +264,91 @@ k6 run -o cloud .\examples\per-vu-iterations\pvi-05-ab-variant.js
    - http_req_duration{variant=control}
 ```
 
-## Mở rộng
+## Kết luận thực tế: đọc output này thì team product quyết định gì?
 
-### A: Multi-variant 4-way split
+Mục tiêu nghiệp vụ: chạy A/B test với **exposure cân bằng tuyệt đối**
+(50/50) để so sánh variant A với control fair. Nếu phơi nhiễm lệch, mọi
+kết luận "variant A tốt hơn" đều vô giá trị.
+
+Nhắc lại kỳ vọng: variant A = 250 view, control = 250 view, EQUAL.
+
+### Kịch bản A — cân bằng + có chênh latency: CHỌN ĐƯỢC VARIANT
+
+```text
+variant_a_count.......: 250
+variant_control_count.: 250        (EQUAL ✓)
+http_req_failed.......: 0.00%
+
+http_req_duration{variant=a}.......: p95=1.2s
+http_req_duration{variant=control}.: p95=1.8s
+```
+
+Kết luận thực tế:
+
+```text
+- 250 = 250 -> exposure cân bằng -> so sánh FAIR
+- variant A p95 1.2s vs control 1.8s -> A nhanh hơn 33% trên cùng tải
+- 0 fail -> A không đánh đổi độ ổn định lấy tốc độ
+=> QUYẾT ĐỊNH: roll out variant A. Kết luận đáng tin vì hai nhánh nhận
+   ĐÚNG cùng số view (không phải "A nhanh hơn vì tình cờ nhận ít view").
+```
+
+### Kịch bản B — count lệch: KẾT QUẢ KHÔNG ĐÁNG TIN
+
+```text
+variant_a_count.......: 290
+variant_control_count.: 210        (LỆCH 290 vs 210!)
+```
+
+Kết luận thực tế:
+
+```text
+- Phơi nhiễm lệch 58/42 thay vì 50/50
+- mọi so sánh latency/conversion giữa 2 nhánh giờ bị nhiễu bởi cỡ mẫu khác nhau
+- KHÔNG kết luận được variant nào tốt hơn (giống yêu cầu "fair" của case 01)
+=> QUYẾT ĐỊNH: bỏ kết quả run này. Điều tra vì sao lệch:
+   - logic assign sai (vd __VU%2 nhưng VU bắt đầu từ số lẻ)?
+   - có VU bị drop/interrupt làm thiếu view một nhánh?
+   Sửa rồi chạy lại tới khi count EQUAL mới phân tích tiếp.
+```
+
+### Kịch bản C — cân bằng nhưng latency ngang nhau: KHÔNG ĐỦ BẰNG CHỨNG
+
+```text
+variant_a_count.......: 250
+variant_control_count.: 250        (EQUAL ✓)
+
+http_req_duration{variant=a}.......: p95=1.79s
+http_req_duration{variant=control}.: p95=1.81s
+```
+
+Kết luận thực tế:
+
+```text
+- Exposure fair, nhưng chênh latency chỉ ~1% -> nằm trong nhiễu
+- không đủ cơ sở nói A tốt hơn control
+=> QUYẾT ĐỊNH: chưa roll out chỉ dựa trên latency. Cần thêm metric
+   nghiệp vụ (conversion, click-through) hoặc tăng cỡ mẫu (iterations/vus)
+   để thấy khác biệt thật. "Cân bằng" chỉ đảm bảo so sánh đúng, không tự
+   tạo ra khác biệt.
+```
+
+### Bảng ánh xạ nhanh output → hành động
+
+| Output thấy gì | Nghĩa nghiệp vụ | Hành động |
+| --- | --- | --- |
+| 250=250, A nhanh hơn rõ | so sánh fair, A thắng | roll out A |
+| count lệch (≠ 250) | exposure không fair | bỏ run, sửa assign |
+| 250=250, latency ngang | fair nhưng không khác biệt | thêm metric/cỡ mẫu |
+| http_req_failed > 0 ở 1 nhánh | variant đó kém ổn định | điều tra trước khi chọn |
+| tổng ≠ 500 | test chưa chạy đủ | sửa count, chạy lại |
+
+Điểm cốt lõi: **giá trị của case này KHÔNG ở chỗ "A hay control nhanh
+hơn", mà ở chỗ đảm bảo so sánh FAIR**. Vì per-vu cố định 50 VU mỗi nhánh
+× 5 view, exposure luôn đúng 250/250 — bất kỳ khác biệt nào sau đó là tín
+hiệu thật về variant, không phải do cỡ mẫu lệch.
+
+## Mở rộng
 
 ```js
 const variants = ["a", "b", "c", "control"];
