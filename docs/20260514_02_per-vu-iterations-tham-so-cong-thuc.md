@@ -4405,7 +4405,9 @@ Câu hỏi: "Đang có peak=10/s, muốn lên 20/s. Đổi config gì?"
 | `N_drop` | "ren đờ-rốp" | Iter bị cắt (chưa kịp xong) | iter |
 | `N_int` | "ren in-tờ" | Iter đã start nhưng bị cancel | iter |
 
-### 8.5. 3 công thức "1 dòng" để giải mọi case (nhớ vĩnh viễn)
+### 8.5. Công thức "1 dòng" để giải mọi case (nhớ vĩnh viễn)
+
+3 dòng lõi (mechanics) — thuộc trước:
 
 ```text
 Tổng việc?         total iter = số VU × số iter mỗi VU
@@ -4413,9 +4415,21 @@ Hết bao lâu?       thời gian ≈ số iter × thời gian 1 iter (VU chậm
 Throughput đỉnh?   tốc độ đỉnh ≈ số VU / thời gian 1 iter
 ```
 
-Học thuộc 3 dòng này là dùng được 80% nhu cầu thực tế. KHÁC
+3 dòng đọc output (sau khi chạy) — thuộc thêm để đọc summary:
+
+```text
+Trung bình thật?   average rate = số iter xong / runtime_base   (≤ đỉnh)
+Mẫu số ở đâu?      runtime_base = count / rate  (đúng cho mọi Counter)
+Request/check?     http_reqs = tổng iter × số request mỗi iter
+```
+
+Học thuộc 6 dòng này là dùng được ~90% nhu cầu thực tế. KHÁC
 shared-iterations: ở đó "tổng việc" = `iterations` (1 con số chia chung),
 không phải phép nhân.
+
+Bẫy hay gặp nhất: **đỉnh ≠ trung bình**. Summary in `iterations: X/s` là
+TRUNG BÌNH (CT 6), KHÔNG phải đỉnh (CT 4). Đừng nhân thêm `vus` vào số
+summary — nó đã là tốc độ cả pool rồi.
 
 ### 8.6. Đọc output sau test: tìm số ở đâu?
 
