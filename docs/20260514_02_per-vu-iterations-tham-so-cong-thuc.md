@@ -4536,7 +4536,8 @@ trong Summary. Phải đọc dòng progress cuối cùng.
 
 ```text
 Header   -> vus, iterations, maxDuration, gracefulStop  [INPUT cho CT 1, 5]
-Summary  -> W (avg/max), N_done, N_drop, actual_rate    [OUTPUT cho CT 1, 2, 4, 5]
+Summary  -> W (avg/max), N_done, N_drop, actual_rate,    [OUTPUT cho CT 1,2,4,5,6,7]
+            http_reqs, checks_total
 Footer   -> T_run, N_int                                [OUTPUT cho CT 3, 5]
 
 Áp công thức theo thứ tự:
@@ -4545,6 +4546,8 @@ Footer   -> T_run, N_int                                [OUTPUT cho CT 3, 5]
    CT 3: T_max ≈ T_vu_max ≈ T_run (footer)
    CT 4: peak_rate = vus / W_avg, so với actual_rate (Summary)
    CT 5: N_done + N_drop + N_int = total_iter (kiểm tra đẳng thức)
+   CT 6: runtime_base = N_done / actual_rate; average_rate = actual_rate (≤ CT 4)
+   CT 7: http_reqs ?= total_iter × req_per_iter; rate = http_reqs / runtime_base
 ```
 
 ### 8.7. Quy trình 5 bước phân tích output
