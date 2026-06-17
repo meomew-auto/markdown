@@ -3538,9 +3538,9 @@ export const options = {
 
 5 dòng đủ chạy. Các field khác lấy default. Tổng iter = 3 × 5 = 15.
 
-### 8.1. 5 công thức TOP cần thuộc lòng
+### 8.1. 7 công thức TOP cần thuộc lòng
 
-#### Bản đồ 5 công thức nối với nhau như nào (đọc cái này trước)
+#### Bản đồ 7 công thức nối với nhau như nào (đọc cái này trước)
 
 Thay vì phải nhảy xuống cuối từng CT để đọc "Liên hệ với CT khác", nhìn
 1 sơ đồ này là thấy hết luồng phụ thuộc:
@@ -3568,7 +3568,13 @@ Thay vì phải nhảy xuống cuối từng CT để đọc "Liên hệ với C
             │     • total_iter (CT 1) -> đủ hay thiếu?     │
             │     • T_max (CT 3)      -> chạy đúng giờ?    │
             │     • T_total_max (CT 5)-> footer running()? │
-            └─────────────────────────────────────────────┘
+            └──────────────────┬──────────────────────────┘
+                               ▼
+        CT 6: average_rate = N_done / runtime_base   (LUÔN ≤ peak CT 4)
+                               │   runtime_base = count / rate
+                               ▼
+        CT 7: http_reqs = total_iter × req_per_iter  (rate = count / runtime_base)
+              checks_total = total_iter × checks_per_iter
 ```
 
 Đọc luồng theo lời:
@@ -3577,21 +3583,34 @@ Thay vì phải nhảy xuống cuối từng CT để đọc "Liên hệ với C
 CT 1 ─────────────────────► CT 5   (total_iter là mốc kỳ vọng để verify N_done)
 CT 2 ──► CT 3 ────────────► CT 5   (T_vu_i -> T_max -> trần wall-clock)
 CT 4                                (độc lập, chỉ để ước lượng load đỉnh)
+CT 1 + CT 6 ──────────────► CT 7   (đếm request/check, chia ra rate)
+CT 4 ≥ CT 6                         (peak luôn ≥ average; chênh = đuôi idle)
 ```
 
 Hai nhóm CT theo lúc dùng:
 
-| Dùng được TRƯỚC test (chỉ cần config) | Phải ĐO mới có (cần `iter_time`) |
+| Dùng được TRƯỚC test (chỉ cần config) | Phải ĐO mới có (cần `iter_time` / summary) |
 | --- | --- |
 | CT 1 (total_iter) | CT 2 (T_vu_i) |
-| — | CT 3 (T_max, vì lấy từ CT 2) |
-| — | CT 4 (peak_rate, cần iter_time) |
-| CT 5 phần `maxDuration`, `gracefulStop` | CT 5 phần `T_max` (từ CT 3) |
+| CT 7 phần count (`total_iter × N`) | CT 3 (T_max, vì lấy từ CT 2) |
+| CT 5 phần `maxDuration`, `gracefulStop` | CT 4 (peak_rate, cần iter_time) |
+| — | CT 5 phần `T_max` (từ CT 3) |
+| — | CT 6 (average_rate, cần N_done + runtime_base) |
+| — | CT 7 phần rate (cần runtime_base) |
 
 Ghi nhớ 1 câu: **CT 1 là cái duy nhất biết chắc trước khi chạy** (phép
-nhân 2 số config), 4 CT còn lại đều cần `iter_time` đo từ
-`iteration_duration`. Vì vậy CT 1 vừa dùng để sizing (trước), vừa dùng
-làm mốc verify (sau) — xem chi tiết ở cuối CT 1.
+nhân 2 số config); CT 7 phần count cũng suy ra trước được nếu code path
+cố định. Các CT còn lại cần `iter_time` đo từ `iteration_duration` hoặc
+số đọc từ summary. Vì vậy CT 1 vừa dùng để sizing (trước), vừa dùng làm
+mốc verify (sau) — xem chi tiết ở cuối CT 1.
+
+Phân nhóm theo MỤC ĐÍCH (nhớ theo cụm dễ hơn nhớ rời):
+
+```text
+Nhóm SỐ LƯỢNG (count) : CT 1 (iter), CT 7 (request/check)
+Nhóm THỜI GIAN        : CT 2 (per-VU), CT 3 (scenario), CT 5 (trần)
+Nhóm TỐC ĐỘ (rate)    : CT 4 (peak), CT 6 (average)
+```
 
 #### Công thức 1: "Tổng việc cần làm?" (Total iterations)
 
@@ -3951,9 +3970,177 @@ CT 5 < T_max        -> báo có drop (xem 8.3 "Có dropped_iterations")
 CT 5 = T_max + grace -> test chạy trọn, có thể có interrupted ở grace
 ```
 
+#### Công thức 6: "Throughput TRUNG BÌNH thực tế?" (Average rate)
+
+```text
+average_rate = N_done / runtime_base        (luôn ≤ peak_rate của CT 4)
+
+trong đó:
+  runtime_base = count / rate    (suy ngược từ bất kỳ Counter nào trong summary)
+```
+
+**Tiếng Việt**: "Tốc độ trung bình cả test = số iter hoàn thành chia cho
+thời gian mà summary dùng làm mẫu số. Con số này LUÔN nhỏ hơn peak (CT 4)."
+
+**Ví dụ đời thường**:
+
+```text
+QA team 10 người, mỗi case 5 phút. Lúc cả 10 cùng chạy: đỉnh = 2 case/phút
+(CT 4). NHƯNG người nhanh xong sớm ngồi không, cuối buổi chỉ còn 2 người
+chậm đang làm.
+
+Cả buổi: 200 case xong trong 100 phút
+  -> trung bình thực tế = 200 / 100 = 2 case/phút... KHÔNG, chờ đã:
+  -> nếu xong trong 110 phút (vì đuôi chậm) = 200 / 110 ≈ 1.8 case/phút
+
+=> trung bình (1.8) < đỉnh (2.0) vì giai đoạn cuối ít người làm.
+```
+
+**Áp vào k6**:
+
+```text
+Summary ghi:  iterations....: 200    19.98/s
+
+-> N_done = 200, average_rate = 19.98/s  (k6 tự in, KHÔNG cần nhân vus)
+
+Suy ngược mẫu số:
+  runtime_base = count / rate = 200 / 19.98 ≈ 10.01s
+
+So với peak (CT 4, demo 8 VU nhanh + 2 chậm):
+  peak_rate ≈ 44/s  (lúc cả 10 VU active)
+  average  ≈ 20/s   (cả test)
+  -> average < peak vì 8 VU nhanh xong sớm rồi idle
+```
+
+**Vì sao average LUÔN ≤ peak?**
+
+```text
+peak_rate (CT 4) = lúc TẤT CẢ vus còn active, đỉnh tức thời
+average_rate     = trải đều trên CẢ test, gồm cả đuôi ít VU
+
+Trong per-vu-iterations: VU nhanh xong quota -> idle (không steal work).
+-> số VU active GIẢM DẦN về cuối -> rate tụt -> kéo trung bình xuống.
+-> đây chính là câu docs nói "maximum throughput reached but NOT maintained"
+   (xem mục 5).
+
+Dấu "=" chỉ xảy ra khi mọi VU có iter_time GIỐNG HỆT và xong cùng lúc
+(không có đuôi idle). Thực tế gần như không bao giờ đạt.
+```
+
+**Vì sao `runtime_base = count / rate`?**
+
+```text
+Mọi metric Counter trong summary (iterations, http_reqs, checks_total)
+đều in dạng:  count    rate/s
+k6 tính rate = count / test_run_duration.
+
+=> đảo lại: runtime_base = count / rate
+   lấy từ Counter nào cũng ra CÙNG một mẫu số (xem 7.7.2 D.2).
+
+Lưu ý: runtime_base là mẫu số của summary, KHÔNG luôn = T_max (CT 3).
+Trong demo 1 scenario, startTime=0, không setup/teardown thì chúng gần
+nhau. Có nhiều scenario / có setup() thì đừng đồng nhất 2 số này.
+```
+
+**Khi nào dùng**:
+
+```text
+- Sau test: đọc throughput trung bình THẬT đã đạt (cột /s trong summary)
+- So sánh với peak (CT 4): chênh nhiều -> đuôi idle dài -> VU jitter cao
+- Suy runtime_base để bắc cầu sang CT 7 (đếm request/check)
+```
+
+**Liên hệ với CT khác**:
+
+```text
+CT 6 (average_rate) ≤ CT 4 (peak_rate)   luôn đúng, dấu = hiếm
+CT 6 cần N_done (từ CT 1 verify) và runtime_base
+CT 6 (runtime_base) -> input cho CT 7 (tính rate của http_reqs, checks)
+```
+
+#### Công thức 7: "Đếm request / check là bao nhiêu?" (Derived counters)
+
+```text
+http_reqs    = total_iter × req_per_iter
+checks_total = total_iter × checks_per_iter
+
+rate mỗi cái = count / runtime_base    (runtime_base từ CT 6)
+```
+
+**Tiếng Việt**: "Tổng request = tổng iter × số request mỗi iter. Tổng check
+tương tự. Muốn rate thì chia cho cùng mẫu số runtime_base."
+
+**Ví dụ đời thường**:
+
+```text
+QA team chạy 20 test case (total_iter). Mỗi case gọi API 2 lần + kiểm 2
+điều kiện.
+  -> tổng lượt gọi API = 20 × 2 = 40
+  -> tổng lượt kiểm    = 20 × 2 = 40
+
+Số case (20) KHÁC số lượt gọi API (40). Đừng cộng 40+40 thành "80 case".
+```
+
+**Áp vào k6**:
+
+```text
+config: vus=4, iterations=3  -> total_iter = 12 (CT 1)
+code:   1 iteration = 2 http.get() + 2 check()
+
+http_reqs    = 12 × 2 = 24
+checks_total = 12 × 2 = 24
+
+Summary thật:
+  iterations...: 12   2.3615/s
+  http_reqs....: 24   4.723/s    <- = 2 × iterations/s
+  checks_total.: 24   4.723/s
+
+Verify mẫu số chung:
+  runtime_base = 12 / 2.3615 ≈ 5.08s
+  runtime_base = 24 / 4.723  ≈ 5.08s   <- cùng số, đúng
+```
+
+**Vì sao KHÔNG cộng `http_reqs + checks` thành 1 số?**
+
+```text
+iterations   = số vòng default() xong       (Counter riêng)
+http_reqs    = số HTTP request đã gửi        (Counter riêng)
+checks_total = số lần check chạy             (Counter riêng)
+
+Ba metric ĐỘC LẬP, đo 3 thứ khác nhau. 24 request + 24 check KHÔNG phải
+48 iteration. Xem 7.7.3.
+```
+
+**Cảnh báo: chỉ đúng khi code path CỐ ĐỊNH**
+
+```text
+http_reqs = total_iter × req_per_iter  CHỈ đúng khi mọi completed
+iteration chạy đủ N request trên cùng nhánh code.
+
+Nếu có if/else, retry, hoặc request lỗi giữa chừng -> số request mỗi iter
+KHÔNG cố định -> phải đọc http_reqs THỰC TẾ trong summary, đừng tự nhân.
+```
+
+**Khi nào dùng**:
+
+```text
+- Trước test: ước lượng load HTTP server sẽ chịu
+  vd: peak_rate=44/s (CT 4) × 2 req/iter = server peak ~88 req/s
+- Sau test: verify http_reqs count khớp total_iter × req_per_iter
+            (lệch -> có branch/lỗi làm thiếu request)
+```
+
+**Liên hệ với CT khác**:
+
+```text
+CT 1 (total_iter) -> input cho CT 7 (nhân với req_per_iter)
+CT 6 (runtime_base) -> input cho CT 7 (chia ra rate)
+CT 7 + CT 4: peak request rate = peak_rate × req_per_iter
+```
+
 ### 8.2. Bảng tra nhanh: gặp tình huống nào, dùng công thức nào
 
-5 tình huống hay gặp với `per-vu-iterations`, mỗi tình huống dùng công
+7 tình huống hay gặp với `per-vu-iterations`, mỗi tình huống dùng công
 thức nào:
 
 ```text
@@ -3963,7 +4150,9 @@ thức nào:
 | 2. Có sẵn N VU, hỏi total iter chịu được  | CT 1 (đảo)      | CT 3, 5      |
 | 3. Muốn biết VU nào chậm nhất kéo scenario| CT 2, 3         | -            |
 | 4. Thiết kế ngược từ T_max mong muốn      | CT 2, 3         | CT 5         |
-| 5. Đã chạy xong, đọc summary              | CT 5            | CT 1, 3 verify |
+| 5. Đã chạy xong, đọc summary              | CT 5, 6         | CT 1, 3 verify |
+| 6. Hỏi throughput thực tế đạt bao nhiêu   | CT 6            | CT 4 (so peak) |
+| 7. Ước lượng load HTTP server sẽ chịu     | CT 7            | CT 1, 4      |
 ```
 
 #### Tình huống 1: "Sắp viết config, không biết đặt số bao nhiêu"
