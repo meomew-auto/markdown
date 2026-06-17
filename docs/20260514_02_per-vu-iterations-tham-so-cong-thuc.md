@@ -3659,9 +3659,16 @@ shared-iterations:
   VU rảnh thì lấy iter tiếp theo, đến khi pool trống thì xong.
 ```
 
-**Khi nào dùng**: trước khi viết test, để biết tổng tải hệ thống sẽ chịu
-(vd: 4 user × 5 scenario = 20 lượt request); hoặc sau khi chạy, để so với
-`iterations` count trong summary (verify test có chạy đủ không).
+**Khi nào dùng**:
+
+```text
+- Trước test (sizing): chốt tổng tải hệ thống sẽ chịu
+  vd: 4 user × 5 scenario = 20 lượt chạy -> 20 lượt request gốc
+- Sau test (verify): so total_iter với `iterations` count trong summary
+  vd: total_iter = 200 nhưng summary ghi 188 -> thiếu 12, đi tìm drop
+- Sizing ngược: biết tổng việc cần, chia ra vus và iterations
+  vd: cần 200 lượt, có 10 account -> iterations = 200 / 10 = 20
+```
 
 **Liên hệ với CT khác**:
 
@@ -3738,9 +3745,16 @@ con số `iter_time_i` (lấy từ avg, p95, hay đo cụ thể từng VU), CT 2
 chỉ là phép nhân cuối cùng. Buffer (nếu cần) đặt ở `iter_time` đầu vào
 (vd dùng p95 thay vì avg), không phải ở CT 2.
 
-**Khi nào dùng**: trước test để ước lượng từng VU mất bao lâu (giúp đặt
-`maxDuration` đủ lớn); sau test để hiểu vì sao scenario chạy lâu hơn dự
-kiến (do VU chậm nhất kéo dài).
+**Khi nào dùng**:
+
+```text
+- Trước test (sizing): ước lượng từng VU mất bao lâu, để đặt maxDuration đủ
+  vd: iterations=50, iter_time≈0.5s -> T_vu ≈ 50 × 0.5 = 25s
+- Sau test (diagnose): hiểu vì sao scenario lâu hơn dự kiến
+  vd: T_vu_max = 50 × 1.2s = 60s vì VU chậm nhất iter_time gấp đôi
+- Phát hiện jitter: so T_vu tính từ avg và từ max (iteration_duration)
+  vd: T_vu_avg=25s nhưng T_vu_max=60s -> chênh lớn -> VU chậm kéo đuôi idle
+```
 
 **Liên hệ với CT khác**:
 
@@ -3803,9 +3817,16 @@ Open model (constant-arrival-rate): rate cố định, scheduler ĐỀU NHỊP.
   -> có drop nếu VU không kịp nhận
 ```
 
-**Khi nào dùng**: trước test để đặt `maxDuration` đủ lớn cho VU chậm
-nhất; sau test để verify scenario có chạy đúng `T_max` không (so với
-footer `running (X.Xs)`).
+**Khi nào dùng**:
+
+```text
+- Trước test (sizing): đặt maxDuration đủ lớn cho VU chậm nhất
+  vd: T_max ≈ 25s -> đặt maxDuration ≥ 30s (buffer 1.2x)
+- Sau test (verify): so T_max với footer `running (X.Xs)`
+  vd: tính T_max ≈ 10s, footer ghi `running (10.0s)` -> khớp
+- Diagnose idle: T_max do VU chậm nhất; VU nhanh xong sớm thì ngồi không
+  vd: T_max=10s nhưng 8 VU xong từ giây 4 -> 6s cuối chỉ 2 VU chạy
+```
 
 **Liên hệ với CT khác**:
 
