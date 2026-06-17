@@ -296,9 +296,92 @@ Output console:
   ... cho cả 10 VU
 ```
 
-## Mở rộng
+## Kết luận thực tế: đọc output này thì team backend quyết định gì?
 
-### A: Test với load tăng dần concurrent count
+Mục tiêu nghiệp vụ: phát hiện **lost-update** — khi cùng 1 user gửi nhiều
+request thêm giỏ hàng SONG SONG (mở nhiều tab, bấm nhanh), server có ghi
+đủ mọi item hay bị mất do race condition. Mỗi user thêm 30 item; nếu cart
+cuối < 30 thì có item bị "nuốt".
+
+Nhắc lại kỳ vọng: 10 user đều cart đủ 30, 0 lost-update, tổng 100 iter.
+
+### Kịch bản A — cart đủ: GHI CART AN TOÀN
+
+```text
+cart_total_match...: 10
+cart_total_lost....: 0
+http_req_failed....: 0.00%
+iterations.........: 100
+```
+
+Kết luận thực tế:
+
+```text
+- 10/10 user có cart đúng 30 item dù 3 request/burst gửi song song
+- 0 lost-update -> server xử lý concurrent add an toàn (atomic/khóa đúng)
+=> QUYẾT ĐỊNH: cart service chịu được concurrent write per-user, an toàn.
+   User mở nhiều tab thêm hàng không bị mất item.
+```
+
+### Kịch bản B — cart_total_lost > 0: LOST-UPDATE (bug race)
+
+```text
+cart_total_match...: 6
+cart_total_lost....: 4         (> 0!)
+http_req_failed....: 0.00%
+
+console: [VU=3] ✗ cart total: 27/30  (mất 3 item)
+```
+
+Kết luận thực tế:
+
+```text
+- 4 user có cart THIẾU item dù mọi request đều trả 200 (0 fail)
+- vd user-3 add 30 nhưng cart chỉ 27 -> 3 lần ghi bị đè mất
+- nguyên nhân điển hình: read-modify-write không atomic
+  (2 request cùng đọc cart=[x], cùng ghi đè -> 1 lần ghi mất)
+=> QUYẾT ĐỊNH: chặn release. Báo dev sửa concurrency:
+   dùng atomic increment / row lock / optimistic version trên cart.
+   Đây là bug ẩn nhất — status 200 hết, chỉ lộ qua so item count.
+```
+
+### Kịch bản C — pass nhưng iter_time thấp bất thường: BATCH KHÔNG THẬT SỰ SONG SONG
+
+```text
+cart_total_match...: 10
+cart_total_lost....: 0
+iteration_duration: avg=15ms      (quá nhanh cho 3 request mạng!)
+```
+
+Kết luận thực tế:
+
+```text
+- "Pass" nhưng iter quá nhanh -> nghi 3 request KHÔNG chạy song song thật,
+  hoặc server xử lý tuần tự hóa (serialize) hết -> race chưa từng xảy ra
+- nếu race không xảy ra trong test thì "0 lost-update" KHÔNG chứng minh
+  được gì -> false confidence
+=> QUYẾT ĐỊNH: chưa tin kết quả. Kiểm tra http.batch có thật sự gửi song
+   song (xem timing từng request), hoặc tăng burst_size để ép race.
+   Pass mà không tạo được điều kiện race là "false pass".
+```
+
+### Bảng ánh xạ nhanh output → hành động
+
+| Output thấy gì | Nghĩa nghiệp vụ | Hành động |
+| --- | --- | --- |
+| match=10, lost=0, batch song song thật | ghi cart an toàn | release |
+| cart_total_lost > 0 | lost-update (race bug) | chặn, sửa atomic write |
+| match=10 nhưng iter quá nhanh | race chưa xảy ra | ép song song, chạy lại |
+| http_req_failed > 0 | server lỗi khi concurrent | điều tra lỗi server |
+| tổng ≠ 100 | test chưa chạy đủ | sửa count, chạy lại |
+
+Điểm cốt lõi: lost-update **chỉ xảy ra khi nhiều request CÙNG USER chạy
+song song**. Phải có cả hai: identity bound vào VU (per-vu đảm bảo) +
+http.batch (song song trong iter). status 200 không phát hiện được — chỉ
+so `cart.total` với số đã add mới thấy. Đây là bug stateful điển hình mục
+"Nguyên nhân 3" ở case 01 nói tới.
+
+## Mở rộng
 
 ```js
 // Mỗi đợt tăng số tab mở
