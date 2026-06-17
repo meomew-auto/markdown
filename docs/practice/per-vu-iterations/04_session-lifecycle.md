@@ -288,9 +288,90 @@ Bước 4: login_count=10, refresh_count=10, failed_after_refresh=0 ✓
 Bước 5: iter_time = action time + occasional refresh overhead
 ```
 
-## Mở rộng
+## Kết luận thực tế: đọc output này thì team auth quyết định gì?
 
-### A: Random TTL per user
+Mục tiêu nghiệp vụ: xác nhận **vòng đời session** đúng — token hết hạn
+giữa chừng thì refresh tự động THÀNH CÔNG, user không bị đá ra đăng nhập
+lại. Đây là trải nghiệm "đang dùng app thì bị logout đột ngột" mà case
+này phải chặn.
+
+Nhắc lại kỳ vọng: 10 login + 10 refresh + 0 fail sau refresh, tổng 200 iter.
+
+### Kịch bản A — refresh mượt: SESSION FLOW ĐÚNG
+
+```text
+login_count..........: 10
+refresh_count........: 10
+failed_after_refresh.: 0
+iterations...........: 200
+```
+
+Kết luận thực tế:
+
+```text
+- 10 login (1/user) + 10 refresh (1/user khi token expire ở iter 10)
+- 0 fail sau refresh -> token mới luôn dùng được ngay
+- user chạy đủ 20 thao tác không bị gián đoạn dù token hết hạn giữa chừng
+=> QUYẾT ĐỊNH: session lifecycle OK, refresh flow an toàn.
+   User dùng app liên tục không bị logout đột ngột.
+```
+
+### Kịch bản B — failed_after_refresh > 0: REFRESH HỎNG (đá user ra)
+
+```text
+login_count..........: 10
+refresh_count........: 10
+failed_after_refresh.: 7        (> 0!)
+```
+
+Kết luận thực tế:
+
+```text
+- Refresh chạy (10 lần) nhưng 7 user sau refresh vẫn gọi /me thất bại
+- nghĩa là token mới KHÔNG hợp lệ -> user bị 401 tiếp -> phải re-login
+- đây là bug "đang dùng app bị logout giữa chừng" -> mất giỏ hàng, mất form
+=> QUYẾT ĐỊNH: chặn release. Báo dev: refresh cấp token sai
+   (token mới chưa kịp propagate? cache cũ? refresh trả token nhưng
+   server chưa nhận?). Đây đúng bug mà test 1-lần-per-user KHÔNG bắt được
+   vì phải chạy QUA mốc expire mới lộ.
+```
+
+### Kịch bản C — refresh_count ≠ 10: TTL SAI
+
+```text
+login_count..........: 10
+refresh_count........: 0         (KHÔNG refresh lần nào!)
+failed_after_refresh.: 0
+```
+
+Kết luận thực tế:
+
+```text
+- 0 refresh nghĩa là token KHÔNG expire trong 20 iter -> TTL quá dài
+- test không thực sự kiểm tra được refresh flow -> "pass" này VÔ NGHĨA
+- (hoặc ngược lại refresh_count=40 -> token expire quá nhanh -> phiền user)
+=> QUYẾT ĐỊNH: chưa kết luận được gì về refresh. Chỉnh TTL test data để
+   token expire đúng quanh iter 10, chạy lại. Pass mà không refresh lần nào
+   là "false pass" — flow chính chưa được chạm tới.
+```
+
+### Bảng ánh xạ nhanh output → hành động
+
+| Output thấy gì | Nghĩa nghiệp vụ | Hành động |
+| --- | --- | --- |
+| 10 login, 10 refresh, 0 fail | session flow đúng | release |
+| failed_after_refresh > 0 | refresh cấp token sai | chặn, user bị logout |
+| refresh_count = 0 | token không expire (TTL dài) | chỉnh TTL, chạy lại |
+| refresh_count quá cao | token expire quá nhanh | chỉnh TTL, phiền user |
+| login_count > 10 | có user phải re-login | điều tra vì sao mất session |
+
+Điểm cốt lõi: bug này **chỉ lộ khi 1 user chạy QUA mốc token expire** rồi
+tiếp tục thao tác. Test 1 lần/user (iter < TTL) sẽ luôn pass mà không bao
+giờ chạm refresh. Vì per-vu cho mỗi user chạy đủ 20 iter liên tục trên
+cùng session, mốc expire ở iter 10 chắc chắn xảy ra — đó là điều kiện
+cần để verify refresh.
+
+## Mở rộng
 
 ```js
 // Mỗi user có TTL khác nhau (mô phỏng load balancer phân tải)
