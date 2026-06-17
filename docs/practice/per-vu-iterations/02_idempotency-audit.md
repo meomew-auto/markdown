@@ -319,9 +319,88 @@ T_run ≈ 1s (5 iter × 200ms)
 maxDuration = 3m -> dư rất nhiều
 ```
 
-## Mở rộng
+## Kết luận thực tế: đọc output này thì team payment quyết định gì?
 
-### Variation A: Test chống race trong cùng VU
+Mục tiêu nghiệp vụ: xác nhận **idempotency contract** đúng — 1 đơn chỉ bị
+charge tiền 1 lần dù client retry nhiều lần (mạng chập chờn, user bấm lại).
+Output ánh xạ sang quyết định "API thanh toán có an toàn để dùng không".
+
+Nhắc lại kỳ vọng: 20 fresh charge + 80 dedupe, mọi retry trả cùng response.
+
+### Kịch bản A — đúng contract: API AN TOÀN
+
+```text
+idem_fresh_count...: 20
+idem_reuse_count...: 80
+http_req_failed....: 0.00%
+checks "same status as first": 100%
+```
+
+Kết luận thực tế:
+
+```text
+- 20 fresh = đúng 20 lần charge tiền THẬT (1 per customer)
+- 80 reuse = 80 retry đều bị server dedupe, KHÔNG charge lại
+- retry trả cùng response lần đầu -> client thấy kết quả nhất quán
+=> QUYẾT ĐỊNH: idempotency contract OK, API an toàn cho retry.
+   Khách bấm "thanh toán" 5 lần vẫn chỉ mất tiền 1 lần.
+```
+
+### Kịch bản B — fresh > 20: LỖI DOUBLE-CHARGE (nghiêm trọng)
+
+```text
+idem_fresh_count...: 27        (> 20!)
+idem_reuse_count...: 73
+http_req_failed....: 0.00%
+```
+
+Kết luận thực tế:
+
+```text
+- 27 fresh charge nhưng chỉ có 20 customer -> 7 lần charge LẶP
+- nghĩa là 7 retry KHÔNG được dedupe -> server tính là đơn mới -> charge lại
+- status code vẫn 200 (0 fail) nên bug NÀY ẨN, chỉ lộ qua custom metric
+=> QUYẾT ĐỊNH: CHẶN release ngay. Đây là bug tiền bạc (khách bị trừ tiền
+   nhiều lần). Đúng cái case này sinh ra để bắt. Báo dev: key không được
+   lưu/đối chiếu đúng (cache TTL quá ngắn? key scope sai? race khi ghi cache?).
+   -> thử Variation A (http.batch) để xem có phải race condition không.
+```
+
+### Kịch bản C — reuse trả response khác lần đầu: CONTRACT HỎNG MỘT NỬA
+
+```text
+idem_fresh_count...: 20         (đúng)
+idem_reuse_count...: 80         (đúng count)
+checks "same status as first": 71%   (29% retry trả KHÁC!)
+```
+
+Kết luận thực tế:
+
+```text
+- Count đúng (không double-charge) NHƯNG retry trả response khác lần đầu
+- vd lần đầu trả {charged:true, tx:"123"}, retry trả {error:"already processed"}
+- client không phân biệt được "thành công" hay "lỗi" -> UX vỡ, có thể
+  hiển thị sai cho khách dù tiền đã trừ đúng
+=> QUYẾT ĐỊNH: chưa release. Không mất tiền nhưng contract chưa hoàn chỉnh.
+   Báo dev: dedupe phải trả LẠI response gốc từ cache, không tự sinh response mới.
+```
+
+### Bảng ánh xạ nhanh output → hành động
+
+| Output thấy gì | Nghĩa nghiệp vụ | Hành động |
+| --- | --- | --- |
+| fresh=20, reuse=80, retry same | contract đúng | release, API an toàn retry |
+| fresh > 20 | double-charge tiền | chặn release (bug nghiêm trọng) |
+| reuse response ≠ first | dedupe trả sai data | chặn release, sửa cache replay |
+| fresh + reuse ≠ 100 | test chưa chạy đủ | sửa count, chạy lại |
+| http_req_failed > 0 | server lỗi khi dedupe | điều tra lỗi server |
+
+Điểm cốt lõi: **status code 200 KHÔNG đủ để kết luận idempotency đúng**.
+Bug double-charge vẫn trả 200. Phải nhìn `idem_fresh_count` (custom metric)
+mới thấy. Vì per-vu cố định đúng 20 customer × 5 retry, con số fresh/reuse
+là tuyệt đối — lệch 1 đơn vị là phát hiện được ngay.
+
+## Mở rộng
 
 ```js
 // Gửi 5 retry SONG SONG (parallel) thay vì tuần tự

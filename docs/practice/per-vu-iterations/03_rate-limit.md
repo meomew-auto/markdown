@@ -307,6 +307,87 @@ Cần custom threshold: http_req_failed{status:!429} < 1%
 hoặc dùng tag để loại 429 ra.
 ```
 
+## Kết luận thực tế: đọc output này thì team API quyết định gì?
+
+Mục tiêu nghiệp vụ: xác nhận **rate limit per-user** đúng SLA "100
+req/phút mỗi user", và quan trọng nhất — **limit đếm RIÊNG từng user**,
+không phải gộp chung (user A spam không được làm user B bị chặn oan).
+
+Nhắc lại kỳ vọng: mỗi user 100×200 + 50×429, tổng 500 OK + 250 throttled.
+
+### Kịch bản A — đúng SLA: LIMIT HOẠT ĐỘNG ĐÚNG
+
+```text
+count_200..........: 500
+count_429..........: 250
+checks "429 has Retry-After": 100%
+iterations.........: 750
+```
+
+Kết luận thực tế:
+
+```text
+- Mỗi user đúng 100 OK rồi mới bị chặn -> SLA "100 req/phút" chính xác
+- 250 lần 429 đều có Retry-After -> client biết khi nào thử lại được
+- 5 user × cùng pattern -> limit đếm ĐỘC LẬP từng user (không gộp)
+=> QUYẾT ĐỊNH: rate limit đạt SLA, an toàn để bật production.
+   (http_req_failed ~33% là 429 mong đợi, KHÔNG phải lỗi — xem lưu ý trên.)
+```
+
+### Kịch bản B — count_200 > 500: LIMIT QUÁ LỎNG
+
+```text
+count_200..........: 640        (> 500!)
+count_429..........: 110
+```
+
+Kết luận thực tế:
+
+```text
+- Có user vượt 100 req mà vẫn được 200 -> limit không chặn đúng ngưỡng
+- vd limit thực tế đang là ~128 req thay vì 100 -> SLA sai
+- nguy cơ: 1 user spam có thể làm quá tải backend / lách quota tính tiền
+=> QUYẾT ĐỊNH: chưa bật. Báo team chỉnh ngưỡng counter về đúng 100.
+   (cửa sổ tính sai? counter reset sớm? off-by-one ở so sánh >=  vs >?)
+```
+
+### Kịch bản C — count_429 quá cao / lệch giữa user: LIMIT GỘP CHUNG
+
+```text
+count_200..........: 300        (< 500)
+count_429..........: 450        (> 250)
+
+Chia theo user (đọc tag/log):
+  user-1: 200 OK, user-2: 60 OK, user-3..5: ~13 OK mỗi user
+```
+
+Kết luận thực tế:
+
+```text
+- Tổng OK chỉ 300, và phân bố LỆCH giữa các user
+- user đầu "ăn" hết quota, user sau bị 429 dù chưa spam đủ 100
+- => limit đang đếm GỘP CHUNG cho cả hệ thống, KHÔNG tách theo user
+- đây là bug nghiêm trọng: user vô tội bị chặn vì user khác spam
+=> QUYẾT ĐỊNH: chặn. Báo dev: rate limit key phải bound theo user_id/token,
+   không phải global counter. Đây đúng cái per-vu sinh ra để phát hiện —
+   vì mỗi VU = 1 user cố định, lệch phân bố lộ ra ngay.
+```
+
+### Bảng ánh xạ nhanh output → hành động
+
+| Output thấy gì | Nghĩa nghiệp vụ | Hành động |
+| --- | --- | --- |
+| 500 OK + 250 429, đều theo user | SLA đúng, tách theo user | bật production |
+| count_200 > 500 | limit quá lỏng | chỉnh ngưỡng về 100 |
+| 429 thiếu Retry-After | client không biết chờ bao lâu | sửa header |
+| OK lệch nhiều giữa user | limit gộp chung (bug) | bound key theo user |
+| tổng req ≠ 750 | test chưa chạy đủ | sửa count, chạy lại |
+
+Điểm cốt lõi: **429 ở đây là KẾT QUẢ MONG ĐỢI, không phải lỗi**. Đừng
+nhìn `http_req_failed=33%` mà tưởng test fail. Phải nhìn `count_200` /
+`count_429` theo từng user. Vì per-vu cố định 5 user × 150 req, nếu limit
+tách đúng thì phân bố phải đều — lệch là bug "gộp chung".
+
 ## Mở rộng
 
 ### Variation A: Burst test
