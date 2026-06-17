@@ -785,6 +785,92 @@ T_run = max(T_vu) ≈ 12s (do VU chậm nhất)
   - Hoặc tăng iterations lên 30 (mỗi user 30 journey thay vì 5)
 ```
 
+## Kết luận thực tế: đọc output này thì QA quyết định gì?
+
+Pass criteria ở trên cho biết test "đạt hay không". Nhưng mục tiêu thật
+của case này là **regression gate**: output ra số như vậy thì QA QUYẾT
+ĐỊNH gì với release v1.1? Đây là phần ánh xạ output → hành động.
+
+Nhắc lại bối cảnh: 150 journey cố định, so p95 với baseline v1.0.
+
+### Kịch bản A — output sạch: RELEASE
+
+```text
+iterations.........: 150        (đủ, không thiếu)
+http_req_failed....: 0.00%
+checks_total.......: 1500, rate 100%
+iteration_duration: p(95)=1.85s
+interrupted........: 0
+
+Baseline v1.0: p95 = 1.8s
+```
+
+Kết luận thực tế:
+
+```text
+- Count đủ 150 -> workload giống baseline -> so sánh FAIR (yêu cầu a)
+- p95 1.85s vs baseline 1.8s -> lệch +2.8%, trong ngưỡng nhiễu (<5%)
+- 0 fail, 0 interrupted -> không regression chức năng
+=> QUYẾT ĐỊNH: release v1.1. Không có regression.
+```
+
+### Kịch bản B — count đủ nhưng latency tăng: ROLLBACK
+
+```text
+iterations.........: 150        (vẫn đủ!)
+http_req_failed....: 0.00%
+iteration_duration: p(95)=2.40s
+
+Baseline v1.0: p95 = 1.8s
+```
+
+Kết luận thực tế:
+
+```text
+- Count vẫn 150 -> KHÔNG phải lỗi test, workload vẫn fair
+- p95 2.40s vs 1.8s -> chậm +33% -> đây là REGRESSION HIỆU NĂNG
+- code mới chạy đúng (0 fail) nhưng CHẬM hơn rõ rệt
+=> QUYẾT ĐỊNH: rollback / chặn release. Bắt dev tìm nguyên nhân
+   (query mới thiếu index? N+1 query? thêm sync call?).
+   Đây CHÍNH LÀ giá trị của per-vu: count cố định nên latency tăng
+   là tín hiệu thật, không phải do test chạy nhiều hơn.
+```
+
+### Kịch bản C — thiếu iteration / có fail: TEST CHƯA HỢP LỆ
+
+```text
+iterations.........: 138        (THIẾU 12!)
+http_req_failed....: 4.2%
+interrupted........: 12
+```
+
+Kết luận thực tế:
+
+```text
+- 138 < 150 -> workload KHÔNG còn giống baseline -> KHÔNG so p95 được
+  (so 138 journey với baseline 150 journey là so sai, xem yêu cầu a)
+- Trước khi nói gì về regression, phải sửa cho test chạy đủ 150 đã:
+    interrupted=12 -> maxDuration quá ngắn so với T_max? -> tăng maxDuration
+    http_req_failed=4.2% -> server thật sự lỗi, hay test data sai?
+=> QUYẾT ĐỊNH: CHƯA kết luận release/rollback. Test invalid, chạy lại
+   sau khi sửa nguyên nhân thiếu count. (Số liệu latency lúc này vô nghĩa.)
+```
+
+### Bảng ánh xạ nhanh output → hành động
+
+| Output thấy gì | Nghĩa nghiệp vụ | Hành động |
+| --- | --- | --- |
+| 150 iter, p95 ≈ baseline, 0 fail | không regression | release |
+| 150 iter, p95 tăng >5%, 0 fail | regression hiệu năng | rollback, báo dev |
+| 150 iter, có http_req_failed | regression chức năng | rollback, báo dev |
+| < 150 iter (drop/interrupt) | test chưa hợp lệ | sửa config, chạy lại |
+| checks rate < 100% | flow nghiệp vụ sai | điều tra check nào fail |
+
+Điểm cốt lõi của case này: **vì count luôn cố định 150, mọi thay đổi ở
+p95/fail đều là tín hiệu THẬT về code mới, không bị nhiễu bởi "lần này
+test chạy nhiều/ít hơn lần trước"**. Đó là lý do regression gate buộc
+dùng per-vu-iterations.
+
 ## Mở rộng / variation
 
 ### Variation A: Test data per-user
