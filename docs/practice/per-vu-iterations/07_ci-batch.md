@@ -246,9 +246,87 @@ echo "BASELINE_P95_MS=400" > ci-baseline.env
    -> p95 không phản ánh API performance
 ```
 
-## Mở rộng
+## Kết luận thực tế: đọc exit code này thì CI pipeline quyết định gì?
 
-### A: Multi-environment baseline
+Mục tiêu nghiệp vụ: làm **CI performance gate** — mỗi PR chạy đúng 1000
+iter, threshold quyết định `exit 0` (merge được) hay `exit 1` (chặn PR).
+Khác các case trước, "người đọc output" ở đây là **pipeline tự động**, nên
+yêu cầu số 1 là **không flakey**: cùng code phải cho cùng verdict.
+
+Nhắc lại kỳ vọng: 1000 iter + 2000 req cố định, p95 < baseline×1.10.
+
+### Kịch bản A — mọi threshold pass: MERGE PR
+
+```text
+iterations.........: 1000        ✓ count==1000
+http_reqs..........: 2000        ✓ count==2000
+http_req_duration{tag:critical}: p(95)=512ms   ✓ < 550
+http_req_failed....: 0.2%        ✓ < 1%
+exit code: 0
+```
+
+Kết luận thực tế:
+
+```text
+- Count đúng tuyệt đối -> gate so p95 trên cùng workload mỗi lần -> không flakey
+- p95 512ms < ngưỡng 550 (baseline 500 +10%) -> không regression hiệu năng
+=> QUYẾT ĐỊNH (tự động): exit 0 -> PR được merge. Không cần người review số.
+```
+
+### Kịch bản B — p95 vượt ngưỡng: CHẶN PR
+
+```text
+iterations.........: 1000        ✓
+http_reqs..........: 2000        ✓
+http_req_duration{tag:critical}: p(95)=690ms   ✗ > 550
+exit code: 1
+```
+
+Kết luận thực tế:
+
+```text
+- Count vẫn đúng 1000 -> gate hợp lệ, KHÔNG phải lỗi đo
+- p95 690ms vượt ngưỡng 550 -> code trong PR này làm chậm critical path +38%
+=> QUYẾT ĐỊNH (tự động): exit 1 -> CI đỏ -> chặn merge.
+   Dev phải tối ưu rồi push lại. Vì count cố định, con số 690 này tin được,
+   không phải "lần này CI chạy nhiều request hơn nên chậm".
+```
+
+### Kịch bản C — count ≠ 1000: GATE INVALID (phải fail-safe)
+
+```text
+iterations.........: 940         ✗ count==1000 fail
+exit code: 1 (do threshold iterations fail)
+```
+
+Kết luận thực tế:
+
+```text
+- Thiếu 60 iter -> môi trường CI có vấn đề (máy yếu, maxDuration chạm,
+  server test sập giữa chừng) -> KHÔNG phải tín hiệu hiệu năng đáng tin
+- nếu lúc này p95 "pass" thì cũng VÔ NGHĨA (đo trên 940 mẫu, không so được)
+=> QUYẾT ĐỊNH: threshold `iterations==1000` cố tình đặt để CASE NÀY cũng
+   fail gate -> buộc điều tra hạ tầng CI, KHÔNG cho merge dựa trên dữ liệu
+   thiếu. Đây là lý do gate phải kiểm count TRƯỚC, latency sau.
+```
+
+### Bảng ánh xạ nhanh output → hành động CI
+
+| Output / exit code | Nghĩa nghiệp vụ | Hành động pipeline |
+| --- | --- | --- |
+| count đúng, mọi threshold pass, exit 0 | không regression | merge PR |
+| count đúng, p95 vượt ngưỡng, exit 1 | regression hiệu năng | chặn PR, báo dev tối ưu |
+| http_req_failed > 1%, exit 1 | regression chức năng | chặn PR |
+| count ≠ 1000, exit 1 | hạ tầng CI lỗi | chặn + điều tra runner |
+| baseline cần cập nhật sau optimize | ngưỡng cũ lỗi thời | update BASELINE_P95_MS |
+
+Điểm cốt lõi: CI gate **phải deterministic mới dùng được** — nếu count
+dao động (như constant-vus/arrival-rate), cùng code có lúc pass lúc fail
+→ dev mất niềm tin vào CI. per-vu cố định 1000 iter biến gate thành "cùng
+code → cùng verdict", và đặt `iterations==1000` làm threshold để chặn cả
+trường hợp hạ tầng lỗi, tránh merge nhầm trên dữ liệu thiếu.
+
+## Mở rộng
 
 ```js
 const env = __ENV.K6_ENV || "staging";
