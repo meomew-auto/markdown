@@ -3894,9 +3894,18 @@ constant-arrival-rate: rate là MỤC TIÊU config trực tiếp
   -> VU nhiều/ít chỉ ảnh hưởng có drop hay không
 ```
 
-**Khi nào dùng**: ước lượng load đỉnh server sẽ chịu (vd `peak=10/s`,
-mỗi iter có 2 HTTP request → server chịu peak 20 req/s); so sánh với
-năng lực server (DB, API gateway) để biết test có realistic không.
+**Khi nào dùng**:
+
+```text
+- Trước test (sizing): ước lượng load đỉnh server sẽ chịu
+  vd: peak=10/s, mỗi iter 2 HTTP request -> server peak ~20 req/s
+- So năng lực server: peak có vượt giới hạn DB / API gateway không
+  vd: peak 20 req/s nhưng API gateway giới hạn 15 req/s -> test sẽ nghẽn
+- Chuyển sang open model: đặt target_rate ≤ peak để không drop
+  vd: peak=44/s -> dùng constant-arrival-rate thì target ≤ 44/s
+- Sau test (so sánh): peak (CT 4) so với average thật (CT 6)
+  vd: peak 44/s nhưng summary 20/s -> chênh nhiều = đuôi idle dài
+```
 
 **Liên hệ với CT khác**:
 
