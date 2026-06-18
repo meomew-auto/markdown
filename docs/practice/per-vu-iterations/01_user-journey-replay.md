@@ -1634,6 +1634,147 @@ Kết luận:
 => executor behavior bình thường
 ```
 
+#### Kiểm chứng tính đúng đắn của chart `VUs vs iter/s`
+
+Chart này gần giống tab Executor, nên cần kiểm riêng để tránh hiểu nhầm.
+Nó đúng nếu thỏa 4 điều kiện:
+
+```text
+1. VUs trong chart khớp series `vus`
+2. Actual iter/s trong chart khớp series `iterations` đã group theo giây
+3. Tổng Actual iter/s theo các bucket = summary `iterations`
+4. Timeline/envelope thể hiện đúng shape của per-vu-iterations
+```
+
+Với run thật case 01:
+
+```text
+summary iterations = 40
+summary http_reqs  = 328
+configured VUs     = 8
+```
+
+Chart `VUs vs iter/s` có points:
+
+| Time bucket | Executor VUs / observed VUs | Actual iter/s | HTTP reqs |
+| --- | ---: | ---: | ---: |
+| 01:09:17 | 8 | 0 | 48 |
+| 01:09:18 | 8 | 0 | 19 |
+| 01:09:19 | 8 | 7 | 34 |
+| 01:09:20 | 8 | 4 | 36 |
+| 01:09:21 | 8 | 5 | 42 |
+| 01:09:22 | 8 | 6 | 31 |
+| 01:09:23 | 8 | 2 | 42 |
+| 01:09:24 | 8 | 7 | 32 |
+| 01:09:25 | 8 | 2 | 40 |
+| 01:09:26 | 1 | 7 | 4 |
+
+Kiểm bằng tổng Counter:
+
+```text
+sum(Actual iter/s theo bucket)
+  = 0+0+7+4+5+6+2+7+2+7
+  = 40
+  = summary iterations ✓
+
+sum(HTTP reqs theo bucket)
+  = 48+19+34+36+42+31+42+32+40+4
+  = 328
+  = summary http_reqs ✓
+```
+
+Vì `aggregationPeriod = 1`, nên:
+
+```text
+iterations trong bucket = iterationRate của bucket
+```
+
+Nếu sau này `aggregationPeriod` khác 1 giây, phải đọc:
+
+```text
+iterationRate = iterations / aggregationPeriod
+```
+
+Còn run này bucket đang là 1 giây nên số `7` đọc được là:
+
+```text
+7 iterations hoàn thành trong giây đó = 7 iter/s tại bucket đó
+```
+
+##### Timeline/envelope có gì đặc biệt?
+
+Chart này còn có timeline phụ:
+
+```text
+01:09:16  executorVUs=0 observedVUs=0  (điểm mở đầu synthetic)
+01:09:17  executorVUs=8 observedVUs=8
+...
+01:09:26  executorVUs=8 observedVUs=1
+01:09:27  executorVUs=0 observedVUs=0  (điểm kết thúc synthetic)
+```
+
+Hai điểm `0` đầu/cuối dùng để vẽ đường quay về baseline trên biểu đồ.
+Không đọc chúng là "VU thật chạy 0 trong lúc test". Chúng là điểm chart
+để biểu đồ nhìn đủ start/end.
+
+Điểm quan trọng nhất:
+
+```text
+executorVUs vẫn là 8 ở bucket 01:09:26
+observedVUs chỉ còn 1 ở bucket 01:09:26
+```
+
+Đọc nghĩa:
+
+```text
+config/envelope của executor là 8 VU
+nhưng thực tế tại bucket cuối chỉ còn 1 VU active
+```
+
+Đây đúng bản chất `per-vu-iterations`:
+
+```text
+VU nhanh đã xong quota -> rời active pool
+VU chậm còn chạy nốt -> observedVUs tụt xuống 1
+```
+
+##### Chart này giống và khác tab Executor thế nào?
+
+| Điểm so sánh | `VUs vs iter/s` ở Overview | `Executor behavior` ở tab Executor |
+| --- | --- | --- |
+| Mục đích | đọc nhanh VUs + iter/s theo bucket | giải thích mô hình executor đầy đủ hơn |
+| Dữ liệu điểm | dùng cùng metricsHistory points | dùng cùng metricsHistory points |
+| Series chính | Executor VUs, Actual iter/s | Fixed VUs, Observed VUs, Actual iter/s, Peak if all active |
+| Có peak line? | không / ít nhấn mạnh | có `Peak if all active` |
+| Dùng để học gì? | bucket nào hoàn thành bao nhiêu iter | vì sao actual thấp hơn peak, vì sao VU tụt |
+
+Nói ngắn:
+
+```text
+VUs vs iter/s = bản đọc nhanh trong Overview
+Executor tab  = bản giải thích sâu theo executor model
+```
+
+Vì cùng dùng metricsHistory, nếu points của `VUs vs iter/s` cộng đúng total
+và shape VU đúng, thì tab Executor cũng có nền dữ liệu đúng. Tab Executor
+chỉ thêm lớp tính toán peak:
+
+```text
+predicted_peak = configuredVUs / iteration_duration_avg
+               = 8 / 1.912
+               ≈ 4.18 iter/s
+```
+
+Kết luận kiểm chứng chart này:
+
+```text
+- Actual iter/s cộng lại đúng 40 iterations
+- HTTP reqs theo bucket cộng lại đúng 328 requests
+- VUs shape 8 -> 1 -> 0 khớp CLI progress
+- timeline có điểm synthetic 0 đầu/cuối để vẽ chart
+=> chart VUs vs iter/s đo đúng cho case 01
+```
+
 ### 2. Tab Executor / Execution
 
 Chuyển sang tab:
