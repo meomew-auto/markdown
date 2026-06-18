@@ -1610,7 +1610,7 @@ http_reqs    = request event
 iterations   = full journey event
 ```
 
-### Chart phụ — VUs vs iter/s
+### Chart 3 — VUs vs iter/s
 
 Chart này có JSON debug dạng:
 
@@ -1618,18 +1618,55 @@ Chart này có JSON debug dạng:
 Debug JSON: vus-vs-iterations
 ```
 
-Các series:
+Chart này trả lời câu hỏi:
+
+```text
+Executor dự kiến có bao nhiêu VU?
+Trong từng giây, thực tế hoàn thành bao nhiêu iteration?
+Throughput iteration có bám theo shape VU không?
+```
+
+Nó dùng cùng dữ liệu bucket như Execution timeline, nhưng đổi góc nhìn:
+
+```text
+Execution timeline:
+  nhìn VUs + HTTP RPS
+
+VUs vs iter/s:
+  nhìn VUs + completed iterations per second
+```
+
+Các series chính:
 
 ```text
 Executor VUs
 Actual iter/s
 ```
 
-Nó dùng cùng dữ liệu bucket như Execution timeline, nhưng tập trung vào:
+Đọc nhanh:
+
+| Series | Nghĩa | Với case 01 kỳ vọng |
+| --- | --- | --- |
+| `Executor VUs` | đường VU theo executor/config/envelope | quanh `8` trong lúc run |
+| `Actual iter/s` | số full journey hoàn thành trong mỗi bucket 1 giây | dao động, tổng = `40` |
+
+Điểm khác với `Execution timeline`:
 
 ```text
-- executor dự kiến có bao nhiêu VU
-- thực tế bucket đó hoàn thành bao nhiêu iteration/s
+Execution timeline cho bạn biết request load: req/s
+VUs vs iter/s cho bạn biết business flow throughput: journey/s
+```
+
+Với case 01, một iteration = một full user journey:
+
+```text
+login/browse/detail/add-to-cart/checkout/confirm
+```
+
+nên `Actual iter/s` ở chart này chính là:
+
+```text
+mỗi giây có bao nhiêu full journey regression được replay xong
 ```
 
 Ví dụ input của chart:
@@ -1672,6 +1709,43 @@ sum(bucket iterations) = summary iterations
 ```
 
 Nên chart đúng nếu tổng bucket vẫn bằng `40`.
+
+#### Ý nghĩa thực tế của chart này trong case 01
+
+Trong case 01, business question là:
+
+```text
+QA replay được bao nhiêu full user journey mỗi giây?
+```
+
+Vì vậy chart này không chỉ là chart kỹ thuật. Nó nối trực tiếp tới kết luận
+nghiệp vụ:
+
+```text
+Actual iter/s cao và ổn định
+  -> regression suite chạy nhanh, CI/release gate ít tốn thời gian
+
+Actual iter/s tụt dài trong khi VUs vẫn cao
+  -> VU đang bị kẹt trong journey, có thể backend chậm hoặc flow bị treo
+
+Actual iter/s tổng lại không đủ total expected
+  -> test không replay đủ workload, không được dùng để kết luận release
+```
+
+Với run này:
+
+```text
+total expected = 40 journey
+sum Actual iter/s = 40
+```
+
+Kết luận:
+
+```text
+case 01 đã replay đủ toàn bộ user journey
+chart iter/s khớp với summary
+có thể dùng kết quả để đọc latency / pass criteria tiếp
+```
 
 #### Cách phân tích sâu chart VUs vs iter/s
 
@@ -1740,6 +1814,17 @@ Shape mong đợi của case 01:
 - cuối run: iter/s có thể còn cao ở bucket cuối nếu nhiều VU finish sát nhau
 - sau cùng: về 0 vì test xong
 ```
+
+Các shape cần biết:
+
+| Shape thấy trên chart | Ý nghĩa có thể là gì? | Đánh giá |
+| --- | --- | --- |
+| `Actual iter/s` đầu = 0, sau đó tăng | journey đầu chưa hoàn tất, request vẫn đang chạy | bình thường |
+| `Actual iter/s` dao động 2/7/4/... | nhiều VU finish không cùng thời điểm | bình thường |
+| `Actual iter/s` = 0 lâu trong khi VUs cao | VU bị kẹt trong request/sleep/flow | cần điều tra |
+| `Actual iter/s` tụt về 0 và VUs cũng về 0 | test xong quota | bình thường |
+| sum `Actual iter/s` < expected total | thiếu iteration / drop / interrupt | test invalid |
+| `Actual iter/s` quá cao bất thường | bucket/replay/counter có thể đang double count | kiểm sum với summary |
 
 Các câu hỏi nên tự hỏi khi nhìn chart này:
 
