@@ -1146,7 +1146,7 @@ sau đó:                Live VUs = 0
 ```text
 - lúc đầu 8 VU cùng chạy quota 5 iterations/VU
 - VU nhanh chạy xong trước thì idle / trả về pool
-- gần cuối chỉ còn 1 VU chậm chạy nốt
+- gần cuối chỉ còn ít VU chậm chạy nốt
 - hết quota thì về 0 VU
 ```
 
@@ -1204,7 +1204,7 @@ cuối run:
 
 ```text
 - 9 bucket đầu: cả 8 VU vẫn còn active hoặc ít nhất sample thấy 8 VU active
-- bucket cuối: chỉ còn 1 VU chậm đang chạy nốt
+- bucket cuối: chỉ còn một phần VU chậm đang chạy nốt
 - sau bucket cuối: test kết thúc, VUs về 0
 ```
 
@@ -1908,7 +1908,7 @@ actual average ≈ 3.93/s < predicted peak ≈ 4.18/s
 ```text
 - có overhead runtime / request đầu / sleep
 - các VU không xong cùng lúc tuyệt đối
-- cuối run có đuôi idle: chỉ còn 1 VU chạy nốt
+- cuối run có đuôi idle: chỉ còn ít VU chạy nốt
 ```
 
 Đây chính là ý "maximum throughput reached but not maintained".
@@ -1943,7 +1943,7 @@ Nên mô hình kỳ vọng là:
 | Đường | Hỏi câu gì? | Với case 01 kỳ vọng |
 | --- | --- | --- |
 | `Fixed VUs` | config/envelope là bao nhiêu VU? | `8` VU |
-| `Observed VUs` | thực tế còn bao nhiêu VU active theo thời gian? | đầu `8`, cuối tụt xuống `1`, rồi `0` |
+| `Observed VUs` | thực tế còn bao nhiêu VU active theo thời gian? | đầu gần `8`, cuối có thể tụt thấp hơn rồi `0` |
 | `Actual iter/s` | mỗi bucket hoàn thành bao nhiêu journey? | dao động, tổng = `40` |
 | `Peak if all active` | nếu cả 8 VU đều chạy đều thì peak khoảng bao nhiêu? | `~4.18 iter/s` |
 
@@ -1954,7 +1954,7 @@ Với `per-vu-iterations`:
 
 ```text
 Fixed/config VUs = 8
-nhưng Observed VUs có thể tụt về 1 ở cuối
+nhưng Observed VUs có thể tụt thấp hơn 8 ở cuối
 ```
 
 Đây không phải bug. Đó là do:
@@ -1983,7 +1983,7 @@ Với run này:
 
 ```text
 Fixed VUs = 8
-Observed VUs: 8 -> 1 -> 0
+Observed VUs: đầu gần 8, cuối thấp hơn 8, rồi về 0
 summary average = 3.93/s
 predicted peak = 4.18/s
 ```
@@ -2126,7 +2126,7 @@ Khi học sinh nhìn dashboard case 01, đọc theo thứ tự này:
 5. Executor tab
    - executor detect đúng `per-vu-iterations` không?
    - Fixed VUs = config không?
-   - Observed VUs có shape 8 -> 1 -> 0 không?
+   - Observed VUs có xu hướng đầu gần config VUs, cuối tụt về 0 không?
    - predicted peak > actual average không?
 ```
 
