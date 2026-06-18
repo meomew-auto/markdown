@@ -1062,6 +1062,211 @@ sau đó:                Live VUs = 0
 VU nhanh KHÔNG lấy thêm việc của VU chậm
 ```
 
+### Batch 1 giây / time bucket được tính như nào?
+
+Khi nhìn chart real-time, mỗi point trên biểu đồ KHÔNG phải là:
+
+```text
+1 VU
+1 iteration
+1 request
+1 lần metrics_push
+```
+
+Mà là:
+
+```text
+1 time bucket = gom TẤT CẢ metric samples rơi vào cùng 1 giây
+```
+
+Ví dụ bucket:
+
+```text
+01:09:19
+```
+
+có nghĩa gần đúng là:
+
+```text
+mọi sample có timestamp trong khoảng:
+  01:09:19.000 -> 01:09:19.999
+được gom vào chung 1 point trên chart
+```
+
+Trong 1 bucket đó có thể có:
+
+```text
+- nhiều VU cùng chạy
+- nhiều HTTP request hoàn thành
+- một số iteration hoàn thành
+- nhiều check pass/fail
+- sample `vus` nói tại thời điểm đó còn bao nhiêu VU active
+```
+
+Với case 01 run thật, chart point:
+
+```text
+01:09:19  vus=8  httpReqs=34  iterations=7
+```
+
+đọc là:
+
+```text
+trong giây 01:09:19:
+  - dashboard quan sát 8 VU đang active
+  - có 34 HTTP requests hoàn thành trong giây đó
+  - có 7 full journey / iterations hoàn thành trong giây đó
+```
+
+Không đọc là:
+
+```text
+1 VU chạy 34 request
+hoặc 1 iteration có 34 request
+```
+
+Vì trong thời điểm đó **8 VU đang chạy song song**, nên tổng request của cả
+pool VU cộng lại có thể là 34 request/giây.
+
+#### Trong 1 bucket, các metric được gom khác nhau
+
+| Metric trên chart | Cách gom trong bucket 1 giây | Ví dụ |
+| --- | --- | --- |
+| `httpReqs` / RPS | cộng số HTTP request hoàn thành trong bucket | `34` request trong giây đó |
+| `iterations` / iter/s | cộng số iteration hoàn chỉnh trong bucket | `7` journey xong trong giây đó |
+| `vus` | giá trị VU active quan sát được trong bucket | `8` VU đang active |
+| response `avg` | trung bình response time của request trong bucket | `43.12ms` |
+| response `p95` | p95 của request trong bucket | `118.47ms` |
+| response `max` | request chậm nhất trong bucket | `1175.55ms` |
+
+Vì vậy 2 chart real-time dùng 2 kiểu đọc:
+
+```text
+Execution timeline:
+  đọc count/rate theo bucket: httpReqs, iterations, vus
+
+Response time:
+  đọc thống kê latency trong bucket: avg, p95, max
+```
+
+#### Vì sao phải chia theo bucket 1 giây?
+
+Nếu dashboard vẽ từng sample riêng lẻ, chart sẽ rất khó đọc:
+
+```text
+1 run có thể sinh hàng trăm / hàng nghìn samples:
+  - mỗi HTTP request là 1 sample
+  - mỗi check là 1 sample
+  - mỗi iteration là 1 sample
+  - mỗi VU gauge là 1 sample theo thời điểm
+```
+
+Nếu vẽ raw sample:
+
+```text
+- chart quá dày
+- mỗi request là 1 chấm lẻ
+- không thấy xu hướng theo thời gian
+- khó trả lời "giây này load cao hay thấp?"
+```
+
+Nên dashboard gom theo bucket 1 giây để học sinh đọc được:
+
+```text
+giây 1: bao nhiêu VU, bao nhiêu req/s, bao nhiêu iter/s?
+giây 2: tăng hay giảm?
+giây cuối: còn bao nhiêu VU?
+```
+
+Đó là lý do chart real-time dùng point theo thời gian thay vì show raw
+sample từng cái.
+
+#### Điều kiện để một event rơi vào bucket nào
+
+Quy tắc đơn giản:
+
+```text
+event timestamp thuộc giây nào -> rơi vào bucket giây đó
+```
+
+Ví dụ:
+
+```text
+Request A hoàn thành lúc 01:09:19.123 -> bucket 01:09:19
+Request B hoàn thành lúc 01:09:19.900 -> bucket 01:09:19
+Request C hoàn thành lúc 01:09:20.010 -> bucket 01:09:20
+```
+
+Iteration cũng vậy:
+
+```text
+Iteration X start lúc 01:09:17.300
+Iteration X end   lúc 01:09:19.200
+
+-> HTTP requests bên trong iteration có thể nằm ở bucket 17/18/19
+-> nhưng metric `iterations` chỉ tăng ở bucket 19, vì full iteration
+   chỉ được tính khi iteration hoàn thành
+```
+
+Đây là lý do có thể thấy:
+
+```text
+bucket 17: httpReqs > 0 nhưng iterations = 0
+bucket 18: httpReqs > 0 nhưng iterations = 0
+bucket 19: iterations bắt đầu tăng
+```
+
+#### Ví dụ đọc 3 bucket liên tiếp
+
+Từ run thật:
+
+| Bucket | VUs | HTTP reqs | Iterations | Đọc thực tế |
+| --- | ---: | ---: | ---: | --- |
+| 01:09:17 | 8 | 48 | 0 | 8 VU vừa start, nhiều request đã xong, chưa full journey nào xong |
+| 01:09:18 | 8 | 19 | 0 | vẫn đang trong journey đầu, request tiếp tục xong, iteration chưa complete |
+| 01:09:19 | 8 | 34 | 7 | 7 VU hoàn thành journey đầu trong giây này |
+
+Kết luận:
+
+```text
+- request-level metric đến sớm hơn
+- iteration-level metric đến muộn hơn
+- vì iteration chỉ được emit khi toàn bộ default() / journey xong
+```
+
+#### Batch 1s khác `metrics_push_count` như nào?
+
+Đừng nhầm:
+
+```text
+metrics_push_count = số lần backend nhận payload metrics từ k6
+chart pointCount   = số time bucket dashboard render
+```
+
+Ví dụ run này:
+
+```text
+metrics_push_count = 8
+chart pointCount = 10
+```
+
+Vẫn đúng, vì chart pointCount là số bucket theo thời gian. Backend có thể
+nhận 8 lần push, nhưng sau khi gom/replay theo Unix second thì thành 10
+bucket timestamp.
+
+Cách kiểm chart đúng:
+
+```text
+sum(bucket.httpReqs) == summary.http_reqs
+sum(bucket.iterations) == summary.iterations
+```
+
+Không kiểm:
+
+```text
+metrics_push_count == pointCount
+```
+
 ### Vì sao 2 bucket đầu có `iterations = 0` nhưng vẫn có HTTP reqs?
 
 Ở bucket đầu:
