@@ -307,6 +307,172 @@ Cần custom threshold: http_req_failed{status:!429} < 1%
 hoặc dùng tag để loại 429 ra.
 ```
 
+## Đọc dashboard real-time charts cho case 03
+
+Ví dụ dưới đây lấy từ run thật:
+
+```powershell
+$env:K6_CLOUD_TOKEN = "student-token-1234567890"
+$env:K6_CLOUD_HOST = "http://localhost:18080"
+.\run-with-summary.ps1 .\examples\per-vu-iterations\pvi-03-rate-limit.js
+```
+
+Run quan sát được:
+
+```text
+run #16
+VUS = 5
+ITERS_PER_VU = 150
+total_iterations = 5 × 150 = 750
+```
+
+Summary quan trọng:
+
+```text
+iterations........: 750    137.356597/s
+http_reqs.........: 750    137.356597/s
+count_200.........: 750    137.356597/s
+count_429.........: 0      0/s
+http_req_failed...: 0.00%  0 out of 750
+vus...............: 5      min=5 max=5
+vus_max...........: 5      min=5 max=5
+```
+
+Đọc nhanh:
+
+```text
+- Workload chạy đủ: 750/750 requests
+- HTTP không fail: 0%
+- Nhưng rate limit KHÔNG trigger: count_429 = 0 thay vì 250
+- count_200 = 750 thay vì 500
+=> Run FAIL theo mục tiêu rate-limit. Limit đang quá lỏng hoặc endpoint/test env chưa bật throttle.
+```
+
+### Overview có 3 chart cần đọc
+
+| Chart | Câu hỏi trong rate-limit audit |
+| --- | --- |
+| Response time | spam request có làm latency tăng không? |
+| Execution timeline | 5 VU tạo request rate theo thời gian như nào? |
+| VUs vs iter/s | mỗi giây hoàn thành bao nhiêu request/iteration, tổng có đủ 750 không? |
+
+### Chart 1 — Response time
+
+Run #16 có 7 buckets. Các point tiêu biểu:
+
+```text
+bucket đầu: avg≈45.17ms, p95≈95.77ms, max≈97.02ms
+bucket giữa: avg≈36-38ms, p95≈94-96ms
+bucket cuối: avg≈2.85ms, p95≈3.11ms, max≈3.11ms
+```
+
+Đọc thực tế:
+
+```text
+- latency thấp và khá ổn định
+- không có spike lớn
+- summary p95 ≈ 95.6ms
+```
+
+Kết luận:
+
+```text
+backend trả rất nhanh, nhưng đây không phải dấu hiệu rate limit đúng.
+Ngược lại, vì 750 request đều 200, có thể throttle chưa bật hoặc key limit sai.
+```
+
+### Chart 2 — Execution timeline
+
+Chart debug:
+
+```text
+Debug JSON: execution-timeline
+```
+
+Run #16:
+
+```text
+pointCount = 7
+configuredVUs = 5
+sources = filled-backward, gauge, filled-forward
+```
+
+Các bucket tiêu biểu:
+
+| Bucket | VUs | HTTP reqs | Iterations | VU source |
+| --- | ---: | ---: | ---: | --- |
+| đầu | 5 | 50 | 50 | filled-backward |
+| giữa | 5 | 136 | 135 | gauge |
+| giữa | 5 | 131 | 132 | gauge |
+| gần cuối | 5 | 148 | 148 | gauge |
+| cuối | 5 | 4 | 4 | filled-forward |
+
+Kiểm tổng:
+
+```text
+sum(httpReqs) = 750 = summary http_reqs ✓
+sum(iterations) = 750 = summary iterations ✓
+```
+
+Đọc thực tế:
+
+```text
+- 5 VU giữ ổn định suốt run (đúng với summary vus min=max=5)
+- request rate rất cao, có bucket ~148 req/s
+- không thấy đoạn bị throttle/429 làm http_req_failed tăng
+```
+
+### Chart 3 — VUs vs iter/s
+
+Chart này dùng cùng bucket như Execution timeline nhưng nhìn business rate:
+
+```text
+Debug JSON: vus-vs-iterations
+```
+
+Run #16:
+
+| Bucket | Observed VUs | Actual iter/s | HTTP reqs | VU source |
+| --- | ---: | ---: | ---: | --- |
+| đầu | 5 | 50 | 50 | filled-backward |
+| giữa | 5 | 135 | 136 | gauge |
+| giữa | 5 | 132 | 131 | gauge |
+| gần cuối | 5 | 148 | 148 | gauge |
+| cuối | 5 | 4 | 4 | filled-forward |
+
+Kiểm tổng:
+
+```text
+sum(Actual iter/s) = 750 = summary iterations ✓
+sum(httpReqs) = 750 = summary http_reqs ✓
+```
+
+Đọc thực tế:
+
+```text
+- chart đo workload đúng: đủ 750 iterations
+- VUs ổn định ở 5
+- iter/s rất cao vì mỗi iteration chỉ là 1 GET nhanh
+```
+
+Nhưng kết luận nghiệp vụ là fail:
+
+```text
+VUs vs iter/s chỉ chứng minh đã spam đủ 750 request.
+Nó không chứng minh rate limit đúng.
+Rate-limit đúng phải nhìn count_429 = 250, nhưng actual = 0.
+```
+
+### Cách chốt từ summary -> 3 chart
+
+| Bước | Nhìn ở đâu | Kết luận run #16 |
+| --- | --- | --- |
+| Workload | summary + VUs vs iter/s | đủ 750/750 request |
+| HTTP health | summary + Response time | request nhanh, 0 fail |
+| Load shape | Execution timeline | 5 VU giữ ổn định, RPS cao |
+| Rate-limit contract | custom metrics | FAIL: 750 OK, 0 throttled |
+| Final verdict | tổng hợp | limit quá lỏng / throttle chưa bật |
+
 ## Kết luận thực tế: đọc output này thì team API quyết định gì?
 
 Mục tiêu nghiệp vụ: xác nhận **rate limit per-user** đúng SLA "100
