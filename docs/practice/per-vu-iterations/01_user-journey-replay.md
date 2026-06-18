@@ -919,6 +919,24 @@ Ngoài ra dashboard còn có chart **VUs vs iter/s** để giải thích shape c
 executor. Chart này cũng hữu ích, nhưng khi nói "2 chart real-time" thì
 thường đang nói 2 chart trên.
 
+Trước khi đọc chi tiết, nhớ bảng này:
+
+| Biểu đồ / tab | Nó trả lời câu hỏi gì? | Không nên dùng để làm gì? |
+| --- | --- | --- |
+| Response time | Request nhanh/chậm theo từng giây như nào? Có spike không? | Không thay thế final summary p95 |
+| Execution timeline | Tại mỗi giây có bao nhiêu VU, bao nhiêu request, bao nhiêu iter xong? | Không đọc mỗi point như 1 iteration |
+| VUs vs iter/s | Executor VU envelope và iter/s theo bucket có khớp không? | Không kỳ vọng iter/s từng giây bằng average |
+| Executor tab | Shape thực tế có đúng mô hình `per-vu-iterations` không? | Không dùng để verify latency |
+
+Một cách đọc nhanh:
+
+```text
+Response time      -> chất lượng request
+Execution timeline -> tải sinh ra theo thời gian
+VUs vs iter/s      -> iteration throughput theo executor shape
+Executor tab       -> mô hình executor có chạy đúng bản chất không
+```
+
 ### Chart 1 — Response time
 
 Chart này có JSON debug dạng:
@@ -1521,6 +1539,101 @@ sum = 40
 
 Nên chart đúng.
 
+#### Cách phân tích sâu chart VUs vs iter/s
+
+Chart này dễ nhầm nhất vì nó trộn 2 thứ:
+
+```text
+Executor VUs
+  đường "khung" / envelope của executor
+
+Actual iter/s
+  số iteration hoàn thành trong từng bucket
+```
+
+Với `per-vu-iterations`, đường `Executor VUs` trả lời:
+
+```text
+executor này dự kiến chạy bao nhiêu VU?
+```
+
+Còn `Actual iter/s` trả lời:
+
+```text
+mỗi giây thật sự có bao nhiêu full journey hoàn thành?
+```
+
+Đừng đọc `Actual iter/s` là tốc độ đều đặn. Nó là số rời rạc theo bucket:
+
+```text
+0, 0, 7, 4, 5, 6, 2, 7, 2, 7
+```
+
+Vì sao nó nhảy lên xuống?
+
+```text
+- iteration không kết thúc đúng mỗi 1 giây
+- các VU có response time khác nhau
+- một số VU xong cùng lúc -> bucket đó iterations cao
+- bucket khác nhiều VU đang giữa journey -> iterations thấp
+```
+
+Ví dụ:
+
+```text
+bucket 01:09:19 có iterations=7
+  -> 7 full journey cùng kết thúc trong giây đó
+
+bucket 01:09:23 có iterations=2
+  -> chỉ 2 journey kết thúc trong giây đó
+```
+
+Cả hai đều bình thường. Cần nhìn:
+
+```text
+sum toàn chart = 40
+average summary = 40 / runtime ≈ 3.93/s
+```
+
+Đừng kỳ vọng mỗi bucket đều gần `3.93`. `3.93/s` là trung bình toàn run,
+không phải giá trị từng giây.
+
+Shape mong đợi của case 01:
+
+```text
+- đầu run: iter/s có thể 0 vì chưa journey nào xong
+- giữa run: iter/s dao động theo batch hoàn thành
+- cuối run: iter/s có thể còn cao ở bucket cuối nếu nhiều VU finish sát nhau
+- sau cùng: về 0 vì test xong
+```
+
+Các câu hỏi nên tự hỏi khi nhìn chart này:
+
+```text
+1. Sum Actual iter/s theo bucket có bằng total iterations không?
+2. Average summary có thấp hơn peak không?
+3. Đuôi cuối có còn VU nhưng iter/s thấp không?
+4. Có đoạn dài VUs cao mà iter/s = 0 không? Nếu có, backend có bị kẹt không?
+```
+
+Với run này:
+
+```text
+sum bucket iter/s = 40
+summary iterations = 40
+predicted peak ≈ 4.18/s
+summary average ≈ 3.93/s
+```
+
+Kết luận:
+
+```text
+- chart cộng đúng total
+- average thấp hơn peak một chút -> hợp lý
+- không có đoạn dài VUs cao nhưng iter/s=0 sau giai đoạn đầu
+=> executor behavior bình thường
+```
+
 ### 2. Tab Executor / Execution
 
 Chuyển sang tab:
@@ -1609,6 +1722,100 @@ actual average ≈ 3.93/s < predicted peak ≈ 4.18/s
 ```
 
 Đây chính là ý "maximum throughput reached but not maintained".
+
+#### Cách phân tích sâu tab Executor
+
+Tab Executor không chỉ lặp lại số summary. Nó giúp trả lời câu hỏi:
+
+```text
+executor này sinh load theo MÔ HÌNH nào?
+shape thực tế có đúng mô hình đó không?
+```
+
+Với case 01, executor là:
+
+```text
+per-vu-iterations
+```
+
+Nên mô hình kỳ vọng là:
+
+```text
+- có fixed quota: mỗi VU chạy đúng 5 iter
+- VU chạy song song lúc đầu
+- VU nào xong quota thì rời khỏi active VU pool
+- không có work stealing
+- throughput peak có thể đạt ở đầu, nhưng không giữ đến cuối
+```
+
+Đọc từng đường trong chart:
+
+| Đường | Hỏi câu gì? | Với case 01 kỳ vọng |
+| --- | --- | --- |
+| `Fixed VUs` | config/envelope là bao nhiêu VU? | `8` VU |
+| `Observed VUs` | thực tế còn bao nhiêu VU active theo thời gian? | đầu `8`, cuối tụt xuống `1`, rồi `0` |
+| `Actual iter/s` | mỗi bucket hoàn thành bao nhiêu journey? | dao động, tổng = `40` |
+| `Peak if all active` | nếu cả 8 VU đều chạy đều thì peak khoảng bao nhiêu? | `~4.18 iter/s` |
+
+Điểm cần dạy học sinh: **đường Fixed VUs không có nghĩa là lúc nào cũng có
+8 VU đang bận**.
+
+Với `per-vu-iterations`:
+
+```text
+Fixed/config VUs = 8
+nhưng Observed VUs có thể tụt về 1 ở cuối
+```
+
+Đây không phải bug. Đó là do:
+
+```text
+VU nhanh xong quota -> idle / returned
+VU chậm còn chạy -> Observed VUs thấp hơn Fixed VUs
+```
+
+So sánh với executor khác:
+
+| Executor | Fixed/Observed VUs nên đọc thế nào? |
+| --- | --- |
+| `constant-vus` | Observed VUs thường giữ gần config trong suốt duration |
+| `per-vu-iterations` | Observed VUs giảm khi VU xong quota |
+| `shared-iterations` | Observed VUs cũng có thể giảm cuối test khi work chung gần hết |
+| `arrival-rate` | Observed VUs là số VU cần dùng để kịp schedule, không phải target rate |
+
+Vì vậy tab Executor là nơi học sinh trả lời:
+
+```text
+shape này có đúng với executor mình chọn không?
+```
+
+Với run này:
+
+```text
+Fixed VUs = 8
+Observed VUs: 8 -> 1 -> 0
+summary average = 3.93/s
+predicted peak = 4.18/s
+```
+
+Kết luận học tập:
+
+```text
+- per-vu-iterations chạy đúng mô hình
+- không giữ throughput peak đến cuối
+- đuôi cuối là do VU chậm nhất
+- summary average thấp hơn peak là bình thường
+```
+
+Nếu tab Executor cho shape khác thì nghi gì?
+
+| Shape bất thường | Có thể nghĩa là gì |
+| --- | --- |
+| Executor detect sai | metadata filename/executor không đúng, UI override sai |
+| Observed VUs không lên tới config | VU init lỗi, run bị cắt sớm, config khác mong đợi |
+| Observed VUs tụt rất sớm | quota quá ít, iter_time lệch lớn, VU nhanh kết thúc quá sớm |
+| Actual iter/s bằng 0 lâu dù VUs cao | request bị treo hoặc iteration rất dài |
+| Actual average cao hơn peak rất nhiều | công thức peak/input iter_time sai, hoặc chart đang đọc metric khác |
 
 ### 3. `metrics_push_count` khác `pointCount` — không phải bug
 
