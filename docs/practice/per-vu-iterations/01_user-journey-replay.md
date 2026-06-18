@@ -906,18 +906,31 @@ Nếu trong lớp học bạn đổi về `VUS=30, ITERS_PER_VU=5`, chỉ cần 
 
 logic đọc biểu đồ vẫn y hệt.
 
-### 1. Overview có 2 chart real-time chính
+### 1. Overview có 3 chart cần đọc
 
-Trong tab **Overview**, phần real-time chính có 2 chart:
+Trong tab **Overview**, có 3 chart quan trọng:
 
 ```text
-1. Response time
-2. Execution timeline
+1. Response time        (real-time latency chart)
+2. Execution timeline   (real-time execution/load chart)
+3. VUs vs iter/s        (executor-shape + iteration throughput chart)
 ```
 
-Ngoài ra dashboard còn có chart **VUs vs iter/s** để giải thích shape của
-executor. Chart này cũng hữu ích, nhưng khi nói "2 chart real-time" thì
-thường đang nói 2 chart trên.
+Có thể chia thành 2 nhóm:
+
+```text
+Nhóm real-time chính:
+  1. Response time
+  2. Execution timeline
+
+Nhóm giải thích executor ngay trong Overview:
+  3. VUs vs iter/s
+```
+
+Vì vậy khi nói "2 chart real-time" thì thường là 2 chart đầu. Nhưng khi
+học sinh đọc toàn bộ tab Overview, **phải đọc cả chart thứ 3** vì nó nối
+trực tiếp với tab Executor và giúp hiểu `per-vu-iterations` sinh iter/s như
+thế nào.
 
 Trước khi đọc chi tiết, nhớ bảng này:
 
