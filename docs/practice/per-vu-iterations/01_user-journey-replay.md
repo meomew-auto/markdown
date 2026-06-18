@@ -871,6 +871,511 @@ p95/fail đều là tín hiệu THẬT về code mới, không bị nhiễu bở
 test chạy nhiều/ít hơn lần trước"**. Đó là lý do regression gate buộc
 dùng per-vu-iterations.
 
+## Đọc dashboard real-time charts cho case 01
+
+Sau khi chạy bằng wrapper:
+
+```powershell
+$env:K6_CLOUD_TOKEN = "student-token-1234567890"
+$env:K6_CLOUD_HOST = "http://localhost:18080"
+.\run-with-summary.ps1 .\examples\per-vu-iterations\pvi-01-user-journey-replay.js
+```
+
+mở dashboard:
+
+```text
+http://localhost:13001/
+```
+
+paste token, chọn run mới nhất. Phần này giải thích cách đọc các biểu đồ
+real-time và tab Executor. Ví dụ dưới đây lấy từ một run thật với default
+hiện tại của file JS:
+
+```text
+VUS = 8
+ITERS_PER_VU = 5
+total_iterations = 8 × 5 = 40
+```
+
+Nếu trong lớp học bạn đổi về `VUS=30, ITERS_PER_VU=5`, chỉ cần thay:
+
+```text
+8 VUs  -> 30 VUs
+40 iter -> 150 iter
+```
+
+logic đọc biểu đồ vẫn y hệt.
+
+### 1. Overview có 2 chart real-time chính
+
+Trong tab **Overview**, phần real-time chính có 2 chart:
+
+```text
+1. Response time
+2. Execution timeline
+```
+
+Ngoài ra dashboard còn có chart **VUs vs iter/s** để giải thích shape của
+executor. Chart này cũng hữu ích, nhưng khi nói "2 chart real-time" thì
+thường đang nói 2 chart trên.
+
+### Chart 1 — Response time
+
+Chart này có JSON debug dạng:
+
+```text
+Debug JSON: response-time
+```
+
+Ý nghĩa:
+
+```text
+mỗi point = thống kê response time trong 1 time bucket / metrics frame
+```
+
+Các series chính:
+
+```text
+Avg response
+Batch p95
+Batch max
+```
+
+Ví dụ point đầu/cuối từ run thật:
+
+```text
+01:09:17  avg=84.49ms   p95=416.76ms  max=416.76ms
+01:09:18  avg=170.45ms  p95=658.22ms  max=739.32ms
+...
+01:09:26  avg=26.93ms   p95=85.58ms   max=100.09ms
+```
+
+Đọc thực tế:
+
+```text
+- đầu run response time cao hơn vì có login/setup/request đầu
+- giữa/cuối run response time thấp hơn vì flow đã warm và request nhẹ hơn
+- từng point là per-batch, KHÔNG phải final summary
+```
+
+Đừng nhầm:
+
+```text
+Batch p95 ở từng point != summary p95 cuối test
+```
+
+Summary cuối test tính trên toàn bộ request:
+
+```text
+http_req_duration p95 = 144.01ms
+```
+
+Còn chart point chỉ nói:
+
+```text
+trong bucket 1 giây đó, p95 của batch này là bao nhiêu
+```
+
+Vì vậy chart này dùng để trả lời:
+
+```text
+response time thay đổi theo thời gian như nào?
+đầu test có spike không?
+cuối test có còn spike không?
+```
+
+không dùng để thay thế dòng summary cuối.
+
+### Chart 2 — Execution timeline
+
+Chart này có JSON debug dạng:
+
+```text
+Debug JSON: execution-timeline
+```
+
+Ý nghĩa:
+
+```text
+mỗi point = trạng thái execution trong 1 time bucket
+```
+
+Các series chính:
+
+```text
+Live VUs
+RPS
+```
+
+Run thật case 01 có các point:
+
+| Time bucket | Live VUs | HTTP reqs trong bucket | Iterations hoàn thành trong bucket |
+| --- | ---: | ---: | ---: |
+| 01:09:17 | 8 | 48 | 0 |
+| 01:09:18 | 8 | 19 | 0 |
+| 01:09:19 | 8 | 34 | 7 |
+| 01:09:20 | 8 | 36 | 4 |
+| 01:09:21 | 8 | 42 | 5 |
+| 01:09:22 | 8 | 31 | 6 |
+| 01:09:23 | 8 | 42 | 2 |
+| 01:09:24 | 8 | 32 | 7 |
+| 01:09:25 | 8 | 40 | 2 |
+| 01:09:26 | 1 | 4 | 7 |
+
+Kiểm tra tổng:
+
+```text
+sum(httpReqs) = 48+19+34+36+42+31+42+32+40+4 = 328
+summary http_reqs = 328  ✓
+
+sum(iterations) = 0+0+7+4+5+6+2+7+2+7 = 40
+summary iterations = 40  ✓
+```
+
+Đây là cách verify chart point đúng:
+
+```text
+không cần pointCount bằng metrics_push_count
+chỉ cần tổng Counter trong chart khớp summary
+```
+
+Đọc shape theo executor:
+
+```text
+01:09:17 -> 01:09:25: Live VUs = 8
+01:09:26:              Live VUs = 1
+sau đó:                Live VUs = 0
+```
+
+Ý nghĩa:
+
+```text
+- lúc đầu 8 VU cùng chạy quota 5 iterations/VU
+- VU nhanh chạy xong trước thì idle / trả về pool
+- gần cuối chỉ còn 1 VU chậm chạy nốt
+- hết quota thì về 0 VU
+```
+
+Đây là đúng bản chất `per-vu-iterations`:
+
+```text
+VU nhanh KHÔNG lấy thêm việc của VU chậm
+```
+
+### Vì sao 2 bucket đầu có `iterations = 0` nhưng vẫn có HTTP reqs?
+
+Ở bucket đầu:
+
+```text
+httpReqs = 48
+iterations = 0
+```
+
+Điều này bình thường.
+
+Lý do:
+
+```text
+HTTP request được ghi ngay khi request hoàn tất
+nhưng metric `iterations` chỉ tăng khi TOÀN BỘ iteration xong
+```
+
+Một iteration case 01 gồm nhiều bước:
+
+```text
+login/browse/detail/add-to-cart/checkout/confirm + sleep
+```
+
+Nên trong 1-2 giây đầu có thể đã có nhiều request xong, nhưng chưa có
+iteration nào hoàn chỉnh. Đến khi full journey xong, `iterations` mới tăng.
+
+Cách nhớ:
+
+```text
+http_reqs    = request event
+iterations   = full journey event
+```
+
+### Chart phụ — VUs vs iter/s
+
+Chart này có JSON debug dạng:
+
+```text
+Debug JSON: vus-vs-iterations
+```
+
+Các series:
+
+```text
+Executor VUs
+Actual iter/s
+```
+
+Nó dùng cùng dữ liệu bucket như Execution timeline, nhưng tập trung vào:
+
+```text
+- executor dự kiến có bao nhiêu VU
+- thực tế bucket đó hoàn thành bao nhiêu iteration/s
+```
+
+Ví dụ input của chart:
+
+```json
+{
+  "configuredVUs": 8,
+  "peakVUs": 8,
+  "summaryIterationRate": 3.9256369728738094,
+  "runIsFinished": true,
+  "envelopeVUs": 8
+}
+```
+
+Đọc:
+
+```text
+configuredVUs = 8
+  config scenario có 8 VU
+
+summaryIterationRate = 3.925637/s
+  trung bình toàn run, lấy từ summary `iterations...: 40 3.925637/s`
+
+Actual iter/s
+  số iteration hoàn thành trong từng bucket 1 giây
+```
+
+Với run này:
+
+```text
+bucket iterations: 0,0,7,4,5,6,2,7,2,7
+sum = 40
+```
+
+Nên chart đúng.
+
+### 2. Tab Executor / Execution
+
+Chuyển sang tab:
+
+```text
+Executor
+```
+
+Dashboard detect đúng:
+
+```text
+EXECUTOR = per-vu-iterations
+```
+
+Tab này có 1 chart chính:
+
+```text
+Debug JSON: executor-behavior
+```
+
+Series:
+
+```text
+Fixed VUs
+Observed VUs
+Actual iter/s
+Peak if all active
+```
+
+Input từ run thật:
+
+```json
+{
+  "configuredVUs": 8,
+  "peakVUs": 8,
+  "iterationDurationAvg": 1912.2682775,
+  "iterationAvgSeconds": 1.9122682775,
+  "summaryIterationRate": 3.9256369728738094,
+  "predictedPeakIterationRate": 4.183513419183411
+}
+```
+
+Đọc từng dòng:
+
+```text
+Fixed VUs
+  đường config/envelope: case này là 8 VUs
+
+Observed VUs
+  VU thật quan sát theo bucket: 8 ở đầu, 1 ở cuối, 0 khi xong
+
+Actual iter/s
+  số iteration hoàn thành theo từng bucket
+
+Peak if all active
+  throughput ước lượng nếu cả 8 VU đều còn active
+```
+
+Tự tính peak:
+
+```text
+iteration_duration avg ≈ 1.912s
+predicted_peak ≈ vus / iter_time
+               ≈ 8 / 1.912
+               ≈ 4.18 iter/s
+```
+
+Summary thực tế:
+
+```text
+iterations rate = 3.925637/s
+```
+
+Đọc kết luận:
+
+```text
+actual average ≈ 3.93/s < predicted peak ≈ 4.18/s
+```
+
+Điều này đúng, vì:
+
+```text
+- có overhead runtime / request đầu / sleep
+- các VU không xong cùng lúc tuyệt đối
+- cuối run có đuôi idle: chỉ còn 1 VU chạy nốt
+```
+
+Đây chính là ý "maximum throughput reached but not maintained".
+
+### 3. `metrics_push_count` khác `pointCount` — không phải bug
+
+Trong dashboard có thể thấy:
+
+```text
+Recent runs: batches 8
+```
+
+Run metadata:
+
+```text
+metrics_push_count = 8
+```
+
+Nhưng chart debug JSON có:
+
+```text
+response-time.pointCount = 10
+execution-timeline.pointCount = 10
+vus-vs-iterations.pointCount = 10
+```
+
+Điều này **hợp lệ**.
+
+Backend contract:
+
+```text
+metrics_push_count
+  = số metrics payload / MetricSet backend nhận và xử lý từ k6
+  = số ingest pushes
+
+chart pointCount
+  = số time buckets / WebSocket frames dashboard render từ live/replay data
+```
+
+Hai số này không có quan hệ 1-1:
+
+```text
+metrics_push_count không cần bằng pointCount
+```
+
+Với run này:
+
+```text
+metrics_push_count = 8
+chart pointCount   = 10
+```
+
+nhưng chart vẫn đúng vì:
+
+```text
+sum(chart.httpReqs)   = 328 = summary.http_reqs
+sum(chart.iterations) = 40  = summary.iterations
+```
+
+Cách verify đúng:
+
+```text
+ĐỪNG kiểm: metrics_push_count == pointCount
+HÃY kiểm:  sum Counter theo chart buckets == final summary Counter
+```
+
+### 4. Endpoint debug series theo metric
+
+Nếu muốn kiểm trực tiếp series aggregate theo từng metric, backend có endpoint:
+
+```http
+GET /v1/tests/:id/series?metric=http_reqs
+```
+
+Ví dụ:
+
+```http
+GET http://localhost:13001/v1/tests/5/series?metric=http_reqs
+Authorization: Bearer student-token-1234567890
+```
+
+Endpoint này trả points theo metric sau aggregation. Nó không phải raw push
+log. Hiện chưa có endpoint map trực tiếp:
+
+```text
+raw push #1 -> chart bucket nào
+raw push #2 -> chart bucket nào
+```
+
+nhưng để học sinh verify chart, endpoint series là đủ:
+
+```text
+series(http_reqs)    -> cộng lại phải bằng summary.http_reqs
+series(iterations)   -> cộng lại phải bằng summary.iterations
+```
+
+### 5. Checklist đọc biểu đồ case 01
+
+Khi học sinh nhìn dashboard case 01, đọc theo thứ tự này:
+
+```text
+1. Overview KPI
+   - iterations = total expected?
+   - http_req_failed = 0%?
+   - checks = 100%?
+
+2. Response time chart
+   - batch p95 đầu có spike không?
+   - cuối test còn spike không?
+   - nhớ: batch p95 != final summary p95
+
+3. Execution timeline
+   - Live VUs đầu có bằng config không?
+   - cuối run VUs có tụt dần không?
+   - sum iterations theo bucket có bằng summary iterations không?
+
+4. VUs vs iter/s
+   - actual iter/s theo bucket dao động thế nào?
+   - summary average iter/s có nằm dưới peak không?
+
+5. Executor tab
+   - executor detect đúng `per-vu-iterations` không?
+   - Fixed VUs = config không?
+   - Observed VUs có shape 8 -> 1 -> 0 không?
+   - predicted peak > actual average không?
+```
+
+Kết luận của run case 01 đang đúng nếu thấy:
+
+```text
+iterations = 40/40 hoặc 150/150 (tùy config)
+http_req_failed = 0%
+checks = 100%
+Live VUs: đầu = config VUs, cuối giảm về 0
+sum chart iterations = summary iterations
+sum chart httpReqs = summary http_reqs
+executor = per-vu-iterations
+```
+
 ## Mở rộng / variation
 
 ### Variation A: Test data per-user
