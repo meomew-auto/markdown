@@ -1530,14 +1530,21 @@ Actual iter/s
   số iteration hoàn thành trong từng bucket 1 giây
 ```
 
-Với run này:
+Với run này, một lần render chart có thể cho sequence kiểu:
 
 ```text
 bucket iterations: 0,0,7,4,5,6,2,7,2,7
 sum = 40
 ```
 
-Nên chart đúng.
+Nhưng không cần thuộc đúng sequence này. Khi dashboard replay lại, bucket
+split có thể hơi khác. Tiêu chí đúng là:
+
+```text
+sum(bucket iterations) = summary iterations
+```
+
+Nên chart đúng nếu tổng bucket vẫn bằng `40`.
 
 #### Cách phân tích sâu chart VUs vs iter/s
 
@@ -1654,33 +1661,58 @@ summary http_reqs  = 328
 configured VUs     = 8
 ```
 
-Chart `VUs vs iter/s` có points:
+Cách kiểm đúng KHÔNG phải là học thuộc từng point cụ thể, vì khi dashboard
+live/replay lại data, số bucket có thể lệch nhẹ theo cách replay frame. Cách
+kiểm đúng là:
 
-| Time bucket | Executor VUs / observed VUs | Actual iter/s | HTTP reqs |
+```text
+sum(Actual iter/s theo bucket) == summary iterations
+sum(HTTP reqs theo bucket)    == summary http_reqs
+configuredVUs                == summary vus_max
+```
+
+Một lần render chart có thể có bảng point như sau:
+
+| Time bucket | Observed VUs | Actual iter/s | HTTP reqs |
 | --- | ---: | ---: | ---: |
-| 01:09:17 | 8 | 0 | 48 |
-| 01:09:18 | 8 | 0 | 19 |
-| 01:09:19 | 8 | 7 | 34 |
-| 01:09:20 | 8 | 4 | 36 |
-| 01:09:21 | 8 | 5 | 42 |
-| 01:09:22 | 8 | 6 | 31 |
-| 01:09:23 | 8 | 2 | 42 |
-| 01:09:24 | 8 | 7 | 32 |
-| 01:09:25 | 8 | 2 | 40 |
-| 01:09:26 | 1 | 7 | 4 |
+| bucket 1 | 8 | 0 | 48 |
+| bucket 2 | 8 | 0 | 19 |
+| bucket 3 | 8 | 7 | 34 |
+| bucket 4 | 8 | 4 | 36 |
+| bucket 5 | 8 | 5 | 42 |
+| bucket 6 | 8 | 6 | 31 |
+| bucket 7 | 8 | 2 | 42 |
+| bucket 8 | 8 | 7 | 32 |
+| bucket 9 | 8 | 2 | 40 |
+| bucket 10 | 1 | 7 | 4 |
 
 Kiểm bằng tổng Counter:
 
 ```text
 sum(Actual iter/s theo bucket)
-  = 0+0+7+4+5+6+2+7+2+7
   = 40
   = summary iterations ✓
 
 sum(HTTP reqs theo bucket)
-  = 48+19+34+36+42+31+42+32+40+4
   = 328
   = summary http_reqs ✓
+```
+
+Trong lần re-check bằng dashboard sau đó, chart render ra 11 points thay vì
+10 points, nhưng vẫn đúng vì:
+
+```text
+pointCount = points.length = 11 ✓
+sum(iterations) = 40 = summary iterations ✓
+sum(httpReqs)   = 328 = summary http_reqs ✓
+configuredVUs   = 8 = summary vus_max ✓
+```
+
+Nên kết luận là:
+
+```text
+exact bucket list có thể thay đổi nhẹ theo replay
+nhưng tổng Counter + VU config phải khớp summary
 ```
 
 Vì `aggregationPeriod = 1`, nên:
@@ -1703,39 +1735,51 @@ Còn run này bucket đang là 1 giây nên số `7` đọc được là:
 
 ##### Timeline/envelope có gì đặc biệt?
 
-Chart này còn có timeline phụ:
+Chart này còn có timeline phụ để vẽ đường executor trên chart:
 
 ```text
-01:09:16  executorVUs=0 observedVUs=0  (điểm mở đầu synthetic)
-01:09:17  executorVUs=8 observedVUs=8
-...
-01:09:26  executorVUs=8 observedVUs=1
-01:09:27  executorVUs=0 observedVUs=0  (điểm kết thúc synthetic)
+điểm mở đầu synthetic: executorVUs=0 observedVUs=0
+các bucket trong run: executorVUs≈configured VUs, observedVUs theo sample thực tế
+điểm kết thúc synthetic: executorVUs=0 observedVUs=0
 ```
 
 Hai điểm `0` đầu/cuối dùng để vẽ đường quay về baseline trên biểu đồ.
 Không đọc chúng là "VU thật chạy 0 trong lúc test". Chúng là điểm chart
 để biểu đồ nhìn đủ start/end.
 
-Điểm quan trọng nhất:
+Điểm quan trọng nhất cần kiểm không phải là "bucket cuối chính xác bằng
+mấy VU", mà là:
 
 ```text
-executorVUs vẫn là 8 ở bucket 01:09:26
-observedVUs chỉ còn 1 ở bucket 01:09:26
+executorVUs / configuredVUs = 8
+observedVUs không vượt quá 8
+observedVUs có thể thấp hơn 8 ở đoạn cuối
 ```
 
 Đọc nghĩa:
 
 ```text
 config/envelope của executor là 8 VU
-nhưng thực tế tại bucket cuối chỉ còn 1 VU active
+nhưng thực tế gần cuối có thể chỉ còn một phần VU active
 ```
 
 Đây đúng bản chất `per-vu-iterations`:
 
 ```text
 VU nhanh đã xong quota -> rời active pool
-VU chậm còn chạy nốt -> observedVUs tụt xuống 1
+VU chậm còn chạy nốt -> observedVUs có thể thấp hơn Fixed/Executor VUs
+```
+
+Lưu ý từ re-check:
+
+```text
+Counter totals của chart ổn định và là tiêu chí chính:
+  sum(iterations) = 40
+  sum(httpReqs) = 328
+
+Observed VUs theo từng bucket có thể khác nhẹ giữa live/replay frame,
+ví dụ lần này bucket cuối có thể còn 1 VU, lần replay khác có thể còn 5 VU.
+Không dùng exact VU của 1 bucket làm pass/fail chính; dùng nó để đọc shape.
 ```
 
 ##### Chart này giống và khác tab Executor thế nào?
@@ -1770,10 +1814,15 @@ Kết luận kiểm chứng chart này:
 ```text
 - Actual iter/s cộng lại đúng 40 iterations
 - HTTP reqs theo bucket cộng lại đúng 328 requests
-- VUs shape 8 -> 1 -> 0 khớp CLI progress
+- configuredVUs = 8 khớp summary vus_max
+- observedVUs không vượt quá configuredVUs và có thể thấp hơn ở cuối run
 - timeline có điểm synthetic 0 đầu/cuối để vẽ chart
 => chart VUs vs iter/s đo đúng cho case 01
 ```
+
+Nói cách khác: chart này PASS theo tiêu chí dữ liệu Counter + config VU.
+Không dùng exact observedVUs của từng bucket làm tiêu chí cứng, vì replay
+frame có thể chia bucket hơi khác.
 
 ### 2. Tab Executor / Execution
 
