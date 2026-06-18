@@ -88,7 +88,7 @@ export default function () {
     if (res.status === 200) okCount++;
   }
   check(null, {
-    [`burst ${ITERS_PER_BURST}/${ITERS_PER_BURST} success`]: () =>
+    [`burst ${ITEMS_PER_BURST}/${ITEMS_PER_BURST} success`]: () =>
       okCount === ITEMS_PER_BURST,
   });
 
