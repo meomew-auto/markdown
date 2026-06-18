@@ -288,6 +288,146 @@ Bước 4: login_count=10, refresh_count=10, failed_after_refresh=0 ✓
 Bước 5: iter_time = action time + occasional refresh overhead
 ```
 
+## Đọc dashboard real-time charts cho case 04
+
+Run thật đã verify:
+
+```text
+run #17
+VUS = 10
+ITERS_PER_VU = 20
+total_iterations = 10 × 20 = 200
+```
+
+Summary quan trọng:
+
+```text
+iterations.............: 200     45.285039/s
+http_reqs..............: 430     97.362835/s
+login_count............: 10
+refresh_count..........: 10
+failed_after_refresh...: 0
+http_req_failed........: 0.00%
+checks rate............: 100%
+vus....................: 10 min=10 max=10
+vus_max................: 10 min=10 max=10
+```
+
+Đọc nhanh:
+
+```text
+- Workload đủ: 200/200 iterations
+- Session lifecycle đúng: 10 login + 10 refresh + 0 fail sau refresh
+- HTTP sạch: 0 fail
+- VUs giữ ổn định 10 trong toàn run
+=> Run PASS cho mục tiêu auth/session.
+```
+
+### Overview có 3 chart cần đọc
+
+| Chart | Câu hỏi trong session lifecycle test |
+| --- | --- |
+| Response time | refresh ở giữa test có làm latency spike không? |
+| Execution timeline | login/refresh/action tạo request load theo thời gian ra sao? |
+| VUs vs iter/s | mỗi giây hoàn thành bao nhiêu session action, tổng đủ 200 không? |
+
+### Chart 1 — Response time
+
+Run #17 có 6 buckets:
+
+```text
+bucket đầu: avg≈58.47ms, p95≈99.58ms
+bucket giữa: avg≈3.5ms -> 7.6ms, p95 thấp
+bucket cuối: avg=0, p95=0 (bucket kết thúc không có request)
+```
+
+Summary:
+
+```text
+http_req_duration avg ≈ 8.60ms
+http_req_duration p95 ≈ 49.54ms
+```
+
+Đọc thực tế:
+
+```text
+- đầu run cao hơn do login/setup
+- giữa run request rất nhanh
+- không thấy spike lớn tại refresh
+```
+
+Kết luận:
+
+```text
+refresh flow không gây latency bất thường.
+```
+
+### Chart 2 — Execution timeline
+
+Run #17:
+
+| Bucket | VUs | HTTP reqs | Iterations | VU source |
+| --- | ---: | ---: | ---: | --- |
+| đầu | 10 | 30 | 0 | filled-backward |
+| giữa | 10 | 100 | 50 | gauge |
+| giữa | 10 | 108 | 50 | gauge |
+| giữa | 10 | 100 | 44 | gauge |
+| giữa | 10 | 92 | 46 | gauge |
+| cuối | 10 | 0 | 10 | filled-forward |
+
+Kiểm tổng:
+
+```text
+sum(httpReqs) = 430 = summary http_reqs ✓
+sum(iterations) = 200 = summary iterations ✓
+```
+
+Đọc thực tế:
+
+```text
+- 10 VUs giữ ổn định, đúng với summary vus min=max=10
+- bucket đầu có requests nhưng chưa có iteration hoàn chỉnh
+- bucket cuối có iterations nhưng không có request vì iteration hoàn thành sau request cuối
+```
+
+### Chart 3 — VUs vs iter/s
+
+Run #17:
+
+| Bucket | Observed VUs | Actual iter/s | HTTP reqs | VU source |
+| --- | ---: | ---: | ---: | --- |
+| đầu | 10 | 0 | 30 | filled-backward |
+| giữa | 10 | 50 | 100 | gauge |
+| giữa | 10 | 50 | 108 | gauge |
+| giữa | 10 | 44 | 100 | gauge |
+| giữa | 10 | 46 | 92 | gauge |
+| cuối | 10 | 10 | 0 | filled-forward |
+
+Kiểm tổng:
+
+```text
+sum(Actual iter/s) = 200 = summary iterations ✓
+sum(httpReqs) = 430 = summary http_reqs ✓
+```
+
+Đọc thực tế:
+
+```text
+- VU ổn định 10, không có tail giảm VU đáng kể
+- throughput cao vì mỗi iter chủ yếu là auth check/action ngắn
+- refresh ở iter 10 không làm đứt flow: iterations vẫn đủ 200
+```
+
+### Cách chốt từ summary -> 3 chart
+
+| Bước | Nhìn ở đâu | Kết luận run #17 |
+| --- | --- | --- |
+| Workload | summary + VUs vs iter/s | đủ 200/200 |
+| Session contract | custom metrics | 10 login, 10 refresh, 0 fail sau refresh |
+| HTTP health | summary + Response time | 0 fail, p95 thấp |
+| Execution shape | Execution timeline | 10 VU ổn định, request/iteration khớp |
+| Final verdict | tổng hợp | PASS: session lifecycle đúng |
+
 ## Kết luận thực tế: đọc output này thì team auth quyết định gì?
 
 Mục tiêu nghiệp vụ: xác nhận **vòng đời session** đúng — token hết hạn
