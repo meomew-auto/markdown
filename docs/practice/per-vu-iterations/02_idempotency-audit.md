@@ -319,6 +319,239 @@ T_run ≈ 1s (5 iter × 200ms)
 maxDuration = 3m -> dư rất nhiều
 ```
 
+## Đọc dashboard real-time charts cho case 02
+
+Ví dụ dưới đây lấy từ một run thật sau khi chạy bằng wrapper:
+
+```powershell
+$env:K6_CLOUD_TOKEN = "student-token-1234567890"
+$env:K6_CLOUD_HOST = "http://localhost:18080"
+.\run-with-summary.ps1 .\examples\per-vu-iterations\pvi-02-idempotency-audit.js
+```
+
+Run quan sát được:
+
+```text
+run #15
+VUS = 20
+ITERS_PER_VU = 5
+total_iterations = 20 × 5 = 100
+```
+
+Summary quan trọng:
+
+```text
+iterations.............: 100     30.487326/s
+http_reqs..............: 100     30.487326/s
+idem_fresh_count.......: 20      6.097465/s
+idem_reuse_count.......: 80      24.389861/s
+http_req_failed........: 51.00%  51 out of 100
+checks_succeeded.......: 70.00%  252 out of 360
+checks_failed..........: 30.00%  108 out of 360
+vus....................: 10      min=10 max=20
+vus_max................: 20      min=20 max=20
+```
+
+Đọc nhanh:
+
+```text
+- Count/workload đúng: 100/100 iterations
+- Idempotency counters đúng: 20 fresh + 80 reuse
+- Nhưng HTTP fail rất cao: 51%
+- Checks chỉ pass 70%
+=> Đây là run FAIL về độ ổn định HTTP/contract response, dù count idempotency đúng.
+```
+
+Điểm học quan trọng của case này:
+
+```text
+custom counters đúng KHÔNG đồng nghĩa toàn bộ test pass.
+```
+
+Ở đây:
+
+```text
+idem_fresh_count = 20  ✓
+idem_reuse_count = 80  ✓
+http_req_failed = 51%  ✗
+checks rate = 70%      ✗
+```
+
+Nên kết luận là:
+
+```text
+server có xử lý đúng số lần fresh/reuse,
+nhưng nhiều request trả lỗi 5xx/không đúng response contract.
+```
+
+### Overview có 3 chart cần đọc
+
+Trong tab Overview, đọc 3 chart giống case 01:
+
+```text
+1. Response time
+2. Execution timeline
+3. VUs vs iter/s
+```
+
+Nhưng với case 02, ý nghĩa nghiệp vụ khác:
+
+| Chart | Câu hỏi cần trả lời trong idempotency audit |
+| --- | --- |
+| Response time | retry/fresh request có bị spike latency không? |
+| Execution timeline | 20 user retry storm dồn tải vào mấy giây đầu/cuối? |
+| VUs vs iter/s | mỗi giây hoàn thành bao nhiêu confirm call? tổng có đủ 100 không? |
+
+### Chart 1 — Response time
+
+Chart debug:
+
+```text
+Debug JSON: response-time
+```
+
+Run #15 có 4 buckets:
+
+| Bucket | Avg response | Batch p95 | Batch max |
+| --- | ---: | ---: | ---: |
+| bucket 1 | 62.68ms | 64.30ms | 232.96ms |
+| bucket 2 | 226.13ms | 1003.31ms | 1167.36ms |
+| bucket 3 | 382.87ms | 1933.31ms | 2154.49ms |
+| bucket 4 | 466.79ms | 2187.26ms | 2203.64ms |
+
+Đọc thực tế:
+
+```text
+- latency tăng dần theo thời gian
+- p95/max vượt ~2s ở cuối
+- summary http_req_duration p95 ≈ 2.19s
+```
+
+Kết luận:
+
+```text
+retry storm đang làm một nhóm request rất chậm / lỗi.
+Chart response-time xác nhận đây không chỉ là lỗi count; hệ thống thật sự
+có tail latency lớn ở cuối run.
+```
+
+Shape xấu cần chú ý trong case 02:
+
+| Shape | Nghĩa |
+| --- | --- |
+| p95 tăng dần sau mỗi bucket | retry/fresh requests đang làm backend đuối dần |
+| max > 2s nhiều bucket | có request bị chờ lâu, có thể timeout/5xx |
+| avg thấp nhưng p95 cao | đa số request nhanh, nhưng một nhóm retry rất chậm |
+
+### Chart 2 — Execution timeline
+
+Chart debug:
+
+```text
+Debug JSON: execution-timeline
+```
+
+Run #15:
+
+| Bucket | Live VUs | HTTP reqs | Iterations |
+| --- | ---: | ---: | ---: |
+| bucket 1 | 20 (filled-backward) | 20 | 19 |
+| bucket 2 | 20 (gauge) | 19 | 15 |
+| bucket 3 | 15 (gauge) | 23 | 23 |
+| bucket 4 | 10 (gauge) | 38 | 43 |
+
+Kiểm tổng:
+
+```text
+sum(httpReqs) = 100 = summary http_reqs ✓
+sum(iterations) = 100 = summary iterations ✓
+```
+
+Đọc thực tế:
+
+```text
+- workload cực ngắn: chỉ khoảng 4 bucket
+- lúc đầu 20 VU cùng retry/fresh confirm
+- cuối run chỉ còn 10 VU active nhưng lại hoàn thành 43 iterations trong bucket cuối
+```
+
+Điều này hợp với `per-vu-iterations`:
+
+```text
+VU nhanh xong quota -> rời active pool
+VU còn lại hoàn thành nốt retry sequence
+```
+
+`vusSource` cũng cho biết bucket đầu được fill:
+
+```text
+bucket 1: rawVus=0, vus=20, vusSource=filled-backward
+```
+
+Đọc nghĩa:
+
+```text
+bucket đầu có activity nhưng thiếu gauge VU đúng thời điểm,
+frontend fill ngược từ bucket sau để tránh vẽ VUs=0 giả.
+```
+
+### Chart 3 — VUs vs iter/s
+
+Chart debug:
+
+```text
+Debug JSON: vus-vs-iterations
+```
+
+Chart này dùng cùng bucket với Execution timeline, nhưng thay RPS bằng
+iteration throughput:
+
+| Bucket | Observed VUs | Actual iter/s | HTTP reqs | VU source |
+| --- | ---: | ---: | ---: | --- |
+| bucket 1 | 20 | 19 | 20 | filled-backward |
+| bucket 2 | 20 | 15 | 19 | gauge |
+| bucket 3 | 15 | 23 | 23 | gauge |
+| bucket 4 | 10 | 43 | 38 | gauge |
+
+Kiểm tổng:
+
+```text
+sum(Actual iter/s) = 19+15+23+43 = 100 = summary iterations ✓
+sum(httpReqs) = 20+19+23+38 = 100 = summary http_reqs ✓
+```
+
+Đọc thực tế:
+
+```text
+- throughput iteration rất cao vì mỗi iteration chỉ là 1 POST confirm + sleep ngắn
+- bucket cuối hoàn thành nhiều iterations dù VUs thấp hơn, vì nhiều VU kết thúc gần nhau
+- chart đo đúng workload: đủ 100 confirm calls
+```
+
+Nhưng không được kết luận test pass chỉ vì chart này đủ 100:
+
+```text
+VUs vs iter/s trả lời: workload đã chạy đủ chưa?
+Nó KHÔNG trả lời: response có đúng không?
+```
+
+Ở run này:
+
+```text
+workload đủ 100 ✓
+response/failure contract fail ✗
+```
+
+### Cách chốt từ summary -> 3 chart
+
+| Bước | Nhìn ở đâu | Kết luận run #15 |
+| --- | --- | --- |
+| Tổng workload | summary + VUs vs iter/s | đủ 100/100 confirm calls |
+| Fresh/reuse count | custom metrics | 20 fresh + 80 reuse đúng |
+| HTTP health | summary + Response time | fail 51%, p95 cao ~2.19s |
+| Execution shape | Execution timeline | 20 VU burst ngắn, VU giảm về cuối |
+| Final verdict | tổng hợp | FAIL: count đúng nhưng server/response contract hỏng |
+
 ## Kết luận thực tế: đọc output này thì team payment quyết định gì?
 
 Mục tiêu nghiệp vụ: xác nhận **idempotency contract** đúng — 1 đơn chỉ bị
