@@ -986,6 +986,82 @@ cuối test có còn spike không?
 
 không dùng để thay thế dòng summary cuối.
 
+#### Cách phân tích sâu chart Response time
+
+Khi nhìn chart này, đừng chỉ nhìn "cao/thấp". Hãy đọc theo 4 câu hỏi:
+
+```text
+1. Avg response có ổn định không?
+2. Batch p95 có spike ở đoạn nào?
+3. Batch max có outlier lớn không?
+4. Spike xảy ra cùng lúc với đoạn nào của flow?
+```
+
+Với case 01, chart đẹp thường có shape:
+
+```text
+đầu run:  p95/max có thể cao hơn
+giữa run: p95 ổn định thấp hơn
+cuối run: p95 không tăng bất thường
+```
+
+Vì sao đầu run dễ cao hơn?
+
+```text
+- iter 0 có login
+- server/cache có thể cold
+- mỗi VU tạo session/cart lần đầu
+- VU cùng start gần nhau -> request burst đầu lớn
+```
+
+Vì sao cuối run không nên spike mạnh?
+
+```text
+cuối run chỉ còn ít VU hơn
+-> load thấp hơn
+-> nếu response time lại tăng mạnh ở cuối, có thể có leak/stateful bug
+```
+
+Ví dụ đọc chart response-time của run này:
+
+```text
+01:09:17 p95=416ms
+01:09:18 p95=658ms   <- spike đầu run
+01:09:19 p95=118ms
+...
+01:09:26 p95=85ms    <- cuối run thấp hơn
+```
+
+Kết luận thực tế:
+
+```text
+- spike đầu run có, nhưng không kéo dài
+- cuối run không xấu đi
+- summary p95=144ms < threshold 2000ms
+=> latency OK, không có dấu hiệu regression hiệu năng trong case này
+```
+
+Nếu chart xấu thì đọc như nào?
+
+| Shape thấy trên chart | Có thể nghĩa là gì | Hành động |
+| --- | --- | --- |
+| p95 cao ngay từ đầu rồi ổn định | cold start / login đầu nặng | kiểm login/cache |
+| p95 tăng dần càng về cuối | leak, state phình, DB/cache chậm dần | soi stateful bug |
+| max spike lẻ tẻ nhưng p95 ổn | vài outlier đơn lẻ | xem log nhưng chưa vội fail |
+| p95 và max cùng spike nhiều bucket | vấn đề hệ thống thật | chặn / điều tra backend |
+| avg thấp nhưng p95 cao | đa số nhanh, một nhóm request rất chậm | tách theo tag endpoint |
+
+Ghi nhớ:
+
+```text
+avg cho biết mặt bằng chung
+p95 cho biết 5% request chậm nhất đang ra sao
+max cho biết outlier tệ nhất
+```
+
+Với regression gate, thường ưu tiên `p95` hơn `avg`, vì user thật hay khó
+chịu với tail latency chứ không chỉ trung bình.
+
 ### Chart 2 — Execution timeline
 
 Chart này có JSON debug dạng:
@@ -1061,6 +1137,94 @@ sau đó:                Live VUs = 0
 ```text
 VU nhanh KHÔNG lấy thêm việc của VU chậm
 ```
+
+#### Cách phân tích sâu chart Execution timeline
+
+Chart này trả lời câu hỏi khác hẳn Response time:
+
+```text
+Response time chart:
+  "request nhanh/chậm thế nào?"
+
+Execution timeline:
+  "tại mỗi giây, test đang tạo bao nhiêu tải? bao nhiêu VU còn chạy?"
+```
+
+Khi đọc chart này, nhìn 3 thứ cùng lúc:
+
+```text
+1. Live VUs
+2. RPS / httpReqs mỗi bucket
+3. iterations hoàn thành mỗi bucket
+```
+
+Với `per-vu-iterations`, shape "đẹp" thường là:
+
+```text
+đầu run:
+  Live VUs = config VUs
+  RPS cao hơn vì tất cả VU cùng hoạt động
+
+giữa run:
+  Live VUs vẫn gần config VUs nếu chưa ai xong quota
+  iterations bắt đầu tăng đều
+
+cuối run:
+  Live VUs tụt xuống vì VU nhanh xong quota
+  RPS tụt theo
+  sau đó VUs = 0 khi toàn bộ quota xong
+```
+
+Áp vào run này:
+
+```text
+01:09:17 -> 01:09:25: Live VUs = 8
+01:09:26:              Live VUs = 1
+```
+
+Đọc thực tế:
+
+```text
+- 9 bucket đầu: cả 8 VU vẫn còn active hoặc ít nhất sample thấy 8 VU active
+- bucket cuối: chỉ còn 1 VU chậm đang chạy nốt
+- sau bucket cuối: test kết thúc, VUs về 0
+```
+
+Điểm hay của chart này là nhìn được **đuôi idle**:
+
+```text
+8 VU cùng start
+7 VU xong sớm
+1 VU chậm kéo dài cuối run
+```
+
+Nếu học sinh chỉ nhìn summary:
+
+```text
+iterations = 40
+iteration_duration avg = 1.91s
+```
+
+thì không thấy được timeline VU. Chart này cho thấy "ai còn chạy ở cuối".
+
+Các shape xấu cần chú ý:
+
+| Shape thấy trên chart | Có thể nghĩa là gì | Hành động |
+| --- | --- | --- |
+| Live VUs không lên đủ config từ đầu | VU init/spawn có vấn đề, config/env sai | kiểm header, vus_max |
+| Live VUs tụt quá sớm | nhiều VU xong quota quá nhanh, workload lệch | xem iter_time từng VU |
+| Live VUs giữ cao nhưng iterations không tăng | VU bị kẹt trong request/sleep, backend chậm | xem response-time chart |
+| RPS tụt nhưng Live VUs vẫn cao | request chậm hơn, ít request hoàn thành | soi latency / backend |
+| iterations thiếu tổng cuối | drop/interrupt hoặc maxDuration cắt | xem CT 5, tăng maxDuration |
+
+Đặc biệt với case 01:
+
+```text
+Live VUs tụt ở cuối là ĐÚNG, không phải lỗi.
+```
+
+Vì `per-vu-iterations` không cố giữ số VU active tới hết duration như
+`constant-vus`. Nó chỉ giữ VU đến khi VU đó chạy xong quota.
 
 ### Batch 1 giây / time bucket được tính như nào?
 
