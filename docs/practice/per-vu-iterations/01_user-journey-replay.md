@@ -1657,6 +1657,58 @@ Execution timeline cho bạn biết request load: req/s
 VUs vs iter/s cho bạn biết business flow throughput: journey/s
 ```
 
+#### Bucket của chart này có khác 2 chart realtime không?
+
+Không khác về **cách chia thời gian**.
+
+Cả 3 chart trong Overview đều lấy từ cùng nguồn:
+
+```text
+metricsHistory / WebSocket frames / replay frames
+```
+
+và cùng kiểu bucket:
+
+```text
+1 bucket ~= 1 giây dữ liệu
+```
+
+Khác nhau là **mỗi chart rút metric nào ra từ cùng bucket đó**:
+
+| Chart | Cùng bucket 1 giây lấy gì? | Câu hỏi trả lời |
+| --- | --- | --- |
+| Response time | `http_req_duration avg/p95/max` trong bucket | request chậm/nhanh ra sao? |
+| Execution timeline | `vus` + `httpReqs`/RPS trong bucket | lúc đó có bao nhiêu VU và bao nhiêu request/s? |
+| VUs vs iter/s | `vus` + `iterations`/iter/s trong bucket | lúc đó có bao nhiêu VU và bao nhiêu journey/s? |
+
+Ví dụ cùng bucket `01:09:19` có thể được 3 chart đọc khác nhau:
+
+```text
+Response time:
+  avg=43ms, p95=118ms, max=1175ms
+
+Execution timeline:
+  vus=8, httpReqs=34
+
+VUs vs iter/s:
+  vus=8, iterations=7, iterationRate=7/s
+```
+
+Nghĩa là:
+
+```text
+cùng một lát cắt thời gian
+nhưng mỗi chart soi một khía cạnh khác nhau
+```
+
+Cách nhớ:
+
+```text
+Response time      = chất lượng request trong bucket
+Execution timeline = request load trong bucket
+VUs vs iter/s      = business journey throughput trong bucket
+```
+
 Với case 01, một iteration = một full user journey:
 
 ```text
