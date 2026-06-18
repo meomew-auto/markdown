@@ -1449,6 +1449,120 @@ Không kiểm:
 metrics_push_count == pointCount
 ```
 
+### `rawVus`, `vus`, `vusSource` trong chart JSON là gì?
+
+Từ bản dashboard mới, khi bấm **Copy JSON** ở các chart sau:
+
+```text
+Execution timeline
+VUs vs iter/s
+Executor behavior
+```
+
+mỗi point có thêm 3 field để debug VU rõ hơn:
+
+```json
+{
+  "rawVus": 6,
+  "vus": 6,
+  "vusSource": "gauge"
+}
+```
+
+Đọc như sau:
+
+| Field | Nghĩa | Dùng để làm gì? |
+| --- | --- | --- |
+| `rawVus` | giá trị VU gốc từ backend WebSocket/replay trước khi frontend fill | biết backend có gửi gauge thật không |
+| `vus` | giá trị VU mà chart đang vẽ | đây là số nhìn trên biểu đồ |
+| `vusSource` | nguồn của `vus` | biết `vus` là gauge thật hay frontend fill |
+
+`vusSource` có 4 giá trị:
+
+| `vusSource` | Nghĩa | Đọc thế nào? |
+| --- | --- | --- |
+| `gauge` | backend có gửi VU gauge thật trong bucket đó | số VU đáng tin nhất cho bucket đó |
+| `filled-forward` | bucket thiếu gauge, frontend lấy VU từ point trước | dùng để tránh vẽ VU=0 giả |
+| `filled-backward` | bucket thiếu gauge, frontend lấy VU từ point sau | dùng để lấp khoảng trống đầu/giữa chart |
+| `missing` | không có gauge và không fill được | không nên kết luận VU ở bucket đó |
+
+#### Vì sao cần `vusSource`?
+
+`vus` là metric dạng Gauge, không phải Counter. Counter như `http_reqs`,
+`iterations` có thể cộng theo bucket rất chắc. Nhưng `vus` là sample theo
+thời điểm, có thể có bucket:
+
+```text
+có httpReqs / iterations
+nhưng thiếu sample vus đúng trong bucket đó
+```
+
+Nếu frontend vẽ `vus=0` trong bucket đó thì học sinh sẽ hiểu nhầm:
+
+```text
+có request chạy nhưng không có VU nào active
+```
+
+nên frontend có thể fill VU từ bucket gần đó. `vusSource` cho biết bucket
+đó là:
+
+```text
+gauge thật hay số được fill
+```
+
+#### Ví dụ run #7 đã verify
+
+Run mới sau khi dashboard thêm field này:
+
+```text
+run #7
+summary iterations = 40
+summary http_reqs = 328
+summary vus min/max = 6/8
+```
+
+Last point của cả 3 chart đều có:
+
+```json
+{
+  "rawVus": 6,
+  "vus": 6,
+  "vusSource": "gauge",
+  "httpReqs": 2,
+  "iterations": 6
+}
+```
+
+Đọc nghĩa:
+
+```text
+- backend có gửi gauge thật cho bucket cuối
+- chart vẽ đúng giá trị đó
+- không phải frontend fill
+- summary vus_min = 6 cũng khớp
+```
+
+Cách kiểm nhanh sau này:
+
+```text
+Nếu vusSource = gauge:
+  rawVus == vus -> chart đang vẽ gauge thật
+
+Nếu vusSource = filled-forward / filled-backward:
+  vus là giá trị frontend fill để giữ đường chart liên tục
+  không dùng exact VU bucket đó làm bằng chứng cứng
+
+Nếu vusSource = missing:
+  không kết luận VU bucket đó
+```
+
+Vì vậy khi đọc chart, dùng quy tắc:
+
+```text
+Counter totals (iterations/httpReqs) -> dùng để verify workload
+Observed VUs + vusSource             -> dùng để hiểu concurrency shape
+```
+
 ### Vì sao 2 bucket đầu có `iterations = 0` nhưng vẫn có HTTP reqs?
 
 Ở bucket đầu:
@@ -1648,9 +1762,10 @@ Nó đúng nếu thỏa 4 điều kiện:
 
 ```text
 1. VUs trong chart khớp series `vus`
-2. Actual iter/s trong chart khớp series `iterations` đã group theo giây
-3. Tổng Actual iter/s theo các bucket = summary `iterations`
-4. Timeline/envelope thể hiện đúng shape của per-vu-iterations
+2. `vusSource` cho biết VUs là gauge thật hay frontend fill
+3. Actual iter/s trong chart khớp series `iterations` đã group theo giây
+4. Tổng Actual iter/s theo các bucket = summary `iterations`
+5. Timeline/envelope thể hiện đúng shape của per-vu-iterations
 ```
 
 Với run thật case 01:
@@ -1816,13 +1931,15 @@ Kết luận kiểm chứng chart này:
 - HTTP reqs theo bucket cộng lại đúng 328 requests
 - configuredVUs = 8 khớp summary vus_max
 - observedVUs không vượt quá configuredVUs và có thể thấp hơn ở cuối run
+- `rawVus/vus/vusSource` cho biết VU là gauge thật hay frontend fill
 - timeline có điểm synthetic 0 đầu/cuối để vẽ chart
 => chart VUs vs iter/s đo đúng cho case 01
 ```
 
 Nói cách khác: chart này PASS theo tiêu chí dữ liệu Counter + config VU.
-Không dùng exact observedVUs của từng bucket làm tiêu chí cứng, vì replay
-frame có thể chia bucket hơi khác.
+Không dùng exact observedVUs của từng bucket làm tiêu chí cứng nếu
+`vusSource` không phải `gauge`, vì frontend có thể fill VU để tránh vẽ
+`0` giả.
 
 ### 2. Tab Executor / Execution
 
@@ -1946,6 +2063,18 @@ Nên mô hình kỳ vọng là:
 | `Observed VUs` | thực tế còn bao nhiêu VU active theo thời gian? | đầu gần `8`, cuối có thể tụt thấp hơn rồi `0` |
 | `Actual iter/s` | mỗi bucket hoàn thành bao nhiêu journey? | dao động, tổng = `40` |
 | `Peak if all active` | nếu cả 8 VU đều chạy đều thì peak khoảng bao nhiêu? | `~4.18 iter/s` |
+
+Với bản dashboard mới, tooltip / Copy JSON của `Observed VUs` còn cho biết
+source:
+
+```text
+Observed VUs source: gauge
+Observed VUs source: filled-forward
+Observed VUs source: filled-backward
+```
+
+Nếu source là `gauge`, đó là sample VU thật từ backend. Nếu là `filled-*`,
+đó là số frontend fill để giữ chart không bị tụt xuống 0 giả.
 
 Điểm cần dạy học sinh: **đường Fixed VUs không có nghĩa là lúc nào cũng có
 8 VU đang bận**.
@@ -2117,16 +2246,21 @@ Khi học sinh nhìn dashboard case 01, đọc theo thứ tự này:
 3. Execution timeline
    - Live VUs đầu có bằng config không?
    - cuối run VUs có tụt dần không?
+   - `vusSource` là gauge hay filled-*?
    - sum iterations theo bucket có bằng summary iterations không?
 
 4. VUs vs iter/s
    - actual iter/s theo bucket dao động thế nào?
+   - sum actual iter/s có bằng summary iterations không?
+   - `rawVus` và `vus` có khác nhau không?
+   - nếu khác, `vusSource` là filled-forward/backward hay missing?
    - summary average iter/s có nằm dưới peak không?
 
 5. Executor tab
    - executor detect đúng `per-vu-iterations` không?
    - Fixed VUs = config không?
    - Observed VUs có xu hướng đầu gần config VUs, cuối tụt về 0 không?
+   - Observed VUs source là gauge hay fill?
    - predicted peak > actual average không?
 ```
 
