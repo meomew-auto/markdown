@@ -319,9 +319,11 @@ T_run ≈ 1s (5 iter × 200ms)
 maxDuration = 3m -> dư rất nhiều
 ```
 
+
 ## Đọc dashboard real-time charts cho case 02
 
-Ví dụ dưới đây lấy từ một run thật sau khi chạy bằng wrapper:
+Ví dụ dưới đây lấy từ run thật sau khi chạy bằng wrapper để dashboard dùng
+summary authoritative từ k6:
 
 ```powershell
 $env:K6_CLOUD_TOKEN = "student-token-1234567890"
@@ -329,10 +331,15 @@ $env:K6_CLOUD_HOST = "http://localhost:18080"
 .\run-with-summary.ps1 .\examples\per-vu-iterations\pvi-02-idempotency-audit.js
 ```
 
-Run quan sát được:
+Run đã verify:
 
 ```text
-run #15
+run #32
+exit = 0
+pushed = true
+finished = true
+percentile_source = k6_summary
+
 VUS = 20
 ITERS_PER_VU = 5
 total_iterations = 20 × 5 = 100
@@ -341,50 +348,60 @@ total_iterations = 20 × 5 = 100
 Summary quan trọng:
 
 ```text
-iterations.............: 100     30.487326/s
-http_reqs..............: 100     30.487326/s
-idem_fresh_count.......: 20      6.097465/s
-idem_reuse_count.......: 80      24.389861/s
-http_req_failed........: 51.00%  51 out of 100
-checks_succeeded.......: 70.00%  252 out of 360
-checks_failed..........: 30.00%  108 out of 360
-vus....................: 10      min=10 max=20
-vus_max................: 20      min=20 max=20
+iterations.............: 100
+http_reqs..............: 100
+http_req_failed........: 0.00%
+checks_succeeded.......: 100.00%  360 out of 360
+checks_failed..........: 0.00%    0 out of 360
+idem_fresh_count.......: 20
+idem_reuse_count.......: 80
+
+http_req_duration avg..: 55.30ms
+http_req_duration p95..: 227.89ms
+http_req_duration p99..: 244.59ms
+http_req_duration max..: 1209.51ms
 ```
+
+Request breakdown:
+
+| Endpoint / status | Count | Ý nghĩa |
+| --- | ---: | --- |
+| `confirm_order` `200` | 100 | toàn bộ 100 confirm call đều thành công |
+| `confirm_order` `5xx` | 0 | backend không còn lỗi retry storm |
 
 Đọc nhanh:
 
 ```text
-- Count/workload đúng: 100/100 iterations
-- Idempotency counters đúng: 20 fresh + 80 reuse
-- Nhưng HTTP fail rất cao: 51%
-- Checks chỉ pass 70%
-=> Đây là run FAIL về độ ổn định HTTP/contract response, dù count idempotency đúng.
+- Workload đủ: 100/100 iterations
+- Idempotency count đúng: 20 fresh + 80 reuse = 100
+- HTTP sạch: 0 fail, không còn 5xx
+- Replay contract sạch: 360/360 checks pass
+=> Run PASS: backend đã xử lý idempotency retry đúng.
 ```
 
-Điểm học quan trọng của case này:
+Điểm học quan trọng:
 
 ```text
-custom counters đúng KHÔNG đồng nghĩa toàn bộ test pass.
+custom counters đúng + HTTP sạch + checks sạch mới kết luận idempotency OK.
 ```
 
-Ở đây:
+Nếu chỉ có:
 
 ```text
-idem_fresh_count = 20  ✓
-idem_reuse_count = 80  ✓
-http_req_failed = 51%  ✗
-checks rate = 70%      ✗
+idem_fresh_count = 20 ✓
+idem_reuse_count = 80 ✓
 ```
 
-Nên kết luận là:
+thì mới chứng minh được **số lần fresh/reuse**. Muốn kết luận API an toàn cho
+retry, còn phải có:
 
 ```text
-server có xử lý đúng số lần fresh/reuse,
-nhưng nhiều request trả lỗi 5xx/không đúng response contract.
+http_req_failed = 0%
+checks_failed = 0
+confirm_order 5xx = 0
 ```
 
-### Overview có 3 chart cần đọc
+### 1. Overview có 3 chart cần đọc
 
 Trong tab Overview, đọc 3 chart giống case 01:
 
@@ -394,13 +411,23 @@ Trong tab Overview, đọc 3 chart giống case 01:
 3. VUs vs iter/s
 ```
 
-Nhưng với case 02, ý nghĩa nghiệp vụ khác:
+Với idempotency audit, mỗi chart trả lời một câu hỏi khác nhau:
 
-| Chart | Câu hỏi cần trả lời trong idempotency audit |
-| --- | --- |
-| Response time | retry/fresh request có bị spike latency không? |
-| Execution timeline | 20 user retry storm dồn tải vào mấy giây đầu/cuối? |
-| VUs vs iter/s | mỗi giây hoàn thành bao nhiêu confirm call? tổng có đủ 100 không? |
+| Chart | Câu hỏi cần trả lời trong case 02 | Không dùng để kết luận gì? |
+| --- | --- | --- |
+| Response time | retry/fresh confirm có spike latency không? | không tự chứng minh không double-charge |
+| Execution timeline | 20 customer retry storm dồn tải vào mấy bucket? | không tự chứng minh response replay giống nhau |
+| VUs vs iter/s | workload 100 confirm call đã chạy đủ chưa? | không tự chứng minh idempotency contract đúng |
+
+Một cách đọc nhanh:
+
+```text
+Response time      -> request confirm nhanh/chậm theo thời gian
+Execution timeline -> tải confirm/retry phân bổ theo bucket nào
+VUs vs iter/s      -> executor có hoàn thành đủ 100 iteration không
+Custom metrics     -> fresh/reuse có đúng 20/80 không
+Checks             -> replay response có đúng contract không
+```
 
 ### Chart 1 — Response time
 
@@ -410,38 +437,78 @@ Chart debug:
 Debug JSON: response-time
 ```
 
-Run #15 có 4 buckets:
+Run #32:
 
-| Bucket | Avg response | Batch p95 | Batch max |
-| --- | ---: | ---: | ---: |
-| bucket 1 | 62.68ms | 64.30ms | 232.96ms |
-| bucket 2 | 226.13ms | 1003.31ms | 1167.36ms |
-| bucket 3 | 382.87ms | 1933.31ms | 2154.49ms |
-| bucket 4 | 466.79ms | 2187.26ms | 2203.64ms |
+| Metric | Giá trị | Cách đọc |
+| --- | ---: | --- |
+| `pointCount` / buckets | 3 | run ngắn, dashboard gom thành 3 bucket thời gian |
+| total samples | 100 | đúng bằng `summary http_reqs` |
+| weighted avg | 55.30ms | trung bình toàn bộ request theo bucket |
+| summary p95 | 227.89ms | percentile authoritative cuối test |
+| summary p99 | 244.59ms | tail latency gần cuối phân phối |
+| summary max | 1209.51ms | 1 outlier chậm nhất |
+| bucket p95 peak | 1208.32ms | bucket có tail latency cao nhất |
+| bucket max peak | 1209.51ms | max trên chart khớp summary max |
 
 Đọc thực tế:
 
 ```text
-- latency tăng dần theo thời gian
-- p95/max vượt ~2s ở cuối
-- summary http_req_duration p95 ≈ 2.19s
+- đa số request confirm nhanh: avg chỉ ~55ms
+- p95/p99 summary vẫn dưới ~250ms
+- có 1 tail outlier khoảng 1.2s
+- outlier này KHÔNG làm test fail vì không có HTTP fail và checks đều pass
+```
+
+Đừng nhầm:
+
+```text
+bucket p95 peak ≠ summary p95 cuối test
+```
+
+Ở run này, bucket p95 peak cao vì trong một bucket ngắn có rất ít request và
+một request chậm kéo percentile bucket lên. Final summary p95 vẫn là số dùng
+để kết luận tổng thể:
+
+```text
+summary p95 = 227.89ms
+summary p99 = 244.59ms
+```
+
+#### Cách phân tích sâu chart Response time
+
+Khi đọc chart response time của idempotency audit, hỏi 4 câu:
+
+```text
+1. Avg có tăng dần theo retry không?
+2. p95/max có spike đúng lúc retry storm không?
+3. Spike có đi kèm 5xx/check fail không?
+4. Spike là vấn đề tail latency hay correctness?
+```
+
+Với run #32:
+
+```text
+- Có outlier max ~1.2s -> nên ghi nhận tail latency.
+- Không có 5xx -> backend không còn crash/timeout thành lỗi HTTP.
+- Không có check fail -> response replay đúng contract.
+- Fresh/reuse đúng 20/80 -> không double-charge.
 ```
 
 Kết luận:
 
 ```text
-retry storm đang làm một nhóm request rất chậm / lỗi.
-Chart response-time xác nhận đây không chỉ là lỗi count; hệ thống thật sự
-có tail latency lớn ở cuối run.
+Chart response-time còn cho thấy một điểm tail latency cần theo dõi,
+nhưng không còn là bug idempotency correctness.
 ```
 
-Shape xấu cần chú ý trong case 02:
+Shape cần cảnh giác trong case 02:
 
-| Shape | Nghĩa |
+| Shape | Nghĩa có thể có |
 | --- | --- |
-| p95 tăng dần sau mỗi bucket | retry/fresh requests đang làm backend đuối dần |
-| max > 2s nhiều bucket | có request bị chờ lâu, có thể timeout/5xx |
-| avg thấp nhưng p95 cao | đa số request nhanh, nhưng một nhóm retry rất chậm |
+| p95 tăng dần qua từng retry bucket | retry storm làm backend đuối dần |
+| max cao kèm `5xx` | timeout/crash ở confirm flow |
+| avg thấp nhưng checks fail | response nhanh nhưng replay contract sai |
+| custom counters đúng nhưng `http_req_failed > 0` | fresh/reuse count đúng nhưng API chưa ổn định |
 
 ### Chart 2 — Execution timeline
 
@@ -451,49 +518,55 @@ Chart debug:
 Debug JSON: execution-timeline
 ```
 
-Run #15:
+Run #32:
 
-| Bucket | Live VUs | HTTP reqs | Iterations |
-| --- | ---: | ---: | ---: |
-| bucket 1 | 20 (filled-backward) | 20 | 19 |
-| bucket 2 | 20 (gauge) | 19 | 15 |
-| bucket 3 | 15 (gauge) | 23 | 23 |
-| bucket 4 | 10 (gauge) | 38 | 43 |
+| Bucket | HTTP reqs | Iterations completed | Ý nghĩa |
+| --- | ---: | ---: | --- |
+| 1 | 46 | 30 | 20 VU bắt đầu confirm/retry gần như cùng lúc |
+| 2 | 52 | 67 | phần lớn retry sequence hoàn thành ở bucket này |
+| 3 | 2 | 3 | tail nhỏ cuối run |
 
 Kiểm tổng:
 
 ```text
-sum(httpReqs) = 100 = summary http_reqs ✓
-sum(iterations) = 100 = summary iterations ✓
+sum(httpReqs) = 46 + 52 + 2 = 100 = summary http_reqs ✓
+sum(iterations) = 30 + 67 + 3 = 100 = summary iterations ✓
 ```
 
 Đọc thực tế:
 
 ```text
-- workload cực ngắn: chỉ khoảng 4 bucket
-- lúc đầu 20 VU cùng retry/fresh confirm
-- cuối run chỉ còn 10 VU active nhưng lại hoàn thành 43 iterations trong bucket cuối
+- workload rất ngắn: 100 confirm calls xong trong 3 bucket
+- phần lớn tải nằm ở 2 bucket đầu: 46 + 52 = 98 requests
+- bucket cuối chỉ còn 2 request / 3 iteration hoàn thành -> tail bình thường
 ```
 
-Điều này hợp với `per-vu-iterations`:
+Vì mỗi iteration của case này chỉ có 1 `POST confirm_order`, nên tổng
+`http_reqs` và `iterations` đều là 100. Nhưng từng bucket không bắt buộc bằng
+nhau tuyệt đối, vì request xảy ra trước khi iteration được tính là hoàn thành.
+Một request có thể nằm ở bucket này, còn iteration completion rơi vào bucket
+kế tiếp.
+
+### Batch 1 giây / time bucket đọc như nào?
+
+Mỗi point trên chart là một **time bucket / metrics frame**, không phải một
+request riêng lẻ:
 
 ```text
-VU nhanh xong quota -> rời active pool
-VU còn lại hoàn thành nốt retry sequence
+http_reqs      -> counter cộng dồn trong bucket
+iterations     -> số iteration hoàn thành trong bucket
+response p95   -> percentile của các request trong bucket đó
+vus            -> gauge VU tại thời điểm/bucket, có thể được fill nếu thiếu mẫu
 ```
 
-`vusSource` cũng cho biết bucket đầu được fill:
+Vì vậy cách verify đúng là:
 
 ```text
-bucket 1: rawVus=0, vus=20, vusSource=filled-backward
+cộng các counter bucket -> so với summary cuối test
 ```
 
-Đọc nghĩa:
-
-```text
-bucket đầu có activity nhưng thiếu gauge VU đúng thời điểm,
-frontend fill ngược từ bucket sau để tránh vẽ VUs=0 giả.
-```
+không phải đọc từng point như một event riêng lẻ. Chi tiết cơ chế bucket xem
+case 01, phần “Batch 1 giây / time bucket được tính như nào?”.
 
 ### Chart 3 — VUs vs iter/s
 
@@ -503,54 +576,135 @@ Chart debug:
 Debug JSON: vus-vs-iterations
 ```
 
-Chart này dùng cùng bucket với Execution timeline, nhưng thay RPS bằng
-iteration throughput:
+Run #32:
 
-| Bucket | Observed VUs | Actual iter/s | HTTP reqs | VU source |
+| Bucket | Observed VUs | Actual iter/s | HTTP reqs | Ý nghĩa |
 | --- | ---: | ---: | ---: | --- |
-| bucket 1 | 20 | 19 | 20 | filled-backward |
-| bucket 2 | 20 | 15 | 19 | gauge |
-| bucket 3 | 15 | 23 | 23 | gauge |
-| bucket 4 | 10 | 43 | 38 | gauge |
+| 1 | 20 | 30 | 46 | đủ 20 VU đang chạy retry storm |
+| 2 | 20 → tail | 67 | 52 | phần lớn VU hoàn thành quota 5 iter |
+| 3 | 1 | 3 | 2 | còn 1 VU/ít work ở tail |
 
 Kiểm tổng:
 
 ```text
-sum(Actual iter/s) = 19+15+23+43 = 100 = summary iterations ✓
-sum(httpReqs) = 20+19+23+38 = 100 = summary http_reqs ✓
+sum(Actual iter/s) = 30 + 67 + 3 = 100 = summary iterations ✓
+sum(httpReqs) = 46 + 52 + 2 = 100 = summary http_reqs ✓
 ```
 
 Đọc thực tế:
 
 ```text
-- throughput iteration rất cao vì mỗi iteration chỉ là 1 POST confirm + sleep ngắn
-- bucket cuối hoàn thành nhiều iterations dù VUs thấp hơn, vì nhiều VU kết thúc gần nhau
-- chart đo đúng workload: đủ 100 confirm calls
+- executor sinh đủ 20 VU ở đầu run
+- throughput peak 67 iter/s vì mỗi iter chỉ là 1 confirm + sleep ngắn
+- VU giảm về 1 ở tail là bình thường: VU nào đủ 5 iter thì rời active pool
 ```
 
-Nhưng không được kết luận test pass chỉ vì chart này đủ 100:
+Chart này chứng minh:
 
 ```text
-VUs vs iter/s trả lời: workload đã chạy đủ chưa?
-Nó KHÔNG trả lời: response có đúng không?
+workload đã chạy đủ 100 confirm calls.
 ```
 
-Ở run này:
+Chart này KHÔNG tự chứng minh:
 
 ```text
-workload đủ 100 ✓
-response/failure contract fail ✗
+retry có trả cùng response không,
+có double-charge không,
+hoặc status/body replay có giống lần đầu không.
 ```
+
+Các câu đó phải đọc ở custom metrics + checks.
+
+### 2. Tab Executor / Execution
+
+Với `per-vu-iterations`, tab Executor nên có shape:
+
+```text
+0 -> 20 VUs -> giảm dần khi VU hoàn thành quota -> 0
+```
+
+Case 02 rất ngắn nên tail giảm VU có thể nhìn rõ. Đây là behavior đúng:
+
+```text
+mỗi VU = 1 customer
+mỗi VU chạy đúng 5 retry
+VU chạy xong retry #4 thì dừng
+```
+
+Vì vậy thấy `observed VUs` giảm ở cuối không phải thiếu tải. Điều cần kiểm là:
+
+```text
+iterations cuối cùng vẫn = 100
+idem_fresh_count + idem_reuse_count = 100
+```
+
+### 3. `metrics_push_count` khác `pointCount` — không phải bug
+
+`metrics_push_count` là số lần backend nhận batch metrics từ k6/cloud output.
+`pointCount` là số bucket dashboard render ra cho một chart. Hai số này không
+bắt buộc bằng nhau.
+
+Với docs/chart, verify bằng cách:
+
+```text
+sum(chart httpReqs) == summary http_reqs
+sum(chart iterations) == summary iterations
+```
+
+Không verify bằng:
+
+```text
+metrics_push_count == pointCount
+```
+
+Chi tiết đầy đủ xem case 01, phần “metrics_push_count khác pointCount — không
+phải bug”.
+
+### 4. Endpoint debug series theo metric
+
+Khi cần kiểm bằng API dashboard:
+
+```text
+GET http://localhost:13001/v1/tests/32/series?metric=http_reqs
+GET http://localhost:13001/v1/tests/32/series?metric=iterations
+GET http://localhost:13001/v1/tests/32/series?metric=http_req_duration
+```
+
+Nếu custom counter series có sẵn, kiểm thêm:
+
+```text
+metric=idem_fresh_count
+metric=idem_reuse_count
+```
+
+Mục tiêu không phải đọc raw JSON cho nhiều, mà là cộng counter theo bucket và
+so với summary/custom metrics cuối test.
+
+### 5. Checklist đọc biểu đồ case 02
+
+| Bước | Câu hỏi | Kết quả run #32 |
+| --- | --- | --- |
+| 1 | `iterations == 100`? | 100 ✓ |
+| 2 | `http_reqs == 100`? | 100 ✓ |
+| 3 | `confirm_order 200 == 100` và không 5xx? | 100 / 0 ✓ |
+| 4 | `idem_fresh_count == 20`? | 20 ✓ |
+| 5 | `idem_reuse_count == 80`? | 80 ✓ |
+| 6 | `checks_fails == 0`? | 0 ✓ |
+| 7 | sum chart `httpReqs == 100`? | 46+52+2=100 ✓ |
+| 8 | sum chart `iterations == 100`? | 30+67+3=100 ✓ |
+| 9 | có latency spike không? | có max ~1.2s, nhưng contract pass |
 
 ### Cách chốt từ summary -> 3 chart
 
-| Bước | Nhìn ở đâu | Kết luận run #15 |
+| Bước | Nhìn ở đâu | Kết luận run #32 |
 | --- | --- | --- |
 | Tổng workload | summary + VUs vs iter/s | đủ 100/100 confirm calls |
 | Fresh/reuse count | custom metrics | 20 fresh + 80 reuse đúng |
-| HTTP health | summary + Response time | fail 51%, p95 cao ~2.19s |
-| Execution shape | Execution timeline | 20 VU burst ngắn, VU giảm về cuối |
-| Final verdict | tổng hợp | FAIL: count đúng nhưng server/response contract hỏng |
+| Replay contract | checks | 360/360 checks pass |
+| HTTP health | summary + request breakdown | 0 fail, 100 response 200 |
+| Latency shape | Response time | có 1 tail max ~1.2s, không làm fail contract |
+| Execution shape | Execution timeline / Executor | 20 VU burst ngắn, VU giảm ở tail là bình thường |
+| Final verdict | tổng hợp | PASS: idempotency contract an toàn cho retry |
 
 ## Kết luận thực tế: đọc output này thì team payment quyết định gì?
 

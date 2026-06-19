@@ -296,6 +296,321 @@ Output console:
   ... cho cả 10 VU
 ```
 
+
+## Đọc dashboard real-time charts cho case 06
+
+Run thật đã verify bằng wrapper với script hiện tại:
+
+```powershell
+$env:K6_CLOUD_TOKEN = "student-token-1234567890"
+$env:K6_CLOUD_HOST = "http://localhost:18080"
+.\run-with-summary.ps1 .\examples\per-vu-iterations\pvi-06-cart-concurrency.js
+```
+
+Run đã verify:
+
+```text
+run #27
+percentile_source = k6_summary
+
+VUS = 10
+ITERS_PER_VU = 10
+ITEMS_PER_BURST = 3
+total_iterations = 10 × 10 = 100
+```
+
+Summary quan trọng:
+
+```text
+iterations.............: 100
+http_reqs..............: 310
+cart_total_match.......: 10
+cart_total_lost........: 0
+checks_succeeded.......: 100.00%  110 out of 110
+checks_failed..........: 0.00%    0 out of 110
+http_req_failed........: 0.00%
+
+http_req_duration avg..: 50.21ms
+http_req_duration p95..: 99.48ms
+http_req_duration p99..: 100.99ms
+http_req_duration max..: 103.85ms
+```
+
+Request breakdown:
+
+| Endpoint | Count | Vì sao có số này? |
+| --- | ---: | --- |
+| `cart_add` | 300 | 100 iterations × 3 parallel add requests |
+| `cart_summary` | 10 | 1 summary check cuối mỗi VU |
+| Tổng | 310 | đúng bằng `summary http_reqs` |
+
+Đọc nhanh:
+
+```text
+- Workload đủ: 100/100 iterations
+- Cart add đủ: 300 add requests
+- 10/10 user có cart đúng tổng mong đợi
+- lost-update = 0
+- HTTP/checks sạch
+=> Run PASS: cart service chịu được concurrent add per user trong workload này.
+```
+
+Điểm học quan trọng:
+
+```text
+Response 200 hết vẫn chưa đủ để chứng minh không lost-update.
+```
+
+Case này phải đọc custom counters:
+
+```text
+cart_total_match = 10
+cart_total_lost = 0
+```
+
+vì lost-update thường là bug stateful: request trả 200 nhưng dữ liệu cuối bị
+mất item.
+
+### 1. Overview có 3 chart cần đọc
+
+| Chart | Câu hỏi trong cart concurrency test | Không dùng để kết luận gì? |
+| --- | --- | --- |
+| Response time | batch add/summary có latency ổn định không? | không tự chứng minh không mất item |
+| Execution timeline | 3 request/burst tạo tải HTTP ra sao? | không tự chứng minh server ghi đủ cart |
+| VUs vs iter/s | 100 burst iterations đã chạy đủ chưa? | không tự chứng minh cart total đúng |
+
+Một cách đọc nhanh:
+
+```text
+Response time      -> concurrent add có làm request chậm không
+Execution timeline -> cart_add/cart_summary dồn vào bucket nào
+VUs vs iter/s      -> có đủ 100 burst không
+Custom metrics     -> 10 user có cart đủ, 0 lost-update không
+```
+
+### Chart 1 — Response time
+
+Chart debug:
+
+```text
+Debug JSON: response-time
+```
+
+Run #27:
+
+| Metric | Giá trị | Cách đọc |
+| --- | ---: | --- |
+| buckets | 3 | run ngắn, 3 bucket response-time |
+| total samples | 310 | đúng bằng `summary http_reqs` |
+| weighted avg | 50.21ms | latency trung bình của add/summary |
+| summary p95 | 99.48ms | 95% request dưới ~100ms |
+| summary p99 | 100.99ms | tail vẫn quanh 101ms |
+| summary max | 103.85ms | request chậm nhất vẫn thấp |
+| bucket p95 peak | 103.68ms | bucket tệ nhất vẫn quanh 104ms |
+| bucket max peak | 103.85ms | max chart khớp summary max |
+
+Đọc thực tế:
+
+```text
+- latency ổn định, không có spike lớn
+- concurrent writes không tạo tail latency cao
+- nhưng correctness vẫn phải đọc cart_total_match/lost
+```
+
+#### Cách phân tích sâu chart Response time
+
+Với cart concurrency, response-time chart trả lời:
+
+```text
+khi cùng user gửi nhiều cart_add song song, server có bị chậm/queue không?
+```
+
+Nó không trả lời:
+
+```text
+server có ghi đủ mọi item không?
+```
+
+Các shape cần chú ý:
+
+| Shape | Nghĩa có thể có |
+| --- | --- |
+| p95/max tăng mạnh ở bucket giữa | concurrent write làm DB/cart lock nghẽn |
+| latency đẹp nhưng `cart_total_lost > 0` | server nhanh nhưng ghi sai/mất update |
+| `http_req_failed > 0` | concurrent write làm API lỗi trực tiếp |
+| iter_time quá thấp bất thường | nghi batch chưa thật sự tạo race |
+
+Run #27 tốt vì cả 2 điều cùng đúng:
+
+```text
+latency ổn định
+cart_total_lost = 0
+```
+
+### Chart 2 — Execution timeline
+
+Chart debug:
+
+```text
+Debug JSON: execution-timeline
+```
+
+Run #27:
+
+| Bucket | VUs | HTTP reqs | Iterations | Ý nghĩa |
+| --- | ---: | ---: | ---: | --- |
+| 1 | 10 | 76 | 20 | bắt đầu các burst add đầu tiên |
+| 2 | 10 | 204 | 69 | bucket bận nhất, nhiều `http.batch()` overlap |
+| 3 | 10 | 30 | 11 | tail: summary/final bursts hoàn thành |
+
+Kiểm tổng:
+
+```text
+sum(httpReqs) = 76 + 204 + 30 = 310 = summary http_reqs ✓
+sum(iterations) = 20 + 69 + 11 = 100 = summary iterations ✓
+```
+
+Đọc thực tế:
+
+```text
+- HTTP reqs cao hơn iterations vì mỗi iteration gửi 3 cart_add song song
+- bucket giữa peak 204 req/s là nơi race dễ xảy ra nhất
+- tail 30 req gồm phần add/summary cuối run
+```
+
+Vì sao `http_reqs = 310`?
+
+```text
+100 iterations × 3 cart_add = 300
+10 VUs × 1 cart_summary cuối = 10
+300 + 10 = 310
+```
+
+### Batch 1 giây / time bucket đọc như nào?
+
+Trong case 06:
+
+```text
+iterations trong bucket = số burst hoàn thành
+http_reqs trong bucket  = 3× cart_add của các burst + cart_summary nếu có
+```
+
+Do đó `http_reqs` phải lớn hơn `iterations`. Đọc đúng là cộng tổng bucket,
+không so từng point 1:1.
+
+### Chart 3 — VUs vs iter/s
+
+Chart debug:
+
+```text
+Debug JSON: vus-vs-iterations
+```
+
+Run #27:
+
+| Bucket | Observed VUs | Actual iter/s | HTTP reqs | Ý nghĩa |
+| --- | ---: | ---: | ---: | --- |
+| 1 | 10 | 20 | 76 | các burst đầu bắt đầu |
+| 2 | 10 | 69 | 204 | peak burst throughput |
+| 3 | 10 | 11 | 30 | tail hoàn thành nốt 100 iterations |
+
+Kiểm tổng:
+
+```text
+sum(Actual iter/s) = 20 + 69 + 11 = 100 = summary iterations ✓
+sum(httpReqs) = 76 + 204 + 30 = 310 = summary http_reqs ✓
+```
+
+Chart này chứng minh:
+
+```text
+đã chạy đủ 100 burst iterations với 10 VUs.
+```
+
+Chart này KHÔNG chứng minh:
+
+```text
+server không lost-update.
+```
+
+Câu đó phải đọc ở:
+
+```text
+cart_total_match = 10
+cart_total_lost = 0
+```
+
+### 2. Tab Executor / Execution
+
+Case 06 cần 10 VUs vì mỗi VU đại diện cho 1 user/cart riêng:
+
+```text
+VU 1 -> user/cart 1
+VU 2 -> user/cart 2
+...
+VU 10 -> user/cart 10
+```
+
+Tab Executor dùng để kiểm:
+
+```text
+- 10 VUs được active
+- mỗi VU hoàn thành 10 burst iterations
+- total iterations = 100
+- không dropped/interrupted
+```
+
+Nếu dùng shared-iterations, phân phối iteration theo user sẽ không còn chắc
+chắn. Đây là lý do case này cần `per-vu-iterations`.
+
+### 3. `metrics_push_count` khác `pointCount` — không phải bug
+
+Với run ngắn, dashboard chỉ có vài bucket. Không cần số bucket bằng số metrics
+push. Kiểm đúng:
+
+```text
+76 + 204 + 30 = 310
+20 + 69 + 11 = 100
+```
+
+### 4. Endpoint debug series theo metric
+
+```text
+GET http://localhost:13001/v1/tests/27/series?metric=http_reqs
+GET http://localhost:13001/v1/tests/27/series?metric=iterations
+GET http://localhost:13001/v1/tests/27/series?metric=http_req_duration
+GET http://localhost:13001/v1/tests/27/series?metric=cart_total_match
+GET http://localhost:13001/v1/tests/27/series?metric=cart_total_lost
+```
+
+Nếu custom series thiếu, dùng tab Custom metrics và console output cuối run.
+
+### 5. Checklist đọc biểu đồ case 06
+
+| Bước | Câu hỏi | Kết quả run #27 |
+| --- | --- | --- |
+| 1 | `iterations == 100`? | 100 ✓ |
+| 2 | `cart_add == 300`? | 300 ✓ |
+| 3 | `cart_summary == 10`? | 10 ✓ |
+| 4 | `http_reqs == 310`? | 310 ✓ |
+| 5 | `cart_total_match == 10`? | 10 ✓ |
+| 6 | `cart_total_lost == 0`? | 0 ✓ |
+| 7 | `checks_fails == 0`? | 0 ✓ |
+| 8 | chart `httpReqs` sum = 310? | 76+204+30=310 ✓ |
+| 9 | chart `iterations` sum = 100? | 20+69+11=100 ✓ |
+| 10 | batch có tạo concurrency không? | peak 204 req/s, http.batch tạo burst |
+
+### Cách chốt từ summary -> 3 chart
+
+| Bước | Nhìn ở đâu | Kết luận run #27 |
+| --- | --- | --- |
+| Workload | summary + VUs vs iter/s | đủ 100 burst iterations |
+| Request mix | breakdown | 300 cart_add + 10 cart_summary |
+| Race correctness | custom metrics | 10 match, 0 lost-update |
+| HTTP health | summary + Response time | 0 fail, p95 quanh 100ms |
+| Execution shape | timeline / Executor | 10 VU ổn định, bucket giữa tạo concurrency cao |
+| Final verdict | tổng hợp | PASS: cart concurrent add an toàn trong workload này |
+
 ## Kết luận thực tế: đọc output này thì team backend quyết định gì?
 
 Mục tiêu nghiệp vụ: phát hiện **lost-update** — khi cùng 1 user gửi nhiều

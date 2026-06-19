@@ -307,9 +307,11 @@ Cần custom threshold: http_req_failed{status:!429} < 1%
 hoặc dùng tag để loại 429 ra.
 ```
 
+
 ## Đọc dashboard real-time charts cho case 03
 
-Ví dụ dưới đây lấy từ run thật:
+Ví dụ dưới đây lấy từ run thật sau khi backend rate-limit đã được fix và chạy
+bằng wrapper:
 
 ```powershell
 $env:K6_CLOUD_TOKEN = "student-token-1234567890"
@@ -317,10 +319,15 @@ $env:K6_CLOUD_HOST = "http://localhost:18080"
 .\run-with-summary.ps1 .\examples\per-vu-iterations\pvi-03-rate-limit.js
 ```
 
-Run quan sát được:
+Run đã verify:
 
 ```text
-run #16
+run #30
+exit = 0
+pushed = true
+finished = true
+percentile_source = k6_summary
+
 VUS = 5
 ITERS_PER_VU = 150
 total_iterations = 5 × 150 = 750
@@ -329,56 +336,137 @@ total_iterations = 5 × 150 = 750
 Summary quan trọng:
 
 ```text
-iterations........: 750    137.356597/s
-http_reqs.........: 750    137.356597/s
-count_200.........: 750    137.356597/s
-count_429.........: 0      0/s
-http_req_failed...: 0.00%  0 out of 750
-vus...............: 5      min=5 max=5
-vus_max...........: 5      min=5 max=5
+iterations.............: 750
+http_reqs..............: 750
+count_200..............: 500
+count_429..............: 250
+checks_succeeded.......: 100.00%  250 out of 250
+checks_failed..........: 0.00%    0 out of 250
+http_req_failed........: 33.33%   250 out of 750
+
+http_req_duration p95..: 95.49ms
+http_req_duration p99..: 99.04ms
+http_req_duration max..: 103.44ms
 ```
+
+Request breakdown:
+
+| Endpoint / status | Count | Ý nghĩa |
+| --- | ---: | --- |
+| `rate_limit_test` `200` | 500 | 100 request đầu của mỗi user được cho qua |
+| `rate_limit_test` `429` | 250 | 50 request cuối của mỗi user bị throttle đúng kỳ vọng |
 
 Đọc nhanh:
 
 ```text
-- Workload chạy đủ: 750/750 requests
-- HTTP không fail: 0%
-- Nhưng rate limit KHÔNG trigger: count_429 = 0 thay vì 250
-- count_200 = 750 thay vì 500
-=> Run FAIL theo mục tiêu rate-limit. Limit đang quá lỏng hoặc endpoint/test env chưa bật throttle.
+- Workload đủ: 750/750 requests
+- Rate-limit đúng: 500 OK + 250 throttled
+- 250 response 429 đều có Retry-After nên checks pass
+- http_req_failed = 33.33% là expected vì k6 tính 429 là failed HTTP
+=> Run PASS theo mục tiêu rate-limit.
 ```
 
-### Overview có 3 chart cần đọc
+Đừng nhầm điểm này:
 
-| Chart | Câu hỏi trong rate-limit audit |
-| --- | --- |
-| Response time | spam request có làm latency tăng không? |
-| Execution timeline | 5 VU tạo request rate theo thời gian như nào? |
-| VUs vs iter/s | mỗi giây hoàn thành bao nhiêu request/iteration, tổng có đủ 750 không? |
+```text
+http_req_failed 33.33% KHÔNG phải business failure trong case 03.
+```
+
+Lý do:
+
+```text
+250 / 750 request phải trả 429
+k6 mặc định xem status >= 400 là failed
+nhưng nghiệp vụ lại mong 429 để chứng minh limiter hoạt động
+```
+
+Vì vậy verdict của case 03 dựa vào:
+
+```text
+count_200 = 500
+count_429 = 250
+checks_fails = 0
+```
+
+không dựa vào raw `http_req_failed` một mình.
+
+### 1. Overview có 3 chart cần đọc
+
+| Chart | Câu hỏi trong rate-limit audit | Không dùng để kết luận gì? |
+| --- | --- | --- |
+| Response time | limiter trả 200/429 nhanh hay có spike? | không tự chứng minh quota đúng |
+| Execution timeline | 5 user spam request phân bổ theo thời gian ra sao? | không phân biệt 200 với 429 nếu chỉ nhìn tổng req |
+| VUs vs iter/s | đã spam đủ 750 iteration chưa? | không tự chứng minh có Retry-After header |
+
+Một cách đọc nhanh:
+
+```text
+Response time      -> limiter có xử lý nhanh không
+Execution timeline -> 5 VU tạo load như nào
+VUs vs iter/s      -> có đủ 750 request không
+Custom metrics     -> 500 OK + 250 429 có đúng không
+Checks             -> 429 có Retry-After không
+```
 
 ### Chart 1 — Response time
 
-Run #16 có 7 buckets. Các point tiêu biểu:
+Chart debug:
 
 ```text
-bucket đầu: avg≈45.17ms, p95≈95.77ms, max≈97.02ms
-bucket giữa: avg≈36-38ms, p95≈94-96ms
-bucket cuối: avg≈2.85ms, p95≈3.11ms, max≈3.11ms
+Debug JSON: response-time
 ```
+
+Run #30:
+
+| Metric | Giá trị | Cách đọc |
+| --- | ---: | --- |
+| buckets | 5 | run ngắn, dashboard render 5 bucket |
+| total samples | 750 | đúng bằng `summary http_reqs` |
+| weighted avg | 28.86ms | request 200/429 xử lý rất nhanh |
+| summary p95 | 95.49ms | p95 authoritative cuối test |
+| summary p99 | 99.04ms | tail vẫn quanh 100ms |
+| summary max | 103.44ms | request chậm nhất vẫn thấp |
+| bucket p95 peak | ~103.68ms | bucket tệ nhất vẫn quanh 100ms |
+| bucket max peak | ~103.44ms | không có latency spike lớn |
 
 Đọc thực tế:
 
 ```text
-- latency thấp và khá ổn định
-- không có spike lớn
-- summary p95 ≈ 95.6ms
+- latency thấp và bị chặn quanh ~100ms
+- không có spike nhiều giây
+- limiter quyết định 200/429 nhanh
 ```
 
 Kết luận:
 
 ```text
-backend trả rất nhanh, nhưng đây không phải dấu hiệu rate limit đúng.
-Ngược lại, vì 750 request đều 200, có thể throttle chưa bật hoặc key limit sai.
+Chart response-time cho thấy rate limiter không tạo latency bất thường.
+Nhưng rate limit đúng hay sai vẫn phải nhìn count_200/count_429.
+```
+
+#### Cách phân tích sâu chart Response time
+
+Với rate-limit test, chart latency trả lời câu hỏi:
+
+```text
+khi user spam vượt quota, backend có trả quyết định nhanh không?
+```
+
+Các shape cần chú ý:
+
+| Shape | Nghĩa có thể có |
+| --- | --- |
+| p95 thấp cả run | limiter check nhanh, không gây queueing |
+| p95 tăng mạnh sau khi bắt đầu 429 | limiter/counter backend có thể bị nghẽn |
+| max cao nhưng count_429 đúng | business đúng nhưng limiter có tail latency |
+| latency đẹp nhưng count_429 sai | limiter nhanh nhưng logic quota sai |
+
+Run #30 thuộc nhóm tốt:
+
+```text
+count_200/count_429 đúng
+checks 429 header pass
+latency quanh 100ms
 ```
 
 ### Chart 2 — Execution timeline
@@ -389,56 +477,82 @@ Chart debug:
 Debug JSON: execution-timeline
 ```
 
-Run #16:
+Run #30:
 
-```text
-pointCount = 7
-configuredVUs = 5
-sources = filled-backward, gauge, filled-forward
-```
-
-Các bucket tiêu biểu:
-
-| Bucket | VUs | HTTP reqs | Iterations | VU source |
+| Bucket | VUs | HTTP reqs | Iterations | Ý nghĩa |
 | --- | ---: | ---: | ---: | --- |
-| đầu | 5 | 50 | 50 | filled-backward |
-| giữa | 5 | 136 | 135 | gauge |
-| giữa | 5 | 131 | 132 | gauge |
-| gần cuối | 5 | 148 | 148 | gauge |
-| cuối | 5 | 4 | 4 | filled-forward |
+| 1 | 5 | 55 | 55 | bắt đầu spam với 5 user |
+| 2 | 5 | 110 | 110 | request rate tăng |
+| 3 | 5 | 133 | 133 | steady spam |
+| 4 | 5 | 134 | 134 | steady spam |
+| 5 | 5 | 318 | 318 | nhiều iteration kết thúc dồn ở tail |
 
 Kiểm tổng:
 
 ```text
-sum(httpReqs) = 750 = summary http_reqs ✓
-sum(iterations) = 750 = summary iterations ✓
+sum(httpReqs) = 55 + 110 + 133 + 134 + 318 = 750 = summary http_reqs ✓
+sum(iterations) = 55 + 110 + 133 + 134 + 318 = 750 = summary iterations ✓
 ```
 
 Đọc thực tế:
 
 ```text
-- 5 VU giữ ổn định suốt run (đúng với summary vus min=max=5)
-- request rate rất cao, có bucket ~148 req/s
-- không thấy đoạn bị throttle/429 làm http_req_failed tăng
+- 5 VUs giữ ổn định trong active window
+- mỗi iteration = 1 GET, nên HTTP reqs và iterations trùng nhau theo bucket
+- chart chứng minh test đã spam đủ 750 request
 ```
+
+Điểm dễ nhầm:
+
+```text
+Execution timeline chỉ thấy tổng request/iteration.
+Nó không cho biết bucket nào là 200, bucket nào là 429 nếu không xem breakdown/tag.
+```
+
+Muốn kết luận limiter đúng, phải kết hợp với:
+
+```text
+count_200 = 500
+count_429 = 250
+checks_fails = 0
+```
+
+### Batch 1 giây / time bucket đọc như nào?
+
+Mỗi point là một time bucket, không phải một request riêng lẻ:
+
+```text
+http_reqs  -> số request trong bucket
+iterations -> số iteration hoàn thành trong bucket
+vus        -> VU gauge/filled value của bucket
+```
+
+Vì case 03 có 1 request/iteration:
+
+```text
+http_reqs per bucket ≈ iterations per bucket
+```
+
+Nhưng ở các case nhiều request/iteration, hai series này sẽ khác. Chi tiết cơ
+chế bucket xem case 01, phần “Batch 1 giây / time bucket được tính như nào?”.
 
 ### Chart 3 — VUs vs iter/s
 
-Chart này dùng cùng bucket như Execution timeline nhưng nhìn business rate:
+Chart debug:
 
 ```text
 Debug JSON: vus-vs-iterations
 ```
 
-Run #16:
+Run #30:
 
-| Bucket | Observed VUs | Actual iter/s | HTTP reqs | VU source |
+| Bucket | Observed VUs | Actual iter/s | HTTP reqs | Ý nghĩa |
 | --- | ---: | ---: | ---: | --- |
-| đầu | 5 | 50 | 50 | filled-backward |
-| giữa | 5 | 135 | 136 | gauge |
-| giữa | 5 | 132 | 131 | gauge |
-| gần cuối | 5 | 148 | 148 | gauge |
-| cuối | 5 | 4 | 4 | filled-forward |
+| 1 | 5 | 55 | 55 | bắt đầu workload |
+| 2 | 5 | 110 | 110 | throughput tăng |
+| 3 | 5 | 133 | 133 | 5 user spam ổn định |
+| 4 | 5 | 134 | 134 | 5 user spam ổn định |
+| 5 | 5 | 318 | 318 | hoàn thành nốt quota 150/user |
 
 Kiểm tổng:
 
@@ -447,31 +561,102 @@ sum(Actual iter/s) = 750 = summary iterations ✓
 sum(httpReqs) = 750 = summary http_reqs ✓
 ```
 
-Đọc thực tế:
+Chart này chứng minh:
 
 ```text
-- chart đo workload đúng: đủ 750 iterations
-- VUs ổn định ở 5
-- iter/s rất cao vì mỗi iteration chỉ là 1 GET nhanh
+5 user đã gửi đủ 750 request.
 ```
 
-Nhưng kết luận nghiệp vụ là fail:
+Chart này KHÔNG chứng minh:
 
 ```text
-VUs vs iter/s chỉ chứng minh đã spam đủ 750 request.
-Nó không chứng minh rate limit đúng.
-Rate-limit đúng phải nhìn count_429 = 250, nhưng actual = 0.
+rate limit đã chặn đúng 250 request.
 ```
+
+Câu đó chỉ được trả lời bởi custom counters:
+
+```text
+count_200 = 500
+count_429 = 250
+```
+
+### 2. Tab Executor / Execution
+
+Với `per-vu-iterations`, case 03 có shape ổn định hơn case 02 vì mỗi VU chạy
+150 iteration rất nhanh và đều:
+
+```text
+5 VUs active -> mỗi VU chạy 150 request -> kết thúc khi đủ quota
+```
+
+Điều cần nhìn ở Executor tab:
+
+```text
+- configured VUs = 5
+- observed VUs giữ quanh 5 trong active window
+- không có dropped_iterations
+- total iterations cuối cùng = 750
+```
+
+Nếu VU line giảm ở cuối, đó thường là tail bình thường: VU đã hoàn thành đủ
+150 request. Không được kết luận thiếu tải nếu summary vẫn đủ 750.
+
+### 3. `metrics_push_count` khác `pointCount` — không phải bug
+
+Dashboard có thể render 5 bucket trong khi backend metrics push count là số
+khác. Đây không phải bug. Với rate-limit test, kiểm đúng là:
+
+```text
+sum chart httpReqs = 750
+sum chart iterations = 750
+```
+
+không phải:
+
+```text
+pointCount == metrics_push_count
+```
+
+### 4. Endpoint debug series theo metric
+
+Các endpoint debug hữu ích:
+
+```text
+GET http://localhost:13001/v1/tests/30/series?metric=http_reqs
+GET http://localhost:13001/v1/tests/30/series?metric=iterations
+GET http://localhost:13001/v1/tests/30/series?metric=http_req_duration
+GET http://localhost:13001/v1/tests/30/series?metric=count_200
+GET http://localhost:13001/v1/tests/30/series?metric=count_429
+```
+
+Nếu custom counter series không hiển thị đầy đủ, dùng tab Custom metrics hoặc
+summary/threshold output để đọc `count_200` và `count_429`.
+
+### 5. Checklist đọc biểu đồ case 03
+
+| Bước | Câu hỏi | Kết quả run #30 |
+| --- | --- | --- |
+| 1 | `iterations == 750`? | 750 ✓ |
+| 2 | `http_reqs == 750`? | 750 ✓ |
+| 3 | `count_200 == 500`? | 500 ✓ |
+| 4 | `count_429 == 250`? | 250 ✓ |
+| 5 | `checks_fails == 0`? | 0 ✓ |
+| 6 | `http_req_failed ≈ 33.33%` có expected không? | expected vì 429 ✓ |
+| 7 | sum chart `httpReqs == 750`? | 55+110+133+134+318=750 ✓ |
+| 8 | sum chart `iterations == 750`? | 55+110+133+134+318=750 ✓ |
+| 9 | VUs giữ quanh 5? | 5 ✓ |
 
 ### Cách chốt từ summary -> 3 chart
 
-| Bước | Nhìn ở đâu | Kết luận run #16 |
+| Bước | Nhìn ở đâu | Kết luận run #30 |
 | --- | --- | --- |
 | Workload | summary + VUs vs iter/s | đủ 750/750 request |
-| HTTP health | summary + Response time | request nhanh, 0 fail |
-| Load shape | Execution timeline | 5 VU giữ ổn định, RPS cao |
-| Rate-limit contract | custom metrics | FAIL: 750 OK, 0 throttled |
-| Final verdict | tổng hợp | limit quá lỏng / throttle chưa bật |
+| Rate-limit contract | custom metrics | 500 OK + 250 throttled đúng |
+| Retry-After contract | checks | 250/250 check pass |
+| HTTP failed raw | summary | 33.33% expected vì 429 |
+| Latency shape | Response time | p95 quanh 95ms, không spike lớn |
+| Execution shape | Execution timeline | 5 VU spam ổn định, tổng bucket khớp summary |
+| Final verdict | tổng hợp | PASS: per-user rate limit hoạt động đúng |
 
 ## Kết luận thực tế: đọc output này thì team API quyết định gì?
 

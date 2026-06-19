@@ -264,6 +264,331 @@ k6 run -o cloud .\examples\per-vu-iterations\pvi-05-ab-variant.js
    - http_req_duration{variant=control}
 ```
 
+
+## Đọc dashboard real-time charts cho case 05
+
+Run thật đã verify bằng wrapper:
+
+```powershell
+$env:K6_CLOUD_TOKEN = "student-token-1234567890"
+$env:K6_CLOUD_HOST = "http://localhost:18080"
+.\run-with-summary.ps1 .\examples\per-vu-iterations\pvi-05-ab-variant.js
+```
+
+Run đã verify:
+
+```text
+run #24
+percentile_source = k6_summary
+
+VUS = 100
+ITERS_PER_VU = 5
+total_iterations = 100 × 5 = 500
+```
+
+Summary quan trọng:
+
+```text
+iterations.................: 500
+http_reqs..................: 750
+variant_a_count............: 250
+variant_control_count......: 250
+checks_succeeded...........: 100.00%  500 out of 500
+checks_failed..............: 0.00%    0 out of 500
+http_req_failed............: 0.00%
+
+http_req_duration avg......: 49.68ms
+http_req_duration p95......: 333.13ms
+http_req_duration p99......: 496.91ms
+http_req_duration max......: 598.30ms
+```
+
+Request breakdown:
+
+| Endpoint | Count | Ý nghĩa |
+| --- | ---: | --- |
+| `homefeed` | 500 | mọi view đều gọi feed chính |
+| `recommendations` | 250 | chỉ variant A gọi thêm recommendation |
+| Tổng | 750 | đúng bằng `summary http_reqs` |
+
+Đọc nhanh:
+
+```text
+- Workload đủ: 500/500 iterations
+- Exposure cân bằng: 250 A + 250 control
+- HTTP sạch: 0 fail
+- checks sạch: 500/500 pass
+=> Run PASS: A/B exposure fair, đủ dữ liệu để so sánh tiếp.
+```
+
+Điểm học quan trọng:
+
+```text
+Exposure fair KHÔNG tự nói variant nào thắng.
+```
+
+Nó chỉ đảm bảo:
+
+```text
+hai nhóm có cùng số view -> so sánh latency/conversion không bị lệch cỡ mẫu
+```
+
+Muốn chọn variant, phải đọc thêm tag/breakdown theo `variant` hoặc metric
+nghiệp vụ như conversion.
+
+### 1. Overview có 3 chart cần đọc
+
+| Chart | Câu hỏi trong A/B exposure test | Không dùng để kết luận gì? |
+| --- | --- | --- |
+| Response time | aggregate latency của feed/recommendations có spike không? | không tự quyết định A thắng control |
+| Execution timeline | 100 VU tạo 750 request trong thời gian nào? | không tự chứng minh exposure 250/250 |
+| VUs vs iter/s | đã chạy đủ 500 views chưa? | không tự phân biệt variant A/control |
+
+Một cách đọc nhanh:
+
+```text
+Response time      -> chất lượng request tổng thể
+Execution timeline -> request/view dồn vào bucket nào
+VUs vs iter/s      -> đủ 500 view không
+Custom metrics     -> exposure có cân bằng 250/250 không
+Tags               -> latency/conversion từng variant
+```
+
+### Chart 1 — Response time
+
+Chart debug:
+
+```text
+Debug JSON: response-time
+```
+
+Run #24:
+
+| Metric | Giá trị | Cách đọc |
+| --- | ---: | --- |
+| buckets | 3 | run rất ngắn, tải dồn vào ít bucket |
+| total samples | 750 | đúng bằng `summary http_reqs` |
+| weighted avg | 49.68ms | latency trung bình của cả homefeed + recommendations |
+| summary p95 | 333.13ms | 95% request dưới ~333ms |
+| summary p99 | 496.91ms | tail gần 500ms |
+| summary max | 598.30ms | request chậm nhất |
+| bucket p95 peak | 496.64ms | bucket có tail cao nhất |
+| bucket max peak | 598.30ms | max chart khớp summary max |
+
+Đọc thực tế:
+
+```text
+- aggregate avg khá thấp
+- p95/p99 cao hơn avg nhiều -> có nhóm endpoint/request nặng hơn
+- recommendations có thể nặng hơn homefeed, nhưng chart aggregate chưa đủ để kết luận
+```
+
+#### Cách phân tích sâu chart Response time
+
+Với A/B test, response chart aggregate chỉ là bước đầu. Hỏi 4 câu:
+
+```text
+1. aggregate latency có spike làm run không đáng tin không?
+2. spike đến từ endpoint nào: homefeed hay recommendations?
+3. spike thuộc variant A hay control?
+4. exposure 250/250 có cân bằng trước khi so latency không?
+```
+
+Run #24:
+
+```text
+variant_a_count = 250
+variant_control_count = 250
+http_req_failed = 0
+```
+
+nên dữ liệu đủ sạch để so sánh. Nhưng muốn nói A nhanh/chậm hơn control,
+không dùng chart aggregate này một mình. Cần xem:
+
+```text
+http_req_duration{variant:a}
+http_req_duration{variant:control}
+hoặc breakdown/tag theo endpoint + variant
+```
+
+Shape cần cảnh giác:
+
+| Shape | Nghĩa có thể có |
+| --- | --- |
+| aggregate p95 cao nhưng exposure cân bằng | có endpoint/variant nặng, cần drill-down tag |
+| p95 cao chỉ ở variant A | variant A có cost performance |
+| p95 cao nhưng count lệch | chưa được so sánh, phải sửa exposure trước |
+| http fail ở một variant | variant đó có stability regression |
+
+### Chart 2 — Execution timeline
+
+Chart debug:
+
+```text
+Debug JSON: execution-timeline
+```
+
+Run #24:
+
+| Bucket | VUs | HTTP reqs | Iterations | Ý nghĩa |
+| --- | ---: | ---: | ---: | --- |
+| 1 | 100 | 171 | 26 | 100 user bắt đầu, nhiều request chưa hoàn thành iter |
+| 2 | 100 | 471 | 312 | phần lớn views/recommendations dồn vào bucket giữa |
+| 3 | 35 | 108 | 162 | tail: nhiều VU đã xong, còn nhóm cuối hoàn thành quota |
+
+Kiểm tổng:
+
+```text
+sum(httpReqs) = 171 + 471 + 108 = 750 = summary http_reqs ✓
+sum(iterations) = 26 + 312 + 162 = 500 = summary iterations ✓
+```
+
+Đọc thực tế:
+
+```text
+- test rất ngắn và bursty vì 100 VUs chỉ chạy 5 views/user
+- bucket giữa là nơi tải cao nhất: 471 HTTP reqs, 312 iterations
+- VUs giảm còn 35 ở tail vì nhiều VU đã hoàn thành đủ 5 iterations
+```
+
+Vì sao `http_reqs > iterations`?
+
+```text
+500 iterations = 500 homefeed views
+variant A có thêm 250 recommendations requests
+=> total http_reqs = 500 + 250 = 750
+```
+
+### Batch 1 giây / time bucket đọc như nào?
+
+Trong case 05:
+
+```text
+http_reqs trong bucket  = homefeed + recommendations
+iterations trong bucket = số page view hoàn thành
+```
+
+Một bucket có thể có nhiều HTTP request hơn iteration vì variant A tạo thêm
+request recommendation. Do đó không được kỳ vọng hai series bằng nhau.
+
+Verify đúng:
+
+```text
+sum(httpReqs) = 750
+sum(iterations) = 500
+```
+
+### Chart 3 — VUs vs iter/s
+
+Chart debug:
+
+```text
+Debug JSON: vus-vs-iterations
+```
+
+Run #24:
+
+| Bucket | Observed VUs | Actual iter/s | HTTP reqs | Ý nghĩa |
+| --- | ---: | ---: | ---: | --- |
+| 1 | 100 | 26 | 171 | start burst, nhiều request đang in-flight |
+| 2 | 100 | 312 | 471 | peak view throughput |
+| 3 | 35 | 162 | 108 | tail hoàn thành nốt views |
+
+Kiểm tổng:
+
+```text
+sum(Actual iter/s) = 26 + 312 + 162 = 500 = summary iterations ✓
+sum(httpReqs) = 171 + 471 + 108 = 750 = summary http_reqs ✓
+```
+
+Chart này chứng minh:
+
+```text
+đã tạo đủ 500 view trên 100 user.
+```
+
+Chart này KHÔNG chứng minh:
+
+```text
+A/control cân bằng hay variant nào tốt hơn.
+```
+
+Cân bằng phải đọc ở:
+
+```text
+variant_a_count = 250
+variant_control_count = 250
+```
+
+### 2. Tab Executor / Execution
+
+Case 05 có VU tail giảm rõ vì:
+
+```text
+100 VUs × chỉ 5 iterations/user
+```
+
+Nhiều VU hoàn thành rất nhanh, nên cuối run chỉ còn một phần VU active. Đây là
+shape đúng của `per-vu-iterations`, không phải thiếu tải.
+
+Executor tab dùng để kiểm:
+
+```text
+- start đủ 100 VUs
+- final iterations = 500
+- không dropped/interrupted
+- VU tail giảm sau khi quota hoàn thành
+```
+
+### 3. `metrics_push_count` khác `pointCount` — không phải bug
+
+Run ngắn, ít bucket. Không cần `pointCount` bằng metrics push count. Cách kiểm
+đúng:
+
+```text
+171 + 471 + 108 = 750
+26 + 312 + 162 = 500
+```
+
+### 4. Endpoint debug series theo metric
+
+```text
+GET http://localhost:13001/v1/tests/24/series?metric=http_reqs
+GET http://localhost:13001/v1/tests/24/series?metric=iterations
+GET http://localhost:13001/v1/tests/24/series?metric=http_req_duration
+GET http://localhost:13001/v1/tests/24/series?metric=variant_a_count
+GET http://localhost:13001/v1/tests/24/series?metric=variant_control_count
+```
+
+Khi phân tích sâu variant, ưu tiên tab Tags / breakdown theo `variant` hơn là
+aggregate response-time chart.
+
+### 5. Checklist đọc biểu đồ case 05
+
+| Bước | Câu hỏi | Kết quả run #24 |
+| --- | --- | --- |
+| 1 | `iterations == 500`? | 500 ✓ |
+| 2 | `http_reqs == 750`? | 750 ✓ |
+| 3 | `variant_a_count == 250`? | 250 ✓ |
+| 4 | `variant_control_count == 250`? | 250 ✓ |
+| 5 | hai count equal? | 250 = 250 ✓ |
+| 6 | request breakdown đúng? | homefeed 500 + recommendations 250 ✓ |
+| 7 | checks fail? | 0 ✓ |
+| 8 | chart `httpReqs` sum = 750? | 171+471+108=750 ✓ |
+| 9 | chart `iterations` sum = 500? | 26+312+162=500 ✓ |
+| 10 | có chọn winner từ aggregate latency không? | không, cần per-variant data |
+
+### Cách chốt từ summary -> 3 chart
+
+| Bước | Nhìn ở đâu | Kết luận run #24 |
+| --- | --- | --- |
+| Workload | summary + VUs vs iter/s | đủ 500 views |
+| Exposure | custom metrics | 250 A + 250 control cân bằng |
+| HTTP health | summary + Response time | 0 fail, aggregate p95 có tail nhưng sạch |
+| Request mix | breakdown | 500 homefeed + 250 recommendations |
+| Execution shape | timeline / Executor | 100 VU burst ngắn, VU giảm tail bình thường |
+| Final verdict | tổng hợp | PASS: exposure fair, đủ điều kiện so sánh variant |
+
 ## Kết luận thực tế: đọc output này thì team product quyết định gì?
 
 Mục tiêu nghiệp vụ: chạy A/B test với **exposure cân bằng tuyệt đối**

@@ -288,12 +288,23 @@ Bước 4: login_count=10, refresh_count=10, failed_after_refresh=0 ✓
 Bước 5: iter_time = action time + occasional refresh overhead
 ```
 
+
 ## Đọc dashboard real-time charts cho case 04
 
-Run thật đã verify:
+Run thật đã verify bằng wrapper:
+
+```powershell
+$env:K6_CLOUD_TOKEN = "student-token-1234567890"
+$env:K6_CLOUD_HOST = "http://localhost:18080"
+.\run-with-summary.ps1 .\examples\per-vu-iterations\pvi-04-session-lifecycle.js
+```
+
+Run đã verify:
 
 ```text
-run #17
+run #23
+percentile_source = k6_summary
+
 VUS = 10
 ITERS_PER_VU = 20
 total_iterations = 10 × 20 = 200
@@ -302,16 +313,30 @@ total_iterations = 10 × 20 = 200
 Summary quan trọng:
 
 ```text
-iterations.............: 200     45.285039/s
-http_reqs..............: 430     97.362835/s
+iterations.............: 200
+http_reqs..............: 430
 login_count............: 10
 refresh_count..........: 10
 failed_after_refresh...: 0
+checks_succeeded.......: 100.00%  20 out of 20
+checks_failed..........: 0.00%    0 out of 20
 http_req_failed........: 0.00%
-checks rate............: 100%
-vus....................: 10 min=10 max=10
-vus_max................: 10 min=10 max=10
+
+http_req_duration avg..: 13.83ms
+http_req_duration p95..: 55.31ms
+http_req_duration p99..: 365.61ms
+http_req_duration max..: 367.86ms
 ```
+
+Request breakdown:
+
+| Endpoint | Count | Vì sao có số này? |
+| --- | ---: | --- |
+| `auth_me` | 210 | 200 lần check session + 10 lần retry sau refresh |
+| `user_action` | 200 | 1 action mỗi iteration |
+| `refresh` | 10 | 1 lần refresh mỗi VU khi token expire |
+| `login` | 10 | 1 login mỗi VU ở đầu lifecycle |
+| Tổng | 430 | đúng bằng `summary http_reqs` |
 
 Đọc nhanh:
 
@@ -319,114 +344,297 @@ vus_max................: 10 min=10 max=10
 - Workload đủ: 200/200 iterations
 - Session lifecycle đúng: 10 login + 10 refresh + 0 fail sau refresh
 - HTTP sạch: 0 fail
-- VUs giữ ổn định 10 trong toàn run
+- Checks sạch: 20/20 pass
 => Run PASS cho mục tiêu auth/session.
 ```
 
-### Overview có 3 chart cần đọc
+Điểm học quan trọng:
 
-| Chart | Câu hỏi trong session lifecycle test |
-| --- | --- |
-| Response time | refresh ở giữa test có làm latency spike không? |
-| Execution timeline | login/refresh/action tạo request load theo thời gian ra sao? |
-| VUs vs iter/s | mỗi giây hoàn thành bao nhiêu session action, tổng đủ 200 không? |
+```text
+http_reqs không cần bằng iterations.
+```
+
+Case này có nhiều request trong cùng lifecycle, nên:
+
+```text
+200 iterations -> 430 HTTP requests
+```
+
+### 1. Overview có 3 chart cần đọc
+
+| Chart | Câu hỏi trong session lifecycle test | Không dùng để kết luận gì? |
+| --- | --- | --- |
+| Response time | login/refresh có gây latency spike không? | không tự chứng minh token mới dùng được |
+| Execution timeline | login/refresh/action tạo request load theo thời gian ra sao? | không tự phân biệt token cũ/mới đúng sai |
+| VUs vs iter/s | có hoàn thành đủ 200 session action không? | không tự chứng minh refresh contract đúng |
+
+Một cách đọc nhanh:
+
+```text
+Response time      -> auth/session endpoint nhanh chậm ra sao
+Execution timeline -> 430 request phân bổ qua các bucket như nào
+VUs vs iter/s      -> 200 iteration hoàn thành đủ chưa
+Custom metrics     -> 10 login, 10 refresh, 0 fail sau refresh
+```
 
 ### Chart 1 — Response time
 
-Run #17 có 6 buckets:
+Chart debug:
 
 ```text
-bucket đầu: avg≈58.47ms, p95≈99.58ms
-bucket giữa: avg≈3.5ms -> 7.6ms, p95 thấp
-bucket cuối: avg=0, p95=0 (bucket kết thúc không có request)
+Debug JSON: response-time
 ```
 
-Summary:
+Run #23:
 
-```text
-http_req_duration avg ≈ 8.60ms
-http_req_duration p95 ≈ 49.54ms
-```
+| Metric | Giá trị | Cách đọc |
+| --- | ---: | --- |
+| buckets | 6 | run có 6 bucket response-time |
+| total samples | 430 | đúng bằng `summary http_reqs` |
+| weighted avg | 13.83ms | đa số request auth/action rất nhanh |
+| summary p95 | 55.31ms | 95% request dưới ~56ms |
+| summary p99 | 365.61ms | một nhóm rất nhỏ request chậm hơn |
+| summary max | 367.86ms | request chậm nhất |
+| bucket p95 peak | 367.62ms | bucket chứa request auth/session chậm nhất |
+| bucket max peak | 367.86ms | max chart khớp max summary |
 
 Đọc thực tế:
 
 ```text
-- đầu run cao hơn do login/setup
-- giữa run request rất nhanh
-- không thấy spike lớn tại refresh
+- avg thấp: flow chính chạy nhanh
+- p95 thấp: phần lớn user action/auth check ổn
+- p99/max ~366-368ms: có vài request auth/session chậm hơn
+- không có fail sau refresh, nên spike này không phải correctness bug
 ```
 
-Kết luận:
+#### Cách phân tích sâu chart Response time
+
+Với session lifecycle, câu hỏi không chỉ là “có chậm không”, mà là:
 
 ```text
-refresh flow không gây latency bất thường.
+refresh xảy ra giữa lifecycle có làm user bị gián đoạn không?
 ```
+
+Đọc chart theo 4 bước:
+
+```text
+1. p95 có tăng mạnh ở đoạn refresh không?
+2. nếu có spike, spike đó có đi kèm failed_after_refresh > 0 không?
+3. login/refresh endpoint có max cao bất thường không?
+4. iteration vẫn hoàn thành đủ 200 không?
+```
+
+Run #23:
+
+```text
+failed_after_refresh = 0
+checks_failed = 0
+iterations = 200
+```
+
+nên kết luận:
+
+```text
+Có tail latency nhỏ ở một vài request, nhưng refresh flow vẫn đúng.
+User không bị đá ra sau khi token expire.
+```
+
+Shape cần cảnh giác:
+
+| Shape | Nghĩa có thể có |
+| --- | --- |
+| p95 spike đúng lúc refresh + `failed_after_refresh > 0` | token refresh hỏng hoặc token mới chưa usable |
+| login max cao ở đầu run | auth service/cold start cần kiểm tra |
+| avg thấp nhưng `failed_after_refresh > 0` | request nhanh nhưng contract sai |
+| iterations thiếu | lifecycle chưa chạy đủ để token expire/refresh |
 
 ### Chart 2 — Execution timeline
 
-Run #17:
+Chart debug:
 
-| Bucket | VUs | HTTP reqs | Iterations | VU source |
+```text
+Debug JSON: execution-timeline
+```
+
+Run #23:
+
+| Bucket | VUs | HTTP reqs | Iterations | Ý nghĩa |
 | --- | ---: | ---: | ---: | --- |
-| đầu | 10 | 30 | 0 | filled-backward |
-| giữa | 10 | 100 | 50 | gauge |
-| giữa | 10 | 108 | 50 | gauge |
-| giữa | 10 | 100 | 44 | gauge |
-| giữa | 10 | 92 | 46 | gauge |
-| cuối | 10 | 0 | 10 | filled-forward |
+| 1 | 10 | 4 | 0 | vài request đầu rơi trước khi iteration hoàn thành |
+| 2 | 10 | 106 | 40 | login/auth/action bắt đầu ổn định |
+| 3 | 10 | 94 | 50 | throughput session action cao |
+| 4 | 10 | 112 | 44 | có thêm refresh/auth activity |
+| 5 | 10 | 94 | 46 | lifecycle tiếp tục ổn định |
+| 6 | 10 | 20 | 20 | tail hoàn thành nốt iterations |
 
 Kiểm tổng:
 
 ```text
-sum(httpReqs) = 430 = summary http_reqs ✓
-sum(iterations) = 200 = summary iterations ✓
+sum(httpReqs) = 4 + 106 + 94 + 112 + 94 + 20 = 430 = summary http_reqs ✓
+sum(iterations) = 40 + 50 + 44 + 46 + 20 = 200 = summary iterations ✓
 ```
 
 Đọc thực tế:
 
 ```text
-- 10 VUs giữ ổn định, đúng với summary vus min=max=10
-- bucket đầu có requests nhưng chưa có iteration hoàn chỉnh
-- bucket cuối có iterations nhưng không có request vì iteration hoàn thành sau request cuối
+- VUs giữ ổn định 10 trong active window
+- HTTP reqs cao hơn iterations vì mỗi iteration có nhiều request auth/action
+- bucket đầu có HTTP reqs nhưng chưa có iteration hoàn chỉnh là bình thường
 ```
+
+Vì sao bucket đầu có request nhưng chưa có iteration?
+
+```text
+iteration chỉ được count khi default function chạy xong.
+HTTP request xảy ra bên trong iteration trước.
+Nếu request rơi vào bucket 1 nhưng iteration kết thúc ở bucket 2,
+thì chart sẽ thấy HTTP trước, iterations sau.
+```
+
+### Batch 1 giây / time bucket đọc như nào?
+
+Mỗi bucket là một lát thời gian. Với case 04:
+
+```text
+http_reqs trong bucket      = login + auth_me + refresh + user_action request
+iterations trong bucket     = số lifecycle step hoàn thành
+response-time trong bucket  = latency của request thuộc bucket đó
+```
+
+Vì flow có nhiều endpoint, không được kỳ vọng:
+
+```text
+http_reqs == iterations
+```
+
+Điều đúng là:
+
+```text
+sum(httpReqs) = 430
+sum(iterations) = 200
+```
+
+Chi tiết cơ chế bucket xem case 01.
 
 ### Chart 3 — VUs vs iter/s
 
-Run #17:
+Chart debug:
 
-| Bucket | Observed VUs | Actual iter/s | HTTP reqs | VU source |
+```text
+Debug JSON: vus-vs-iterations
+```
+
+Run #23:
+
+| Bucket | Observed VUs | Actual iter/s | HTTP reqs | Ý nghĩa |
 | --- | ---: | ---: | ---: | --- |
-| đầu | 10 | 0 | 30 | filled-backward |
-| giữa | 10 | 50 | 100 | gauge |
-| giữa | 10 | 50 | 108 | gauge |
-| giữa | 10 | 44 | 100 | gauge |
-| giữa | 10 | 46 | 92 | gauge |
-| cuối | 10 | 10 | 0 | filled-forward |
+| 1 | 10 | 0 | 4 | request đầu trước khi iter hoàn thành |
+| 2 | 10 | 40 | 106 | login/auth/action bắt đầu nhiều |
+| 3 | 10 | 50 | 94 | throughput tốt |
+| 4 | 10 | 44 | 112 | có refresh/auth overhead |
+| 5 | 10 | 46 | 94 | tiếp tục ổn định |
+| 6 | 10 | 20 | 20 | tail hoàn thành nốt work |
 
 Kiểm tổng:
 
 ```text
-sum(Actual iter/s) = 200 = summary iterations ✓
+sum(Actual iter/s) = 40 + 50 + 44 + 46 + 20 = 200 = summary iterations ✓
 sum(httpReqs) = 430 = summary http_reqs ✓
 ```
 
-Đọc thực tế:
+Chart này chứng minh:
 
 ```text
-- VU ổn định 10, không có tail giảm VU đáng kể
-- throughput cao vì mỗi iter chủ yếu là auth check/action ngắn
-- refresh ở iter 10 không làm đứt flow: iterations vẫn đủ 200
+10 VU đã chạy đủ 200 lifecycle iterations.
 ```
+
+Chart này KHÔNG tự chứng minh:
+
+```text
+refresh token mới dùng được sau khi expire.
+```
+
+Câu đó phải đọc ở:
+
+```text
+refresh_count = 10
+failed_after_refresh = 0
+checks_fails = 0
+```
+
+### 2. Tab Executor / Execution
+
+Case 04 dùng `per-vu-iterations` nhưng vì mỗi VU chạy 20 actions, VU line
+thường ổn định hơn các case rất ngắn:
+
+```text
+10 VUs active -> mỗi VU chạy 20 lifecycle actions -> dừng khi đủ quota
+```
+
+Tab Executor dùng để kiểm:
+
+```text
+- configured VUs = 10
+- observed VUs quanh 10 trong active window
+- không có dropped/interrupted iterations
+- final iterations = 200
+```
+
+Nếu tail có VU giảm nhẹ, đó là bình thường khi một số VU hoàn thành quota
+sớm hơn. Không kết luận session bug từ VU tail; session bug phải nhìn
+`failed_after_refresh`.
+
+### 3. `metrics_push_count` khác `pointCount` — không phải bug
+
+Với run ngắn, số push metrics và số point chart có thể khác nhau. Đây là bình
+thường vì dashboard gom/merge/fill theo time bucket.
+
+Verify đúng:
+
+```text
+sum chart httpReqs = 430
+sum chart iterations = 200
+```
+
+### 4. Endpoint debug series theo metric
+
+Các metric hữu ích:
+
+```text
+GET http://localhost:13001/v1/tests/23/series?metric=http_reqs
+GET http://localhost:13001/v1/tests/23/series?metric=iterations
+GET http://localhost:13001/v1/tests/23/series?metric=http_req_duration
+GET http://localhost:13001/v1/tests/23/series?metric=login_count
+GET http://localhost:13001/v1/tests/23/series?metric=refresh_count
+GET http://localhost:13001/v1/tests/23/series?metric=failed_after_refresh
+```
+
+Nếu custom counter series thiếu, dùng tab Custom metrics hoặc summary output.
+
+### 5. Checklist đọc biểu đồ case 04
+
+| Bước | Câu hỏi | Kết quả run #23 |
+| --- | --- | --- |
+| 1 | `iterations == 200`? | 200 ✓ |
+| 2 | `http_reqs == 430`? | 430 ✓ |
+| 3 | `login_count == 10`? | 10 ✓ |
+| 4 | `refresh_count == 10`? | 10 ✓ |
+| 5 | `failed_after_refresh == 0`? | 0 ✓ |
+| 6 | request breakdown sum = 430? | 210+200+10+10=430 ✓ |
+| 7 | chart `httpReqs` sum = 430? | 4+106+94+112+94+20=430 ✓ |
+| 8 | chart `iterations` sum = 200? | 40+50+44+46+20=200 ✓ |
+| 9 | có spike refresh gây fail không? | không, checks pass |
 
 ### Cách chốt từ summary -> 3 chart
 
-| Bước | Nhìn ở đâu | Kết luận run #17 |
+| Bước | Nhìn ở đâu | Kết luận run #23 |
 | --- | --- | --- |
-| Workload | summary + VUs vs iter/s | đủ 200/200 |
+| Workload | summary + VUs vs iter/s | đủ 200/200 lifecycle actions |
 | Session contract | custom metrics | 10 login, 10 refresh, 0 fail sau refresh |
 | HTTP health | summary + Response time | 0 fail, p95 thấp |
-| Execution shape | Execution timeline | 10 VU ổn định, request/iteration khớp |
-| Final verdict | tổng hợp | PASS: session lifecycle đúng |
+| Request mix | request breakdown | 430 request đúng flow auth/session |
+| Execution shape | Execution timeline | 10 VU ổn định, bucket sums khớp summary |
+| Final verdict | tổng hợp | PASS: session lifecycle đúng, user không bị logout đột ngột |
 
 ## Kết luận thực tế: đọc output này thì team auth quyết định gì?
 
