@@ -131,6 +131,33 @@ Caveat:
 Đừng so total iteration count giữa 2 run nếu config/think time khác nhau.
 ```
 
+## Real run collection workflow used
+
+Default full suite runtime:
+
+```text
+7 cases × 5m ≈ 35 minutes, plus summary-final push/API collection.
+```
+
+For the latest default run, collection used:
+
+```text
+K6_CLOUD_HOST=http://localhost:18080
+Dashboard/API validation=http://localhost:13001/v1/tests/<run_id>/...
+summary-final POST=/v1/tests/<run_id>/summary-final
+finish POST=/v1/tests/<run_id> {"status":"finished"}
+```
+
+Collected files for audit/debug:
+
+```text
+E:\Khoa hoc\k6\.claude-constant-vus-run-results.json
+E:\Khoa hoc\k6\.claude-constant-vus-analysis.json
+E:\Khoa hoc\k6\.claude-constant-vus-chart-summary.json
+```
+
+When updating docs, only copy numbers from real run records. Do not assume `iterations` or RPS targets for `constant-vus`; they are observed outputs.
+
 ## What to collect when backend scripts are available
 
 | Nhóm | Cần lấy |

@@ -1468,6 +1468,70 @@ Kết luận thực tế:
 
 Điểm cốt lõi của case này: **vì VUs luôn phẳng 15 và duration luôn 5 phút, mọi thay đổi ở iter/s, latency, và failure rate đều là tín hiệu THẬT về auth service, không bị nhiễu bởi "lần này test chạy ít/mất concurrency hơn lần trước"**. Đó là lý do session stability gate dùng constant-vus.
 
+## Real run — default constant-vus baseline
+
+Run verify qua local cloud/dashboard:
+
+```text
+Run ID: #71
+Script: cv-02-session-keepalive.js
+Exit code: 0
+summary_pushed: true
+finish_status: 200
+Config: 15 VUs, duration 5m, default sleep/env
+```
+
+### Summary chính
+
+| Metric | Value |
+| --- | ---: |
+| `checks_rate` | `1` |
+| `checks_passes/checks_fails` | `5,379 / 0` |
+| `http_req_failed_rate` | `0` |
+| `iterations` | `4,470` |
+| `iterations_rate` | `14.88/s` |
+| `http_reqs` | `5,379` |
+| `http_reqs_rate` | `17.91/s` |
+| `vus_min/vus_max` | `15 / 15` |
+| `constant_flow_duration_ms avg/med/p95/p99/max` | `7.21 / 3 / 26 / 27 / 94 ms` |
+| `http_req_duration avg/med/p95/p99/max` | `5.91 / 2.37 / 22.85 / 23.73 / 90.48 ms` |
+
+Request breakdown:
+
+```text
+session_me_keepalive GET 200 count=4,470
+session_refresh POST 200 count=894
+session_login POST 200 count=15
+```
+
+### Đọc 3 chart dashboard cho run #71
+
+**Chart 1 — Response time.** Response time thấp và ổn: `http_req_duration` p95 ~22.85ms, p99 ~23.73ms; `constant_flow_duration_ms` p95 ~26ms trước sleep 1s. Auth read/write path đều sạch.
+
+**Chart 2 — Execution timeline.** `iterations` sum 4,470 và `http_reqs` sum 5,379. Breakdown đúng mô hình: login 15 lần, keepalive 4,470 lần, refresh 894 lần (~iterations/5). Không có failed buckets.
+
+Dashboard/API bucket summary:
+
+```text
+iterations buckets: count=300, sum=4470, min=9.00, max=15.00
+http_reqs buckets:  count=300, sum=5379, min=11.00, max=33.00
+không có failed iteration buckets
+```
+
+**Chart 3 — VUs vs iter/s.** VUs flat đúng 15 trong 300 buckets. Iter/s dao động trong biên 9–15 iter/s, phù hợp sleep 1s + refresh định kỳ.
+
+```text
+vus buckets: count=300, min=15.00, max=15.00, avg=15.00
+```
+
+### Backend verdict
+
+```text
+PASS — không thấy vấn đề BE trong run này.
+```
+
+Không cần báo BE.
+
 ## "Nghịch lý" và misconceptions của constant-vus
 
 ### Nghịch lý 1: "15 sessions active mà total iterations có ~2800 thôi á?"

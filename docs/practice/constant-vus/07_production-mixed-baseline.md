@@ -1384,7 +1384,74 @@ Giai đoạn 3 — Cuối test (270s-300s):
 5. Business decision dựa trên failures + latency + closed-model throughput change.
 ```
 
-#### Checklist đọc dashboard cho case 07
+## Real run — default constant-vus baseline
+
+Run verify qua local cloud/dashboard:
+
+```text
+Run ID: #80
+Script: cv-07-production-mixed-baseline.js
+Exit code: 99
+summary_pushed: true
+finish_status: 200
+Config: 30 VUs, duration 5m, default sleep/env
+```
+
+### Summary chính
+
+| Metric | Value |
+| --- | ---: |
+| `checks_rate` | `0.84` |
+| `checks_passes/checks_fails` | `9,949 / 1,912` |
+| `http_req_failed_rate` | `0.16` |
+| `iterations` | `11,861` |
+| `iterations_rate` | `39.47/s` |
+| `http_reqs` | `11,861` |
+| `http_reqs_rate` | `39.47/s` |
+| `vus_min/vus_max` | `30 / 30` |
+| `constant_flow_duration_ms avg/med/p95/p99/max` | `259.04 / 2 / 2,495 / 3,993.40 / 6,198 ms` |
+| `http_req_duration avg/med/p95/p99/max` | `258.95 / 1.75 / 2,494.38 / 3,993.49 / 6,197.89 ms` |
+
+Request breakdown:
+
+```text
+baseline_product_list GET 200 count=3,457
+baseline_product_detail GET 200 count=2,907
+baseline_product_list GET 429 count=1,912
+baseline_cart_add POST 200 count=1,795
+baseline_report GET 200 count=1,258
+baseline_checkout POST 200 count=532
+```
+
+### Đọc 3 chart dashboard cho run #80
+
+**Chart 1 — Response time.** Aggregate `http_req_duration` median rất thấp (~1.75ms) nhưng p95 ~2,494ms/p99 ~3,993ms do mixed workload có tail lớn. Tuy nhiên lỗi chính không phải latency mà là 1,912 responses `429` trên `baseline_product_list`.
+
+**Chart 2 — Execution timeline.** `iterations` và `http_reqs` đều sum 11,861. Failed-iteration buckets xuất hiện 108 buckets với tổng 1,912 failures, nên lỗi lặp lại trong run chứ không phải transient một lần.
+
+Dashboard/API bucket summary:
+
+```text
+iterations buckets: count=301, sum=11861, min=13.00, max=60.00
+http_reqs buckets:  count=301, sum=11861, min=12.00, max=60.00
+failed iteration buckets: 108 buckets, sum=1912
+```
+
+**Chart 3 — VUs vs iter/s.** VUs flat đúng 30 trong 300 buckets. Vì VUs không tụt, 429 là backend/script contract issue dưới concurrency cố định.
+
+```text
+vus buckets: count=300, min=30.00, max=30.00, avg=30.00
+```
+
+### Backend verdict
+
+```text
+FAIL — cùng root cause với case 01: `baseline_product_list` bị 429 rate limit.
+```
+
+Cần báo cùng issue với case 01: products list rate limiter gom nhiều simulated users vào cùng identity vì script không gửi identity header. Chốt contract giữa constant-vus practice và products-service rate limit.
+
+## Checklist đọc dashboard cho case 07
 
 ```text
 1. Overview KPI

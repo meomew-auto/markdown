@@ -1423,6 +1423,70 @@ Kết luận thực tế:
 
 ---
 
+## Real run — default constant-vus baseline
+
+Run verify qua local cloud/dashboard:
+
+```text
+Run ID: #75
+Script: cv-04-checkout-trickle.js
+Exit code: 0
+summary_pushed: true
+finish_status: 200
+Config: 8 VUs, duration 5m, default sleep/env
+```
+
+### Summary chính
+
+| Metric | Value |
+| --- | ---: |
+| `checks_rate` | `1` |
+| `checks_passes/checks_fails` | `6,168 / 0` |
+| `http_req_failed_rate` | `0` |
+| `iterations` | `2,056` |
+| `iterations_rate` | `6.84/s` |
+| `http_reqs` | `6,168` |
+| `http_reqs_rate` | `20.51/s` |
+| `vus_min/vus_max` | `8 / 8` |
+| `constant_flow_duration_ms avg/med/p95/p99/max` | `168.93 / 166 / 200 / 248 / 433 ms` |
+| `http_req_duration avg/med/p95/p99/max` | `56.17 / 68.97 / 89.76 / 108.64 / 237.50 ms` |
+
+Request breakdown:
+
+```text
+checkout_trickle_confirm POST 200 count=2,056
+checkout_trickle_create POST 200 count=2,056
+checkout_trickle_status GET 200 count=2,056
+```
+
+### Đọc 3 chart dashboard cho run #75
+
+**Chart 1 — Response time.** Checkout flow sạch: `http_req_duration` p95 ~89.76ms, p99 ~108.64ms; `constant_flow_duration_ms` p95 ~200ms. Create/confirm/status đều 200.
+
+**Chart 2 — Execution timeline.** `iterations` sum 2,056, `http_reqs` sum 6,168 = 3×iterations. Operation counts create/confirm/status đều 2,056.
+
+Dashboard/API bucket summary:
+
+```text
+iterations buckets: count=301, sum=2056, min=1.00, max=8.00
+http_reqs buckets:  count=301, sum=6168, min=2.00, max=24.00
+không có failed iteration buckets
+```
+
+**Chart 3 — VUs vs iter/s.** VUs flat đúng 8 trong 300 buckets. Iter/s bucket 1–8; các bucket thấp ở đầu/cuối là effect của loop completion và end-tail, không phải VU drop.
+
+```text
+vus buckets: count=300, min=8.00, max=8.00, avg=8.00
+```
+
+### Backend verdict
+
+```text
+PASS — không thấy vấn đề BE trong run này.
+```
+
+Không cần báo BE.
+
 ## "Nghịch lý" và misconceptions của constant-vus
 
 Đừng dùng case này để claim max checkout RPS. Nó là steady low concurrency baseline.

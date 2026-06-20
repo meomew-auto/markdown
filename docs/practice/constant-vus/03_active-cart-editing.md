@@ -1470,6 +1470,70 @@ Kết luận thực tế:
 | summary data sai dù HTTP 200 | Read-model inconsistency | Kiểm CQRS sync, materialized view |
 | API/loop ratio < 2.5 | Flow incomplete | Kiểm script branch logic |
 
+## Real run — default constant-vus baseline
+
+Run verify qua local cloud/dashboard:
+
+```text
+Run ID: #73
+Script: cv-03-active-cart-editing.js
+Exit code: 0
+summary_pushed: true
+finish_status: 200
+Config: 18 VUs, duration 5m, default sleep/env
+```
+
+### Summary chính
+
+| Metric | Value |
+| --- | ---: |
+| `checks_rate` | `1` |
+| `checks_passes/checks_fails` | `30,831 / 0` |
+| `http_req_failed_rate` | `0` |
+| `iterations` | `10,277` |
+| `iterations_rate` | `34.20/s` |
+| `http_reqs` | `30,831` |
+| `http_reqs_rate` | `102.61/s` |
+| `vus_min/vus_max` | `18 / 18` |
+| `constant_flow_duration_ms avg/med/p95/p99/max` | `25.53 / 11 / 90 / 193 / 408 ms` |
+| `http_req_duration avg/med/p95/p99/max` | `8.40 / 3.54 / 48.79 / 92.23 / 298.38 ms` |
+
+Request breakdown:
+
+```text
+active_cart_update PATCH 200 count=10,277
+active_cart_add POST 200 count=10,277
+active_cart_summary GET 200 count=10,277
+```
+
+### Đọc 3 chart dashboard cho run #73
+
+**Chart 1 — Response time.** `http_req_duration` p95 ~48.79ms, p99 ~92.23ms; `constant_flow_duration_ms` p95 ~90ms. Cart add/update/summary đều 200.
+
+**Chart 2 — Execution timeline.** `iterations` sum 10,277, `http_reqs` sum 30,831 = 3×iterations. Operation breakdown add/update/summary đều đúng 10,277, không thiếu bước nào.
+
+Dashboard/API bucket summary:
+
+```text
+iterations buckets: count=301, sum=10277, min=18.00, max=36.00
+http_reqs buckets:  count=300, sum=30831, min=60.00, max=108.00
+không có failed iteration buckets
+```
+
+**Chart 3 — VUs vs iter/s.** VUs flat đúng 18 trong 300 buckets. Iter/s bucket 18–36, đây là closed-model output bình thường với sleep 0.5s và 3 API/loop.
+
+```text
+vus buckets: count=300, min=18.00, max=18.00, avg=18.00
+```
+
+### Backend verdict
+
+```text
+PASS — không thấy vấn đề BE trong run này.
+```
+
+Không cần báo BE.
+
 ## Nghịch lý và misconceptions của constant-vus
 
 Đừng nhầm case này với cart cleanup shared-iterations. Đây là active users theo thời gian, không phải danh sách stale items cần xử lý đủ.

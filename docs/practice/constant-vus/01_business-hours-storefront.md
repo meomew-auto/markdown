@@ -1685,6 +1685,72 @@ Kết luận thực tế:
 | iter/s tăng dần đầu run | Backend warm up (cache fill) | Bình thường, ghi nhận |
 | iter/s = 0 trong nhiều bucket | VU bị kẹt | Kiểm tra request timeout, sleep logic |
 
+## Real run — default constant-vus baseline
+
+Run verify qua local cloud/dashboard:
+
+```text
+Run ID: #68
+Script: cv-01-business-hours-storefront.js
+Exit code: 99
+summary_pushed: true
+finish_status: 200
+Config: 20 VUs, duration 5m, default sleep/env
+```
+
+### Summary chính
+
+| Metric | Value |
+| --- | ---: |
+| `checks_rate` | `0.85` |
+| `checks_passes/checks_fails` | `21,189 / 3,869` |
+| `http_req_failed_rate` | `0.15` |
+| `iterations` | `14,772` |
+| `iterations_rate` | `49.17/s` |
+| `http_reqs` | `25,058` |
+| `http_reqs_rate` | `83.42/s` |
+| `vus_min/vus_max` | `20 / 20` |
+| `constant_flow_duration_ms avg/med/p95/p99/max` | `6.07 / 3 / 6 / 107 / 166 ms` |
+| `http_req_duration avg/med/p95/p99/max` | `3.49 / 1.18 / 4.01 / 100.87 / 166.48 ms` |
+
+Request breakdown:
+
+```text
+storefront_browse_detail GET 200 count=10,286
+storefront_browse_list GET 200 count=6,417
+storefront_cart_add POST 200 count=4,074
+storefront_browse_list GET 429 count=3,869
+storefront_checkout POST 200 count=412
+```
+
+### Đọc 3 chart dashboard cho run #68
+
+**Chart 1 — Response time.** Aggregate `http_req_duration` p95 chỉ ~4ms nên nếu chỉ nhìn latency sẽ tưởng nhanh. Nhưng breakdown cho thấy `storefront_browse_list` có 3,869 responses `429`; 429 thường trả nhanh nên không làm p95 xấu, nhưng làm functional checks fail.
+
+**Chart 2 — Execution timeline.** Execution timeline vẫn có throughput cao (`iterations` sum 14,772; `http_reqs` sum 25,058), nhưng failed-iteration buckets xuất hiện 117 bucket với tổng 3,869 failures. Đây là lỗi trải đều theo thời gian, không phải một spike ngắn.
+
+Dashboard/API bucket summary:
+
+```text
+iterations buckets: count=301, sum=14772, min=22.00, max=58.00
+http_reqs buckets:  count=301, sum=25058, min=4.00, max=99.00
+failed iteration buckets: 117 buckets, sum=3869
+```
+
+**Chart 3 — VUs vs iter/s.** VUs flat tuyệt đối ở 20 trong 300 buckets, nên test valid. Vì concurrency input không tụt, failures đến từ backend/script contract chứ không phải k6 không giữ VUs.
+
+```text
+vus buckets: count=300, min=20.00, max=20.00, avg=20.00
+```
+
+### Backend verdict
+
+```text
+FAIL — có vấn đề contract/rate-limit trên products list.
+```
+
+Cần báo BE/contract: endpoint `GET /api/sim/products` rate-limit theo identity/header/IP; script mô phỏng 20 users nhưng chỉ gắn `user_id` ở k6 tag, không gửi `X-User-ID`, nên nhiều user bị gom vào cùng bucket và nhận 429. Chốt contract: backend nhận user identity header cho practice, hoặc script gửi `X-User-ID`, hoặc profile practice được nâng limit.
+
 ## "Nghịch lý" và misconceptions của constant-vus
 
 ### Nghịch lý 1: "20 VU trong 5m chạy được bao nhiêu loops?" — KHÔNG BIẾT TRƯỚC!

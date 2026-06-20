@@ -1233,6 +1233,69 @@ Kết luận thực tế:
 | aggregate p95 OK but segment p95 high | Segmentation blindness | Lọc dashboard theo segment tags |
 | homefeed count ≠ rec count | Có loop bị skip 1 operation | Kiểm script flow, error handling |
 
+## Real run — default constant-vus baseline
+
+Run verify qua local cloud/dashboard:
+
+```text
+Run ID: #77
+Script: cv-05-personalized-homefeed.js
+Exit code: 0
+summary_pushed: true
+finish_status: 200
+Config: 25 VUs, duration 5m, default sleep/env
+```
+
+### Summary chính
+
+| Metric | Value |
+| --- | ---: |
+| `checks_rate` | `1` |
+| `checks_passes/checks_fails` | `16,534 / 0` |
+| `http_req_failed_rate` | `0` |
+| `iterations` | `8,267` |
+| `iterations_rate` | `27.52/s` |
+| `http_reqs` | `16,534` |
+| `http_reqs_rate` | `55.04/s` |
+| `vus_min/vus_max` | `25 / 25` |
+| `constant_flow_duration_ms avg/med/p95/p99/max` | `507.50 / 500 / 1,198 / 1,299 / 1,598 ms` |
+| `http_req_duration avg/med/p95/p99/max` | `253.65 / 100.62 / 796.17 / 899.20 / 1,102.13 ms` |
+
+Request breakdown:
+
+```text
+personalized_recommendations GET 200 count=8,267
+personalized_homefeed GET 200 count=8,267
+```
+
+### Đọc 3 chart dashboard cho run #77
+
+**Chart 1 — Response time.** `http_req_duration` p95 ~796.17ms, p99 ~899.20ms; `constant_flow_duration_ms` p95 ~1,198ms. Vì flow luôn gọi homefeed + recommendations, chart response time cần xem đây là cost của personalized/recommendation workload, không phải lỗi nếu SLA chấp nhận ~1.2s/loop.
+
+**Chart 2 — Execution timeline.** `iterations` sum 8,267, `http_reqs` sum 16,534 = 2×iterations. Homefeed và recommendations đều 8,267, không thiếu branch.
+
+Dashboard/API bucket summary:
+
+```text
+iterations buckets: count=300, sum=8267, min=4.00, max=65.00
+http_reqs buckets:  count=300, sum=16534, min=19.00, max=130.00
+không có failed iteration buckets
+```
+
+**Chart 3 — VUs vs iter/s.** VUs flat đúng 25 trong 300 buckets. Iter/s bucket 4–65 cho thấy loop completion không đồng đều do request latency/think time, nhưng không có failed iterations.
+
+```text
+vus buckets: count=300, min=25.00, max=25.00, avg=25.00
+```
+
+### Backend verdict
+
+```text
+PASS — không có lỗi functional, nhưng đây là baseline latency tương đối cao cho personalization.
+```
+
+Không cần báo BE nếu SLA chấp nhận p95 ~1.2s flow. Nếu product/recommendation SLA thấp hơn, route thành performance follow-up cho products/recommendations.
+
 ## Nghịch lý và misconceptions của constant-vus
 
 Đừng dùng case này để chứng minh cache warm coverage. Đây là active personalized reader behavior.

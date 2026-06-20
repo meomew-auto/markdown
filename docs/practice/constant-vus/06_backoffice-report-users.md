@@ -1557,6 +1557,70 @@ Kết luận thực tế:
 | constant_active_iterations_failed > 10 | Nhiều loop có business failure | Lọc theo user_id, operation |
 | Sleep count không khớp iterations × 2s | Script không chạy đúng sleep | Kiểm script logic, branch |
 
+## Real run — default constant-vus baseline
+
+Run verify qua local cloud/dashboard:
+
+```text
+Run ID: #79
+Script: cv-06-backoffice-report-users.js
+Exit code: 0
+summary_pushed: true
+finish_status: 200
+Config: 6 VUs, duration 5m, default sleep/env
+```
+
+### Summary chính
+
+| Metric | Value |
+| --- | ---: |
+| `checks_rate` | `1` |
+| `checks_passes/checks_fails` | `710 / 0` |
+| `http_req_failed_rate` | `0` |
+| `iterations` | `426` |
+| `iterations_rate` | `1.41/s` |
+| `http_reqs` | `710` |
+| `http_reqs_rate` | `2.35/s` |
+| `vus_min/vus_max` | `3 / 6` |
+| `constant_flow_duration_ms avg/med/p95/p99/max` | `2,239.82 / 487.50 / 6,307 / 7,178.25 / 7,803 ms` |
+| `http_req_duration avg/med/p95/p99/max` | `1,343.43 / 201.13 / 5,751.57 / 6,489.37 / 6,897.10 ms` |
+
+Request breakdown:
+
+```text
+backoffice_report_dashboard GET 200 count=426
+backoffice_report_job_create POST 202 count=142
+backoffice_report_job_status GET 200 count=142
+```
+
+### Đọc 3 chart dashboard cho run #79
+
+**Chart 1 — Response time.** `http_req_duration` p95 ~5,751.57ms, p99 ~6,489.37ms; `constant_flow_duration_ms` p95 ~6,307ms. Không có HTTP failure, nhưng latency backoffice report là tail đáng chú ý.
+
+**Chart 2 — Execution timeline.** `iterations` sum 426, `http_reqs` sum 710. Breakdown đúng script hiện tại: dashboard 426, create 142, status 142. Không có failed iteration.
+
+Dashboard/API bucket summary:
+
+```text
+iterations buckets: count=195, sum=426, min=1.00, max=6.00
+http_reqs buckets:  count=215, sum=710, min=1.00, max=10.00
+không có failed iteration buckets
+```
+
+**Chart 3 — VUs vs iter/s.** VUs gần như flat ở 6; dashboard series có min 3 do end-tail/graceful end bucket, flat ratio ~99.67%. Iter/s thấp là expected với sleep 2s + report dashboard latency cao.
+
+```text
+vus buckets: count=301, min=3.00, max=6.00, avg=5.99
+```
+
+### Backend verdict
+
+```text
+PASS functional — nhưng report dashboard path chậm, cần coi là performance risk nếu SLA backoffice thấp hơn ~6s p95.
+```
+
+Không báo functional bug. Ghi chú contract: case hiện tại chỉ validate dashboard + create + status HTTP 200; chưa validate body `data.status == completed` và chưa download artifact. Nếu mục tiêu là completed export lifecycle thì cần task sửa script riêng.
+
 ## Nghịch lý và misconceptions của constant-vus
 
 ### Nghịch lý 1: "Chỉ 6 VU mà là performance test?"

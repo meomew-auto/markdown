@@ -343,6 +343,45 @@ thì kiểm scenario config/dashboard ingestion trước khi kết luận backen
 | 06 | `cv-06-backoffice-report-users.js` | 6 | 5m | backoffice report users | report |
 | 07 | `cv-07-production-mixed-baseline.js` | 30 | 5m | production mixed baseline | mixed |
 
+## Real run summary — default constant-vus suite
+
+Bộ 7 case đã được chạy với default config, push final summary và verify qua dashboard/API `http://localhost:13001`.
+
+| Case | Run | Verdict | VUs | iterations | http_reqs | flow p95 | BE/contract note |
+| --- | ---: | --- | ---: | ---: | ---: | ---: | --- |
+| 01 | #68 | FAIL | 20 | 14,772 | 25,058 | 6 ms | threshold_failure; failed_business_iterations; 429 responses on product list: 3869 |
+| 02 | #71 | PASS | 15 | 4,470 | 5,379 | 26 ms | không thấy BE issue từ run này |
+| 03 | #73 | PASS | 18 | 10,277 | 30,831 | 90 ms | không thấy BE issue từ run này |
+| 04 | #75 | PASS | 8 | 2,056 | 6,168 | 200 ms | không thấy BE issue từ run này |
+| 05 | #77 | PASS | 25 | 8,267 | 16,534 | 1,198 ms | không thấy BE issue từ run này |
+| 06 | #79 | PASS | 6 | 426 | 710 | 6,307 ms | không thấy BE issue từ run này |
+| 07 | #80 | FAIL | 30 | 11,861 | 11,861 | 2,495 ms | threshold_failure; failed_business_iterations; 429 responses on product list: 1912 |
+
+Kết luận cross-case:
+
+```text
+PASS: case 02, 03, 04, 05, 06.
+FAIL: case 01 và 07 do products list trả 429 dưới constant VUs.
+```
+
+Root cause đáng báo BE/contract cho 2 case fail:
+
+```text
+products-service List rate limiter đang bucket theo identity/header/IP.
+constant-vus scripts mô phỏng nhiều users bằng k6 tag user_id, nhưng tag không phải HTTP header.
+Vì request list không gửi X-User-ID/X-User-Token, nhiều simulated users bị gom vào cùng bucket và nhận 429.
+```
+
+Cách chốt contract đề xuất:
+
+```text
+1. Script practice gửi X-User-ID: ctx.userId cho products list; hoặc
+2. Backend có load profile/limit riêng cho constant-vus practice; hoặc
+3. Catalog/docs ghi rõ products list endpoint intentionally rate-limited và test phải expect 429.
+```
+
+Hiện script threshold expect gần như toàn 200, nên run #68 và #80 là FAIL hợp lệ.
+
 ## Thứ tự đề xuất học
 
 ```text
