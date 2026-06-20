@@ -14,6 +14,8 @@ docs/20260516_03_constant-vus-quickpizza-two-requests-worked-example.md
 
 ## Link nhanh
 
+- [Practice 7 case backend](./practice/constant-vus/00_overview.md)
+- [Run guide practice](./practice/constant-vus/RUN_GUIDE.md)
 - [Ý tưởng chính](./20260516_02_constant-vus-tham-so-cong-thuc.md#1-ý-tưởng-chính)
 - [Khi nào dùng thực tế](./20260516_02_constant-vus-tham-so-cong-thuc.md#11-khi-nào-dùng-thực-tế)
 - [Core chạy như nào](./20260516_02_constant-vus-tham-so-cong-thuc.md#12-core-chạy-như-nào)
