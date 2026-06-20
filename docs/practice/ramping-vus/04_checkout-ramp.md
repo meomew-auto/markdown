@@ -252,8 +252,7 @@ Run local summary:
 ```powershell
 cd E:\Projects\k6\k6-metrics-server
 $env:BASE_URL = "http://localhost:80"
-k6 run .\load-target\k6
-amping-vus\rv-04-checkout-ramp.js
+k6 run .\load-target\k6\ramping-vus\rv-04-checkout-ramp.js
 ```
 
 Run lên private dashboard:
@@ -263,8 +262,7 @@ cd E:\Projects\k6\k6-metrics-server
 $env:BASE_URL = "http://localhost:80"
 $env:K6_CLOUD_HOST = "http://localhost:18080"
 $env:K6_CLOUD_TOKEN = "student-token-1234567890"
-k6 run -o cloud .\load-target\k6
-amping-vus\rv-04-checkout-ramp.js
+k6 run -o cloud .\load-target\k6\ramping-vus\rv-04-checkout-ramp.js
 ```
 
 ## Đọc output summary

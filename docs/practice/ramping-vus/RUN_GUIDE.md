@@ -141,7 +141,7 @@ $env:K6_CLOUD_TOKEN = "student-token-1234567890"
 $env:K6_CLOUD_METRIC_PUSH_INTERVAL = "1s"
 $env:K6_CLOUD_AGGREGATION_PERIOD = "1s"
 $env:K6_CLOUD_AGGREGATION_WAIT_PERIOD = "2s"
-k6 run -o cloud --summary-export <tmp.json> --summary-trend-stats "avg,min,med,max,p(90),p(95),p(99)" .\load-target\k6amping-vus\<script>.js
+k6 run -o cloud --summary-export <tmp.json> --summary-trend-stats "avg,min,med,max,p(90),p(95),p(99)" .\load-target\k6\ramping-vus\<script>.js
 ```
 
 | Case | Run ID | Exit | Verdict | Key summary |
