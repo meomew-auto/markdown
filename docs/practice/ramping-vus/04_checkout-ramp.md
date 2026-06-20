@@ -252,7 +252,8 @@ Run local summary:
 ```powershell
 cd E:\Projects\k6\k6-metrics-server
 $env:BASE_URL = "http://localhost:80"
-k6 run .\load-target\k6amping-vus\rv-04-checkout-ramp.js
+k6 run .\load-target\k6
+amping-vus\rv-04-checkout-ramp.js
 ```
 
 Run lên private dashboard:
@@ -262,7 +263,8 @@ cd E:\Projects\k6\k6-metrics-server
 $env:BASE_URL = "http://localhost:80"
 $env:K6_CLOUD_HOST = "http://localhost:18080"
 $env:K6_CLOUD_TOKEN = "student-token-1234567890"
-k6 run -o cloud .\load-target\k6amping-vus\rv-04-checkout-ramp.js
+k6 run -o cloud .\load-target\k6
+amping-vus\rv-04-checkout-ramp.js
 ```
 
 ## Đọc output summary
@@ -332,9 +334,113 @@ Case-specific notes:
 - Nếu confirm tail cao, flow duration sẽ tăng dù cart add nhanh.
 - Peak plateau là nơi quan trọng nhất để đọc capacity.
 
+<!-- REAL_RUN_START -->
+## Real run 2026-06-20 — run #43
+
+Run này dùng default env của case:
+
+```text
+BASE_URL = http://localhost:80
+K6_CLOUD_HOST = http://localhost:18080
+K6_CLOUD_METRIC_PUSH_INTERVAL = 1s
+K6_CLOUD_AGGREGATION_PERIOD = 1s
+K6_CLOUD_AGGREGATION_WAIT_PERIOD = 2s
+```
+
+| Item | Value |
+| --- | --- |
+| Script | `rv-04-checkout-ramp.js` |
+| Run ID | `43` |
+| Exit code | `0` |
+| Verdict | **PASS** — Đạt |
+| Summary final pushed | true |
+| Finish status | 200 |
+| Expected VU shape | `1 -> 8 -> 18 -> 1` |
+| Observed `vus` min/max | 1 / 18 |
+
+### Summary thật của run
+
+| Metric | Value | Cách đọc |
+| --- | ---: | --- |
+| `checks` | 100.00% (3126/3126) | Check status/contract pass bao nhiêu. |
+| `http_req_failed` | 0.00% (0/3126) | HTTP/API failure theo k6. |
+| `ramping_active_iterations_failed` | 0 | User-loop failures của case. |
+| `iterations` | 1042 (12.48/s) | Output, không phải target. |
+| `http_reqs` | 3126 (37.44/s) | Tổng API calls thật. |
+| `ramping_active_iterations` | 1042 | Completed user loops. |
+| `ramping_api_calls_total` | 3126 | Custom API counter, phải khớp `http_reqs` trong case này. |
+| `ramping_sleep_seconds` | 833.6s | Think time do script thêm. |
+| `http_req_duration` | avg 67.7ms, p95 111ms, p99 114ms, max 159ms | Request-level latency. |
+| `ramping_flow_duration_ms` | avg 204ms, p95 221ms, p99 228ms, max 287ms | Full user-loop latency. |
+| `iteration_duration` | avg 1.00s, p95 1.02s, p99 1.02s, max 1.08s | Bao gồm flow + think/sleep. |
+
+Threshold failures:
+
+Không có threshold failure.
+
+### Request breakdown thật
+
+| Operation | Method | Status | Count | Tỷ lệ trên total HTTP |
+| --- | --- | ---: | ---: | ---: |
+| `checkout_ramp_confirm` | POST | 200 | 1042 | 33.33% |
+| `checkout_ramp_create` | POST | 200 | 1042 | 33.33% |
+| `checkout_ramp_cart_add` | POST | 200 | 1042 | 33.33% |
+
+### Phân tích từ summary -> 3 chart
+
+#### 1. Response time chart
+
+HTTP p95 110.99ms do checkout/confirm có external/order cost; flow p95 221ms. Đây là latency cao hơn các case nhẹ nhưng vẫn sạch lỗi.
+
+Chart aggregates của run:
+
+| Aggregate | Value |
+| --- | ---: |
+| Response-time points | 3122 |
+| Avg của các window avg | 67.7ms |
+| Max window p95 | 159ms |
+| Max window p99 | 159ms |
+| Max request window | 159ms |
+| Windows p95 > 100ms | 1039 |
+| Windows p95 > 500ms | 0 |
+
+#### 2. Execution timeline chart
+
+Execution timeline không có failed iterations. Mỗi iteration tạo đúng 3 API calls: cart_add, create, confirm đều 1042.
+
+| Aggregate | Value |
+| --- | ---: |
+| Sum `iterations` buckets | 1042 |
+| Sum `http_reqs` buckets | 3126 |
+| Peak iter/s bucket | 18 |
+| Peak http_req/s bucket | 55 |
+| Failed-iteration points | 0 |
+| Sum failed iterations | 0 |
+| Peak failed-iteration bucket | 0 |
+
+#### 3. VUs vs iter/s chart
+
+VU series đạt peak 18 VUs, peak iter/s bucket 18 và peak http_req/s bucket 55. Closed model thể hiện rõ: flow checkout ~1s/iteration nên iter/s thấp hơn case browse/cart.
+
+| Aggregate | Value |
+| --- | ---: |
+| VU sample points | 83 |
+| VUs min/max series | 1 / 18 |
+| Avg VUs series | 12.60 |
+| Peak iter/s bucket | 18 |
+
+### Kết luận riêng của run #43
+
+Run pass sạch: checks 100%, HTTP failed 0%, failed iterations 0. Checkout flow 3 bước chạy đủ.
+
+BE note:
+
+> Không cần báo BE bug cho case 04 trong run này; chỉ theo dõi checkout p95 nếu muốn đặt SLA chặt hơn.
+<!-- REAL_RUN_END -->
+
 ## Đọc dashboard real-time charts cho case 04
 
-> Phần này mô tả cách đọc expected dashboard. Chỉ thêm run ID/số p95/bucket thật sau khi chạy thật.
+> Phần này giữ cách đọc dashboard chung; số thật của run gần nhất nằm ở section `Real run` phía trên.
 
 ### Overview có 3 chart cần đọc
 

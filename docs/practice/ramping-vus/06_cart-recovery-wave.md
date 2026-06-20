@@ -252,7 +252,8 @@ Run local summary:
 ```powershell
 cd E:\Projects\k6\k6-metrics-server
 $env:BASE_URL = "http://localhost:80"
-k6 run .\load-target\k6amping-vus\rv-06-cart-recovery-wave.js
+k6 run .\load-target\k6
+amping-vus\rv-06-cart-recovery-wave.js
 ```
 
 Run lên private dashboard:
@@ -262,7 +263,8 @@ cd E:\Projects\k6\k6-metrics-server
 $env:BASE_URL = "http://localhost:80"
 $env:K6_CLOUD_HOST = "http://localhost:18080"
 $env:K6_CLOUD_TOKEN = "student-token-1234567890"
-k6 run -o cloud .\load-target\k6amping-vus\rv-06-cart-recovery-wave.js
+k6 run -o cloud .\load-target\k6
+amping-vus\rv-06-cart-recovery-wave.js
 ```
 
 ## Đọc output summary
@@ -332,9 +334,113 @@ Case-specific notes:
 - Late-stage latency recovery is as important as peak behavior.
 - Failed loops at peak likely indicate cart write/read capacity issue.
 
+<!-- REAL_RUN_START -->
+## Real run 2026-06-20 — run #45
+
+Run này dùng default env của case:
+
+```text
+BASE_URL = http://localhost:80
+K6_CLOUD_HOST = http://localhost:18080
+K6_CLOUD_METRIC_PUSH_INTERVAL = 1s
+K6_CLOUD_AGGREGATION_PERIOD = 1s
+K6_CLOUD_AGGREGATION_WAIT_PERIOD = 2s
+```
+
+| Item | Value |
+| --- | --- |
+| Script | `rv-06-cart-recovery-wave.js` |
+| Run ID | `45` |
+| Exit code | `0` |
+| Verdict | **PASS** — Đạt |
+| Summary final pushed | true |
+| Finish status | 200 |
+| Expected VU shape | `1 -> 22 -> 8 -> 1` |
+| Observed `vus` min/max | 2 / 22 |
+
+### Summary thật của run
+
+| Metric | Value | Cách đọc |
+| --- | ---: | --- |
+| `checks` | 100.00% (4910/4910) | Check status/contract pass bao nhiêu. |
+| `http_req_failed` | 0.00% (0/4910) | HTTP/API failure theo k6. |
+| `ramping_active_iterations_failed` | 0 | User-loop failures của case. |
+| `iterations` | 1964 (26.00/s) | Output, không phải target. |
+| `http_reqs` | 4910 (65.01/s) | Tổng API calls thật. |
+| `ramping_active_iterations` | 1964 | Completed user loops. |
+| `ramping_api_calls_total` | 4910 | Custom API counter, phải khớp `http_reqs` trong case này. |
+| `ramping_sleep_seconds` | 1178.4s | Think time do script thêm. |
+| `http_req_duration` | avg 3.82ms, p95 5.62ms, p99 9.76ms, max 93.8ms | Request-level latency. |
+| `ramping_flow_duration_ms` | avg 9.76ms, p95 13.0ms, p99 29.0ms, max 117ms | Full user-loop latency. |
+| `iteration_duration` | avg 610ms, p95 613ms, p99 629ms, max 718ms | Bao gồm flow + think/sleep. |
+
+Threshold failures:
+
+Không có threshold failure.
+
+### Request breakdown thật
+
+| Operation | Method | Status | Count | Tỷ lệ trên total HTTP |
+| --- | --- | ---: | ---: | ---: |
+| `cart_recovery_summary` | GET | 200 | 1964 | 40.00% |
+| `cart_recovery_add` | POST | 200 | 1964 | 40.00% |
+| `cart_recovery_update` | PATCH | 200 | 982 | 20.00% |
+
+### Phân tích từ summary -> 3 chart
+
+#### 1. Response time chart
+
+HTTP p95 5.62ms, p99 9.76ms; flow p95 13ms. Cart read/write latency thấp và ổn định.
+
+Chart aggregates của run:
+
+| Aggregate | Value |
+| --- | ---: |
+| Response-time points | 3228 |
+| Avg của các window avg | 3.74ms |
+| Max window p95 | 94.0ms |
+| Max window p99 | 94.0ms |
+| Max request window | 93.8ms |
+| Windows p95 > 100ms | 0 |
+| Windows p95 > 500ms | 0 |
+
+#### 2. Execution timeline chart
+
+Execution timeline không có failed iterations. Mix đúng: summary/add mỗi iteration, update đúng khoảng một nửa iterations.
+
+| Aggregate | Value |
+| --- | ---: |
+| Sum `iterations` buckets | 1964 |
+| Sum `http_reqs` buckets | 4910 |
+| Peak iter/s bucket | 38 |
+| Peak http_req/s bucket | 95 |
+| Failed-iteration points | 0 |
+| Sum failed iterations | 0 |
+| Peak failed-iteration bucket | 0 |
+
+#### 3. VUs vs iter/s chart
+
+VU series đạt peak 22 VUs, peak iter/s bucket 38 và peak http_req/s bucket 95. Shape notification wave đúng.
+
+| Aggregate | Value |
+| --- | ---: |
+| VU sample points | 75 |
+| VUs min/max series | 2 / 22 |
+| Avg VUs series | 15.96 |
+| Peak iter/s bucket | 38 |
+
+### Kết luận riêng của run #45
+
+Run pass sạch: checks 100%, HTTP failed 0%, failed iterations 0. Cart recovery wave ổn.
+
+BE note:
+
+> Không cần báo BE bug cho case 06 trong run này.
+<!-- REAL_RUN_END -->
+
 ## Đọc dashboard real-time charts cho case 06
 
-> Phần này mô tả cách đọc expected dashboard. Chỉ thêm run ID/số p95/bucket thật sau khi chạy thật.
+> Phần này giữ cách đọc dashboard chung; số thật của run gần nhất nằm ở section `Real run` phía trên.
 
 ### Overview có 3 chart cần đọc
 

@@ -261,7 +261,8 @@ Run local summary:
 ```powershell
 cd E:\Projects\k6\k6-metrics-server
 $env:BASE_URL = "http://localhost:80"
-k6 run .\load-target\k6amping-vus\rv-07-production-traffic-curve.js
+k6 run .\load-target\k6
+amping-vus\rv-07-production-traffic-curve.js
 ```
 
 Run lên private dashboard:
@@ -271,7 +272,8 @@ cd E:\Projects\k6\k6-metrics-server
 $env:BASE_URL = "http://localhost:80"
 $env:K6_CLOUD_HOST = "http://localhost:18080"
 $env:K6_CLOUD_TOKEN = "student-token-1234567890"
-k6 run -o cloud .\load-target\k6amping-vus\rv-07-production-traffic-curve.js
+k6 run -o cloud .\load-target\k6
+amping-vus\rv-07-production-traffic-curve.js
 ```
 
 ## Đọc output summary
@@ -341,9 +343,116 @@ Case-specific notes:
 - Aggregate p95 xấu phải breakdown trước khi route issue.
 - RPS thấp hơn baseline có thể do một service branch kéo flow duration.
 
+<!-- REAL_RUN_START -->
+## Real run 2026-06-20 — run #46
+
+Run này dùng default env của case:
+
+```text
+BASE_URL = http://localhost:80
+K6_CLOUD_HOST = http://localhost:18080
+K6_CLOUD_METRIC_PUSH_INTERVAL = 1s
+K6_CLOUD_AGGREGATION_PERIOD = 1s
+K6_CLOUD_AGGREGATION_WAIT_PERIOD = 2s
+```
+
+| Item | Value |
+| --- | --- |
+| Script | `rv-07-production-traffic-curve.js` |
+| Run ID | `46` |
+| Exit code | `99` |
+| Verdict | **FAIL** — Không đạt |
+| Summary final pushed | true |
+| Finish status | 200 |
+| Expected VU shape | `2 -> 12 -> 30 -> 8 -> 2` |
+| Observed `vus` min/max | 2 / 30 |
+
+### Summary thật của run
+
+| Metric | Value | Cách đọc |
+| --- | ---: | --- |
+| `checks` | 98.41% (4096/4162) | Check status/contract pass bao nhiêu. |
+| `http_req_failed` | 1.58% (66/4162) | HTTP/API failure theo k6. |
+| `ramping_active_iterations_failed` | 66 | User-loop failures của case. |
+| `iterations` | 4162 (37.80/s) | Output, không phải target. |
+| `http_reqs` | 4162 (37.80/s) | Tổng API calls thật. |
+| `ramping_active_iterations` | 4162 | Completed user loops. |
+| `ramping_api_calls_total` | 4162 | Custom API counter, phải khớp `http_reqs` trong case này. |
+| `ramping_sleep_seconds` | 2081.0s | Think time do script thêm. |
+| `http_req_duration` | avg 34.2ms, p95 152ms, p99 616ms, max 1.60s | Request-level latency. |
+| `ramping_flow_duration_ms` | avg 34.3ms, p95 152ms, p99 616ms, max 1.60s | Full user-loop latency. |
+| `iteration_duration` | avg 535ms, p95 653ms, p99 1.11s, max 2.10s | Bao gồm flow + think/sleep. |
+
+Threshold failures:
+
+- ramping_active_iterations_failed 66 >= limit 50
+
+### Request breakdown thật
+
+| Operation | Method | Status | Count | Tỷ lệ trên total HTTP |
+| --- | --- | ---: | ---: | ---: |
+| `production_curve_browse` | GET | 200 | 2013 | 48.37% |
+| `production_curve_cart_add` | POST | 200 | 842 | 20.23% |
+| `production_curve_auth_me` | GET | 200 | 601 | 14.44% |
+| `production_curve_checkout` | POST | 200 | 418 | 10.04% |
+| `production_curve_report` | GET | 200 | 222 | 5.33% |
+| `production_curve_browse` | GET | 429 | 66 | 1.59% |
+
+### Phân tích từ summary -> 3 chart
+
+#### 1. Response time chart
+
+HTTP p95 152.50ms, p99 616.05ms, max 1.6s. Tail đến từ production mixed curve; cần breakdown theo operation. Request breakdown cho thấy lỗi status nằm ở `production_curve_browse` 429.
+
+Chart aggregates của run:
+
+| Aggregate | Value |
+| --- | ---: |
+| Response-time points | 3634 |
+| Avg của các window avg | 38.4ms |
+| Max window p95 | 1.60s |
+| Max window p99 | 1.60s |
+| Max request window | 1.60s |
+| Windows p95 > 100ms | 237 |
+| Windows p95 > 500ms | 59 |
+
+#### 2. Execution timeline chart
+
+Execution timeline có 51 failed-iteration points, tổng 66 failed iterations, peak failed bucket 8 tại 2026-06-20T06:10:01Z. Failure không lan sang cart/auth/checkout/report.
+
+| Aggregate | Value |
+| --- | ---: |
+| Sum `iterations` buckets | 4162 |
+| Sum `http_reqs` buckets | 4162 |
+| Peak iter/s bucket | 59 |
+| Peak http_req/s bucket | 60 |
+| Failed-iteration points | 51 |
+| Sum failed iterations | 66 |
+| Peak failed-iteration bucket | 8 |
+
+#### 3. VUs vs iter/s chart
+
+VU series đạt peak 30 VUs, peak iter/s bucket 59 và peak http_req/s bucket 60. Shape production curve đúng; product browse throttling làm case vượt failed-iteration cap.
+
+| Aggregate | Value |
+| --- | ---: |
+| VU sample points | 110 |
+| VUs min/max series | 2 / 30 |
+| Avg VUs series | 20.21 |
+| Peak iter/s bucket | 59 |
+
+### Kết luận riêng của run #46
+
+Run fail nhẹ ở custom failed-iteration cap: checks 98.41% và http_req_failed 1.58% vẫn pass relaxed thresholds, nhưng failed iterations 66 vượt cap 50.
+
+BE note:
+
+> BE cần kiểm tra rate-limit/capacity của `GET /api/sim/products` trong production mix. Nếu 1.58% 429 là acceptable thì threshold `ramping_active_iterations_failed: count<50` đang quá chặt so với duration/peak hiện tại; nếu không acceptable thì sửa product browse để giảm 429 dưới 50 failed iterations.
+<!-- REAL_RUN_END -->
+
 ## Đọc dashboard real-time charts cho case 07
 
-> Phần này mô tả cách đọc expected dashboard. Chỉ thêm run ID/số p95/bucket thật sau khi chạy thật.
+> Phần này giữ cách đọc dashboard chung; số thật của run gần nhất nằm ở section `Real run` phía trên.
 
 ### Overview có 3 chart cần đọc
 

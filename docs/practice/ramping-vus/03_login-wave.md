@@ -254,7 +254,8 @@ Run local summary:
 ```powershell
 cd E:\Projects\k6\k6-metrics-server
 $env:BASE_URL = "http://localhost:80"
-k6 run .\load-target\k6amping-vus\rv-03-login-wave.js
+k6 run .\load-target\k6
+amping-vus\rv-03-login-wave.js
 ```
 
 Run lên private dashboard:
@@ -264,7 +265,8 @@ cd E:\Projects\k6\k6-metrics-server
 $env:BASE_URL = "http://localhost:80"
 $env:K6_CLOUD_HOST = "http://localhost:18080"
 $env:K6_CLOUD_TOKEN = "student-token-1234567890"
-k6 run -o cloud .\load-target\k6amping-vus\rv-03-login-wave.js
+k6 run -o cloud .\load-target\k6
+amping-vus\rv-03-login-wave.js
 ```
 
 ## Đọc output summary
@@ -334,9 +336,113 @@ Case-specific notes:
 - `login_wave_me` latency tăng thường là session store/cache issue.
 - Failures ở refresh có thể không hiện trong aggregate nếu count nhỏ; phải lọc operation.
 
+<!-- REAL_RUN_START -->
+## Real run 2026-06-20 — run #42
+
+Run này dùng default env của case:
+
+```text
+BASE_URL = http://localhost:80
+K6_CLOUD_HOST = http://localhost:18080
+K6_CLOUD_METRIC_PUSH_INTERVAL = 1s
+K6_CLOUD_AGGREGATION_PERIOD = 1s
+K6_CLOUD_AGGREGATION_WAIT_PERIOD = 2s
+```
+
+| Item | Value |
+| --- | --- |
+| Script | `rv-03-login-wave.js` |
+| Run ID | `42` |
+| Exit code | `0` |
+| Verdict | **PASS** — Đạt |
+| Summary final pushed | true |
+| Finish status | 200 |
+| Expected VU shape | `1 -> 12 -> 28 -> 5` |
+| Observed `vus` min/max | 1 / 28 |
+
+### Summary thật của run
+
+| Metric | Value | Cách đọc |
+| --- | ---: | --- |
+| `checks` | 100.00% (3886/3886) | Check status/contract pass bao nhiêu. |
+| `http_req_failed` | 0.00% (0/3886) | HTTP/API failure theo k6. |
+| `ramping_active_iterations_failed` | 0 | User-loop failures của case. |
+| `iterations` | 2534 (37.02/s) | Output, không phải target. |
+| `http_reqs` | 3886 (56.77/s) | Tổng API calls thật. |
+| `ramping_active_iterations` | 2534 | Completed user loops. |
+| `ramping_api_calls_total` | 3886 | Custom API counter, phải khớp `http_reqs` trong case này. |
+| `ramping_sleep_seconds` | 1267.0s | Think time do script thêm. |
+| `http_req_duration` | avg 5.17ms, p95 22.9ms, p99 23.5ms, max 33.9ms | Request-level latency. |
+| `ramping_flow_duration_ms` | avg 8.05ms, p95 27.0ms, p99 29.0ms, max 48.0ms | Full user-loop latency. |
+| `iteration_duration` | avg 508ms, p95 528ms, p99 530ms, max 549ms | Bao gồm flow + think/sleep. |
+
+Threshold failures:
+
+Không có threshold failure.
+
+### Request breakdown thật
+
+| Operation | Method | Status | Count | Tỷ lệ trên total HTTP |
+| --- | --- | ---: | ---: | ---: |
+| `login_wave_me` | GET | 200 | 2534 | 65.21% |
+| `login_wave_login` | POST | 200 | 845 | 21.74% |
+| `login_wave_refresh` | POST | 200 | 507 | 13.05% |
+
+### Phân tích từ summary -> 3 chart
+
+#### 1. Response time chart
+
+HTTP p95 22.87ms, p99 23.47ms; flow p95 27ms. Không thấy tail latency bất thường.
+
+Chart aggregates của run:
+
+| Aggregate | Value |
+| --- | ---: |
+| Response-time points | 2537 |
+| Avg của các window avg | 6.42ms |
+| Max window p95 | 33.9ms |
+| Max window p99 | 33.9ms |
+| Max request window | 33.9ms |
+| Windows p95 > 100ms | 0 |
+| Windows p95 > 500ms | 0 |
+
+#### 2. Execution timeline chart
+
+Execution timeline không có failed-iteration points. Mix đúng: `auth/me` mỗi iteration, login khoảng mỗi 3 iteration, refresh khoảng mỗi 5 iteration.
+
+| Aggregate | Value |
+| --- | ---: |
+| Sum `iterations` buckets | 2534 |
+| Sum `http_reqs` buckets | 3886 |
+| Peak iter/s bucket | 56 |
+| Peak http_req/s bucket | 86 |
+| Failed-iteration points | 0 |
+| Sum failed iterations | 0 |
+| Peak failed-iteration bucket | 0 |
+
+#### 3. VUs vs iter/s chart
+
+VU series đạt peak 28 VUs, peak iter/s bucket 56 và peak http_req/s bucket 86. Shape login wave đúng và iter/s scale ổn.
+
+| Aggregate | Value |
+| --- | ---: |
+| VU sample points | 68 |
+| VUs min/max series | 1 / 28 |
+| Avg VUs series | 18.94 |
+| Peak iter/s bucket | 56 |
+
+### Kết luận riêng của run #42
+
+Run pass sạch: checks 100%, HTTP failed 0%, failed iterations 0. Auth/session wave giữ được contract.
+
+BE note:
+
+> Không cần báo BE bug cho case 03 trong run này.
+<!-- REAL_RUN_END -->
+
 ## Đọc dashboard real-time charts cho case 03
 
-> Phần này mô tả cách đọc expected dashboard. Chỉ thêm run ID/số p95/bucket thật sau khi chạy thật.
+> Phần này giữ cách đọc dashboard chung; số thật của run gần nhất nằm ở section `Real run` phía trên.
 
 ### Overview có 3 chart cần đọc
 

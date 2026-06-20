@@ -327,6 +327,41 @@ vì ramping-vus không có target RPS.
 | 06 | `rv-06-cart-recovery-wave.js` | `1 -> 22 -> 8 -> 1` | cart recovery wave | cart |
 | 07 | `rv-07-production-traffic-curve.js` | `2 -> 12 -> 30 -> 8 -> 2` | production traffic curve | mixed |
 
+<!-- REAL_RUN_SUMMARY_START -->
+## Kết quả rerun 2026-06-20
+
+Rerun toàn bộ 7 case bằng private dashboard (`-o cloud`) với default env của từng script.
+
+| Case | Run | Exit | Verdict | Lỗi chính / ghi chú BE |
+| --- | ---: | ---: | --- | --- |
+| 01 Daily traffic curve | #40 | 99 | **FAIL** | Product browse/list trả 429 vượt ngưỡng của case. |
+| 02 Campaign launch spike | #41 | 99 | **FAIL** | Product browse/list trả 429 vượt ngưỡng của case. |
+| 03 Login wave | #42 | 0 | **PASS** | Pass sạch, chưa cần báo BE bug. |
+| 04 Checkout ramp | #43 | 0 | **PASS** | Pass sạch, chưa cần báo BE bug. |
+| 05 Reporting ramp | #44 | 99 | **FAIL** | Script/API contract mismatch: report job trả 202 nhưng script check 200. |
+| 06 Cart recovery wave | #45 | 0 | **PASS** | Pass sạch, chưa cần báo BE bug. |
+| 07 Production traffic curve | #46 | 99 | **FAIL** | Product browse/list trả 429 vượt ngưỡng của case. |
+
+Đọc kết quả:
+
+```text
+PASS = thresholds sạch, exit code 0, summary-final pushed thành công.
+FAIL = k6 exit code 99 do threshold crossed; vẫn có summary thật để phân tích.
+```
+
+Các vấn đề còn cần báo BE/script owner:
+
+1. **Products list/browse bị 429** trong case 01, 02, 07:
+   - Case 01 `daily_curve_list`: 254 request 429.
+   - Case 02 `campaign_landing`: 2313 request 429.
+   - Case 07 `production_curve_browse`: 66 request 429, làm failed iterations vượt cap.
+2. **Reporting create job contract mismatch** trong case 05:
+   - Endpoint `POST /api/sim/report/jobs` trả 202.
+   - Script đang check default 200 nên 105 checks fail và không chạy status check.
+
+Các case pass sạch trong rerun này: **03 login wave**, **04 checkout ramp**, **06 cart recovery wave**.
+<!-- REAL_RUN_SUMMARY_END -->
+
 ## Thứ tự đề xuất học
 
 ```text

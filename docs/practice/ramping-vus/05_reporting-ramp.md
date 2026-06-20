@@ -254,7 +254,8 @@ Run local summary:
 ```powershell
 cd E:\Projects\k6\k6-metrics-server
 $env:BASE_URL = "http://localhost:80"
-k6 run .\load-target\k6amping-vus\rv-05-reporting-ramp.js
+k6 run .\load-target\k6
+amping-vus\rv-05-reporting-ramp.js
 ```
 
 Run lên private dashboard:
@@ -264,7 +265,8 @@ cd E:\Projects\k6\k6-metrics-server
 $env:BASE_URL = "http://localhost:80"
 $env:K6_CLOUD_HOST = "http://localhost:18080"
 $env:K6_CLOUD_TOKEN = "student-token-1234567890"
-k6 run -o cloud .\load-target\k6amping-vus\rv-05-reporting-ramp.js
+k6 run -o cloud .\load-target\k6
+amping-vus\rv-05-reporting-ramp.js
 ```
 
 ## Đọc output summary
@@ -334,9 +336,113 @@ Case-specific notes:
 - `ramping_flow_duration_ms` bao gồm ready wait khi job branch chạy.
 - Nếu iter/s thấp nhưng checks pass, kiểm sleep/ready_after trước khi kết luận backend fail.
 
+<!-- REAL_RUN_START -->
+## Real run 2026-06-20 — run #44
+
+Run này dùng default env của case:
+
+```text
+BASE_URL = http://localhost:80
+K6_CLOUD_HOST = http://localhost:18080
+K6_CLOUD_METRIC_PUSH_INTERVAL = 1s
+K6_CLOUD_AGGREGATION_PERIOD = 1s
+K6_CLOUD_AGGREGATION_WAIT_PERIOD = 2s
+```
+
+| Item | Value |
+| --- | --- |
+| Script | `rv-05-reporting-ramp.js` |
+| Run ID | `44` |
+| Exit code | `99` |
+| Verdict | **FAIL** — Không đạt |
+| Summary final pushed | true |
+| Finish status | 200 |
+| Expected VU shape | `1 -> 5 -> 14 -> 1` |
+| Observed `vus` min/max | 1 / 14 |
+
+### Summary thật của run
+
+| Metric | Value | Cách đọc |
+| --- | ---: | --- |
+| `checks` | 75.00% (315/420) | Check status/contract pass bao nhiêu. |
+| `http_req_failed` | 0.00% (0/420) | HTTP/API failure theo k6. |
+| `ramping_active_iterations_failed` | 105 | User-loop failures của case. |
+| `iterations` | 315 (3.75/s) | Output, không phải target. |
+| `http_reqs` | 420 (5.00/s) | Tổng API calls thật. |
+| `ramping_active_iterations` | 315 | Completed user loops. |
+| `ramping_api_calls_total` | 420 | Custom API counter, phải khớp `http_reqs` trong case này. |
+| `ramping_sleep_seconds` | 315.0s | Think time do script thêm. |
+| `http_req_duration` | avg 1.15s, p95 2.61s, p99 2.90s, max 3.30s | Request-level latency. |
+| `ramping_flow_duration_ms` | avg 1.53s, p95 2.80s, p99 3.18s, max 3.60s | Full user-loop latency. |
+| `iteration_duration` | avg 2.53s, p95 3.80s, p99 4.18s, max 4.60s | Bao gồm flow + think/sleep. |
+
+Threshold failures:
+
+- checks 75.00% <= required 99%
+- ramping_active_iterations_failed 105 >= limit 15
+
+### Request breakdown thật
+
+| Operation | Method | Status | Count | Tỷ lệ trên total HTTP |
+| --- | --- | ---: | ---: | ---: |
+| `reporting_ramp_dashboard` | GET | 200 | 315 | 75.00% |
+| `reporting_ramp_create_job` | POST | 202 | 105 | 25.00% |
+
+### Phân tích từ summary -> 3 chart
+
+#### 1. Response time chart
+
+HTTP p95 2.61s, p99 2.90s; flow p95 2.80s. Reporting là workload heavy nên latency cao, nhưng lỗi chính là status expectation mismatch chứ không phải HTTP transport failure (`http_req_failed=0`).
+
+Chart aggregates của run:
+
+| Aggregate | Value |
+| --- | ---: |
+| Response-time points | 420 |
+| Avg của các window avg | 1.15s |
+| Max window p95 | 3.30s |
+| Max window p99 | 3.30s |
+| Max request window | 3.30s |
+| Windows p95 > 100ms | 382 |
+| Windows p95 > 500ms | 239 |
+
+#### 2. Execution timeline chart
+
+Execution timeline có 105 failed iterations đúng bằng số `reporting_ramp_create_job` calls. Không có `reporting_ramp_job_status` trong request breakdown vì script chỉ parse job_id khi `create.ok` true; status 202 làm `create.ok=false`.
+
+| Aggregate | Value |
+| --- | ---: |
+| Sum `iterations` buckets | 315 |
+| Sum `http_reqs` buckets | 420 |
+| Peak iter/s bucket | 6 |
+| Peak http_req/s bucket | 9 |
+| Failed-iteration points | 105 |
+| Sum failed iterations | 105 |
+| Peak failed-iteration bucket | 3 |
+
+#### 3. VUs vs iter/s chart
+
+VU series đạt peak 14 VUs, peak iter/s bucket 6 và peak http_req/s bucket 9. Low VU nhưng flow heavy/ready wait làm iter/s thấp — expected với reporting.
+
+| Aggregate | Value |
+| --- | ---: |
+| VU sample points | 83 |
+| VUs min/max series | 1 / 14 |
+| Avg VUs series | 9.60 |
+| Peak iter/s bucket | 6 |
+
+### Kết luận riêng của run #44
+
+Run fail vì contract script/backend không khớp ở create report job. Endpoint trả HTTP 202 nhưng helper đang check status 200, nên 105 create-job checks fail và không gọi status endpoint.
+
+BE note:
+
+> BE/script pack cần sửa `rv-05-reporting-ramp.js`: `requestJson(... reporting_ramp_create_job ...)` phải truyền expectedStatus `202` hoặc helper phải cho phép 202. Sau đó script mới parse `data.job_id` và gọi `reporting_ramp_job_status`. Nếu API contract thật là 200 thì backend phải đổi endpoint; nhưng docs/case flow hiện ghi expected 202.
+<!-- REAL_RUN_END -->
+
 ## Đọc dashboard real-time charts cho case 05
 
-> Phần này mô tả cách đọc expected dashboard. Chỉ thêm run ID/số p95/bucket thật sau khi chạy thật.
+> Phần này giữ cách đọc dashboard chung; số thật của run gần nhất nằm ở section `Real run` phía trên.
 
 ### Overview có 3 chart cần đọc
 

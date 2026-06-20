@@ -256,7 +256,8 @@ Run local summary:
 ```powershell
 cd E:\Projects\k6\k6-metrics-server
 $env:BASE_URL = "http://localhost:80"
-k6 run .\load-target\k6amping-vus\rv-01-daily-traffic-curve.js
+k6 run .\load-target\k6
+amping-vus\rv-01-daily-traffic-curve.js
 ```
 
 Run lên private dashboard:
@@ -266,7 +267,8 @@ cd E:\Projects\k6\k6-metrics-server
 $env:BASE_URL = "http://localhost:80"
 $env:K6_CLOUD_HOST = "http://localhost:18080"
 $env:K6_CLOUD_TOKEN = "student-token-1234567890"
-k6 run -o cloud .\load-target\k6amping-vus\rv-01-daily-traffic-curve.js
+k6 run -o cloud .\load-target\k6
+amping-vus\rv-01-daily-traffic-curve.js
 ```
 
 ## Đọc output summary
@@ -336,9 +338,117 @@ Case-specific notes:
 - Branch mix 70/22/8 là expected ratio over enough loops, không phải exact per bucket.
 - Nếu iter/s flatten ở peak, đọc `ramping_flow_duration_ms` và operation p95.
 
+<!-- REAL_RUN_START -->
+## Real run 2026-06-20 — run #40
+
+Run này dùng default env của case:
+
+```text
+BASE_URL = http://localhost:80
+K6_CLOUD_HOST = http://localhost:18080
+K6_CLOUD_METRIC_PUSH_INTERVAL = 1s
+K6_CLOUD_AGGREGATION_PERIOD = 1s
+K6_CLOUD_AGGREGATION_WAIT_PERIOD = 2s
+```
+
+| Item | Value |
+| --- | --- |
+| Script | `rv-01-daily-traffic-curve.js` |
+| Run ID | `40` |
+| Exit code | `99` |
+| Verdict | **FAIL** — Không đạt |
+| Summary final pushed | true |
+| Finish status | 200 |
+| Expected VU shape | `2 -> 8 -> 24 -> 12 -> 2` |
+| Observed `vus` min/max | 2 / 24 |
+
+### Summary thật của run
+
+| Metric | Value | Cách đọc |
+| --- | ---: | --- |
+| `checks` | 96.54% (7093/7347) | Check status/contract pass bao nhiêu. |
+| `http_req_failed` | 3.45% (254/7347) | HTTP/API failure theo k6. |
+| `ramping_active_iterations_failed` | 254 | User-loop failures của case. |
+| `iterations` | 4390 (38.73/s) | Output, không phải target. |
+| `http_reqs` | 7347 (64.81/s) | Tổng API calls thật. |
+| `ramping_active_iterations` | 4390 | Completed user loops. |
+| `ramping_api_calls_total` | 7347 | Custom API counter, phải khớp `http_reqs` trong case này. |
+| `ramping_sleep_seconds` | 1756.0s | Think time do script thêm. |
+| `http_req_duration` | avg 5.22ms, p95 17.7ms, p99 90.1ms, max 142ms | Request-level latency. |
+| `ramping_flow_duration_ms` | avg 8.84ms, p95 79.0ms, p99 92.0ms, max 142ms | Full user-loop latency. |
+| `iteration_duration` | avg 409ms, p95 480ms, p99 492ms, max 542ms | Bao gồm flow + think/sleep. |
+
+Threshold failures:
+
+- checks 96.54% <= required 99%
+- http_req_failed 3.45% >= limit 1%
+- ramping_active_iterations_failed 254 >= limit 25
+
+### Request breakdown thật
+
+| Operation | Method | Status | Count | Tỷ lệ trên total HTTP |
+| --- | --- | ---: | ---: | ---: |
+| `daily_curve_detail` | GET | 200 | 2957 | 40.25% |
+| `daily_curve_list` | GET | 200 | 2703 | 36.79% |
+| `daily_curve_cart_add` | POST | 200 | 1081 | 14.71% |
+| `daily_curve_checkout` | POST | 200 | 352 | 4.79% |
+| `daily_curve_list` | GET | 429 | 254 | 3.46% |
+
+### Phân tích từ summary -> 3 chart
+
+#### 1. Response time chart
+
+Latency tổng không xấu: HTTP p95 17.69ms, p99 90.10ms. Vấn đề chính không phải chậm mà là 254 request list trả 429.
+
+Chart aggregates của run:
+
+| Aggregate | Value |
+| --- | ---: |
+| Response-time points | 4288 |
+| Avg của các window avg | 7.87ms |
+| Max window p95 | 142ms |
+| Max window p99 | 142ms |
+| Max request window | 142ms |
+| Windows p95 > 100ms | 9 |
+| Windows p95 > 500ms | 0 |
+
+#### 2. Execution timeline chart
+
+Execution timeline có 139 failed-iteration points, tổng 254 failed iterations, peak failed bucket 25 tại 2026-06-20T06:00:49Z. Đây là failure cluster trong high-traffic/peak part của daily curve.
+
+| Aggregate | Value |
+| --- | ---: |
+| Sum `iterations` buckets | 4390 |
+| Sum `http_reqs` buckets | 7347 |
+| Peak iter/s bucket | 62 |
+| Peak http_req/s bucket | 109 |
+| Failed-iteration points | 139 |
+| Sum failed iterations | 254 |
+| Peak failed-iteration bucket | 25 |
+
+#### 3. VUs vs iter/s chart
+
+VU series đạt đúng peak 24 VUs, peak iter/s bucket 62 và peak http_req/s bucket 109. VU shape ổn; backend product-list/rate-limit không giữ được contract 200.
+
+| Aggregate | Value |
+| --- | ---: |
+| VU sample points | 113 |
+| VUs min/max series | 2 / 24 |
+| Avg VUs series | 15.87 |
+| Peak iter/s bucket | 62 |
+
+### Kết luận riêng của run #40
+
+Run fail vì product list bị rate-limit/429 ở daily browse branch. Detail/cart/checkout đều 200; lỗi tập trung ở `daily_curve_list`.
+
+BE note:
+
+> BE cần kiểm tra rate-limit/capacity của `GET /api/sim/products` cho traffic daily default 24 VUs. Nếu 429 là chủ ý thì phải đổi case contract/threshold; nếu không, cần tăng limit/cache hoặc giảm false throttling để `daily_curve_list` trả 200 trong default run.
+<!-- REAL_RUN_END -->
+
 ## Đọc dashboard real-time charts cho case 01
 
-> Phần này mô tả cách đọc expected dashboard. Chỉ thêm run ID/số p95/bucket thật sau khi chạy thật.
+> Phần này giữ cách đọc dashboard chung; số thật của run gần nhất nằm ở section `Real run` phía trên.
 
 ### Overview có 3 chart cần đọc
 

@@ -255,7 +255,8 @@ Run local summary:
 ```powershell
 cd E:\Projects\k6\k6-metrics-server
 $env:BASE_URL = "http://localhost:80"
-k6 run .\load-target\k6amping-vus\rv-02-campaign-launch-spike.js
+k6 run .\load-target\k6
+amping-vus\rv-02-campaign-launch-spike.js
 ```
 
 Run lên private dashboard:
@@ -265,7 +266,8 @@ cd E:\Projects\k6\k6-metrics-server
 $env:BASE_URL = "http://localhost:80"
 $env:K6_CLOUD_HOST = "http://localhost:18080"
 $env:K6_CLOUD_TOKEN = "student-token-1234567890"
-k6 run -o cloud .\load-target\k6amping-vus\rv-02-campaign-launch-spike.js
+k6 run -o cloud .\load-target\k6
+amping-vus\rv-02-campaign-launch-spike.js
 ```
 
 ## Đọc output summary
@@ -335,9 +337,116 @@ Case-specific notes:
 - Cart add count thấp hơn landing/detail là expected.
 - Nếu p95 không recover ở recovery stage, nghi queue/resource saturation.
 
+<!-- REAL_RUN_START -->
+## Real run 2026-06-20 — run #41
+
+Run này dùng default env của case:
+
+```text
+BASE_URL = http://localhost:80
+K6_CLOUD_HOST = http://localhost:18080
+K6_CLOUD_METRIC_PUSH_INTERVAL = 1s
+K6_CLOUD_AGGREGATION_PERIOD = 1s
+K6_CLOUD_AGGREGATION_WAIT_PERIOD = 2s
+```
+
+| Item | Value |
+| --- | --- |
+| Script | `rv-02-campaign-launch-spike.js` |
+| Run ID | `41` |
+| Exit code | `99` |
+| Verdict | **FAIL** — Không đạt |
+| Summary final pushed | true |
+| Finish status | 200 |
+| Expected VU shape | `1 -> 6 -> 36 -> 8 -> 1` |
+| Observed `vus` min/max | 1 / 36 |
+
+### Summary thật của run
+
+| Metric | Value | Cách đọc |
+| --- | ---: | --- |
+| `checks` | 86.61% (14972/17285) | Check status/contract pass bao nhiêu. |
+| `http_req_failed` | 13.38% (2313/17285) | HTTP/API failure theo k6. |
+| `ramping_active_iterations_failed` | 2313 | User-loop failures của case. |
+| `iterations` | 6914 (106.22/s) | Output, không phải target. |
+| `http_reqs` | 17285 (265.55/s) | Tổng API calls thật. |
+| `ramping_active_iterations` | 6914 | Completed user loops. |
+| `ramping_api_calls_total` | 17285 | Custom API counter, phải khớp `http_reqs` trong case này. |
+| `ramping_sleep_seconds` | 1382.8s | Think time do script thêm. |
+| `http_req_duration` | avg 1.16ms, p95 3.12ms, p99 3.80ms, max 31.1ms | Request-level latency. |
+| `ramping_flow_duration_ms` | avg 3.05ms, p95 6.00ms, p99 7.00ms, max 48.0ms | Full user-loop latency. |
+| `iteration_duration` | avg 203ms, p95 206ms, p99 208ms, max 249ms | Bao gồm flow + think/sleep. |
+
+Threshold failures:
+
+- checks 86.61% <= required 98%
+- http_req_failed 13.38% >= limit 2%
+- ramping_active_iterations_failed 2313 >= limit 40
+
+### Request breakdown thật
+
+| Operation | Method | Status | Count | Tỷ lệ trên total HTTP |
+| --- | --- | ---: | ---: | ---: |
+| `campaign_product_detail` | GET | 200 | 6914 | 40.00% |
+| `campaign_landing` | GET | 200 | 4601 | 26.62% |
+| `campaign_cart_add` | POST | 200 | 3457 | 20.00% |
+| `campaign_landing` | GET | 429 | 2313 | 13.38% |
+
+### Phân tích từ summary -> 3 chart
+
+#### 1. Response time chart
+
+Latency rất thấp: HTTP p95 3.12ms, p99 3.80ms. Điều này cho thấy service trả 429 nhanh, không phải bị slow timeout.
+
+Chart aggregates của run:
+
+| Aggregate | Value |
+| --- | ---: |
+| Response-time points | 4276 |
+| Avg của các window avg | 1.44ms |
+| Max window p95 | 31.0ms |
+| Max window p99 | 31.0ms |
+| Max request window | 31.1ms |
+| Windows p95 > 100ms | 0 |
+| Windows p95 > 500ms | 0 |
+
+#### 2. Execution timeline chart
+
+Execution timeline có 490 failed-iteration points, tổng 2313 failed iterations, peak failed bucket 178 tại 2026-06-20T06:01:38Z. Lỗi đúng vào spike shape 36 VUs.
+
+| Aggregate | Value |
+| --- | ---: |
+| Sum `iterations` buckets | 6914 |
+| Sum `http_reqs` buckets | 17285 |
+| Peak iter/s bucket | 180 |
+| Peak http_req/s bucket | 450 |
+| Failed-iteration points | 490 |
+| Sum failed iterations | 2313 |
+| Peak failed-iteration bucket | 178 |
+
+#### 3. VUs vs iter/s chart
+
+VU series đạt đúng peak 36 VUs, peak iter/s bucket 180 và peak http_req/s bucket 450. Load shape đúng; product landing bị rate-limit quá mức cho campaign spike.
+
+| Aggregate | Value |
+| --- | ---: |
+| VU sample points | 65 |
+| VUs min/max series | 1 / 36 |
+| Avg VUs series | 21.63 |
+| Peak iter/s bucket | 180 |
+
+### Kết luận riêng của run #41
+
+Run fail nặng ở campaign landing. `campaign_product_detail` và `campaign_cart_add` đều 200, nhưng `campaign_landing` có 2313 request 429.
+
+BE note:
+
+> BE cần xử lý `GET /api/sim/products?...campaign=flash`/operation `campaign_landing`. Default case chỉ cho phép http_req_failed <2% và failed iterations <40, nhưng thực tế 13.38% HTTP failed và 2313 failed iterations. Nếu muốn dạy spike throttling thì tạo case riêng/đổi expected 429; còn case này đang mô tả campaign launch phải pass ở mức default.
+<!-- REAL_RUN_END -->
+
 ## Đọc dashboard real-time charts cho case 02
 
-> Phần này mô tả cách đọc expected dashboard. Chỉ thêm run ID/số p95/bucket thật sau khi chạy thật.
+> Phần này giữ cách đọc dashboard chung; số thật của run gần nhất nằm ở section `Real run` phía trên.
 
 ### Overview có 3 chart cần đọc
 

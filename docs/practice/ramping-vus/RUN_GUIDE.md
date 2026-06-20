@@ -128,6 +128,42 @@ Caveat:
 | Gauges | `vus`, `vus_max` |
 | Dashboard | VU shape, iter/s shape, response time by operation, failure clusters |
 
+<!-- LATEST_RERUN_START -->
+## Latest rerun snapshot — 2026-06-20
+
+Rerun command pattern used for all cases:
+
+```powershell
+cd E:\Projects\k6\k6-metrics-server
+$env:BASE_URL = "http://localhost:80"
+$env:K6_CLOUD_HOST = "http://localhost:18080"
+$env:K6_CLOUD_TOKEN = "student-token-1234567890"
+$env:K6_CLOUD_METRIC_PUSH_INTERVAL = "1s"
+$env:K6_CLOUD_AGGREGATION_PERIOD = "1s"
+$env:K6_CLOUD_AGGREGATION_WAIT_PERIOD = "2s"
+k6 run -o cloud --summary-export <tmp.json> --summary-trend-stats "avg,min,med,max,p(90),p(95),p(99)" .\load-target\k6amping-vus\<script>.js
+```
+
+| Case | Run ID | Exit | Verdict | Key summary |
+| --- | ---: | ---: | --- | --- |
+| 01 Daily traffic curve | 40 | 99 | **FAIL** | checks 96.54%, http_failed 3.45%, failed_iters 254 |
+| 02 Campaign launch spike | 41 | 99 | **FAIL** | checks 86.61%, http_failed 13.38%, failed_iters 2313 |
+| 03 Login wave | 42 | 0 | **PASS** | checks 100.00%, http_failed 0.00%, failed_iters 0 |
+| 04 Checkout ramp | 43 | 0 | **PASS** | checks 100.00%, http_failed 0.00%, failed_iters 0 |
+| 05 Reporting ramp | 44 | 99 | **FAIL** | checks 75.00%, http_failed 0.00%, failed_iters 105 |
+| 06 Cart recovery wave | 45 | 0 | **PASS** | checks 100.00%, http_failed 0.00%, failed_iters 0 |
+| 07 Production traffic curve | 46 | 99 | **FAIL** | checks 98.41%, http_failed 1.58%, failed_iters 66 |
+
+Backend/script issues found in this rerun:
+
+| Area | Evidence | Suggested fix |
+| --- | --- | --- |
+| Products list rate-limit/capacity | Cases 01/02/07 have `GET /api/sim/products` 429 rows. | Decide contract: if default practice should pass, raise/tune product list limit/cache; if 429 is intentional, change expected status/threshold and docs. |
+| Reporting job status contract | Case 05 `reporting_ramp_create_job` returns 202 but script checks 200. | Update `rv-05-reporting-ramp.js` to pass expected status 202 to `requestJson`, then parse `data.job_id` and execute status check. |
+
+Use the per-case `Real run` section for detailed summary -> 3 chart analysis.
+<!-- LATEST_RERUN_END -->
+
 ## Cách đọc kết quả chung
 
 Đọc theo thứ tự:
