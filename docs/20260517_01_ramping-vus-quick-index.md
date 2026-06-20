@@ -14,6 +14,8 @@ docs/20260517_03_ramping-vus-quickpizza-two-requests-worked-example.md
 
 ## Link nhanh
 
+- [Practice 7 case backend](./practice/ramping-vus/00_overview.md)
+- [Run guide practice](./practice/ramping-vus/RUN_GUIDE.md)
 - [Ý tưởng chính](./20260517_02_ramping-vus-tham-so-cong-thuc.md#1-ý-tưởng-chính)
 - [Khi nào dùng thực tế](./20260517_02_ramping-vus-tham-so-cong-thuc.md#11-khi-nào-dùng-thực-tế)
 - [Core chạy như nào](./20260517_02_ramping-vus-tham-so-cong-thuc.md#12-core-chạy-như-nào)
