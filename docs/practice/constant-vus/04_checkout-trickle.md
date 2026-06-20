@@ -1423,12 +1423,12 @@ Kết luận thực tế:
 
 ---
 
-## Real run — default constant-vus baseline
+## Real run — default constant-vus baseline after X-User-ID header
 
-Run verify qua local cloud/dashboard:
+Run verify qua local cloud/dashboard sau khi k6 helper gửi `X-User-ID: ctx.userId`:
 
 ```text
-Run ID: #75
+Run ID: #84
 Script: cv-04-checkout-trickle.js
 Exit code: 0
 summary_pushed: true
@@ -1441,42 +1441,42 @@ Config: 8 VUs, duration 5m, default sleep/env
 | Metric | Value |
 | --- | ---: |
 | `checks_rate` | `1` |
-| `checks_passes/checks_fails` | `6,168 / 0` |
+| `checks_passes/checks_fails` | `6,177 / 0` |
 | `http_req_failed_rate` | `0` |
-| `iterations` | `2,056` |
+| `iterations` | `2,059` |
 | `iterations_rate` | `6.84/s` |
-| `http_reqs` | `6,168` |
+| `http_reqs` | `6,177` |
 | `http_reqs_rate` | `20.51/s` |
-| `vus_min/vus_max` | `8 / 8` |
-| `constant_flow_duration_ms avg/med/p95/p99/max` | `168.93 / 166 / 200 / 248 / 433 ms` |
-| `http_req_duration avg/med/p95/p99/max` | `56.17 / 68.97 / 89.76 / 108.64 / 237.50 ms` |
+| `vus_min/vus_max` | `3 / 8` |
+| `constant_flow_duration_ms avg/med/p95/p99/max` | `167.60 / 165 / 199 / 233.84 / 328 ms` |
+| `http_req_duration avg/med/p95/p99/max` | `55.74 / 68.74 / 89.75 / 107.80 / 207.55 ms` |
 
 Request breakdown:
 
 ```text
-checkout_trickle_confirm POST 200 count=2,056
-checkout_trickle_create POST 200 count=2,056
-checkout_trickle_status GET 200 count=2,056
+checkout_trickle_confirm POST 200 count=2,059
+checkout_trickle_create POST 200 count=2,059
+checkout_trickle_status GET 200 count=2,059
 ```
 
-### Đọc 3 chart dashboard cho run #75
+### Đọc 3 chart dashboard cho run #84
 
-**Chart 1 — Response time.** Checkout flow sạch: `http_req_duration` p95 ~89.76ms, p99 ~108.64ms; `constant_flow_duration_ms` p95 ~200ms. Create/confirm/status đều 200.
+**Chart 1 — Response time.** `http_req_duration` p95 ~89.75ms; `constant_flow_duration_ms` p95 ~199ms. Create/confirm/status đều 200.
 
-**Chart 2 — Execution timeline.** `iterations` sum 2,056, `http_reqs` sum 6,168 = 3×iterations. Operation counts create/confirm/status đều 2,056.
+**Chart 2 — Execution timeline.** `iterations` sum 2,059, `http_reqs` sum 6,177 = 3×iterations. Operation counts create/confirm/status đều 2,059.
 
 Dashboard/API bucket summary:
 
 ```text
-iterations buckets: count=301, sum=2056, min=1.00, max=8.00
-http_reqs buckets:  count=301, sum=6168, min=2.00, max=24.00
+iterations buckets: count=301, sum=2059, min=3.00, max=8.00
+http_reqs buckets:  count=301, sum=6177, min=10.00, max=24.00
 không có failed iteration buckets
 ```
 
-**Chart 3 — VUs vs iter/s.** VUs flat đúng 8 trong 300 buckets. Iter/s bucket 1–8; các bucket thấp ở đầu/cuối là effect của loop completion và end-tail, không phải VU drop.
+**Chart 3 — VUs vs iter/s.** Regular phase giữ 8 VUs; dashboard min 3 là end-tail bucket khi test đang kết thúc. Không có failed iterations.
 
 ```text
-vus buckets: count=300, min=8.00, max=8.00, avg=8.00
+vus buckets: count=301, min=3.00, max=8.00, avg=7.98
 ```
 
 ### Backend verdict

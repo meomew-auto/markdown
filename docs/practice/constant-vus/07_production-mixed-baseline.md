@@ -1384,14 +1384,14 @@ Giai đoạn 3 — Cuối test (270s-300s):
 5. Business decision dựa trên failures + latency + closed-model throughput change.
 ```
 
-## Real run — default constant-vus baseline
+## Real run — default constant-vus baseline after X-User-ID header
 
-Run verify qua local cloud/dashboard:
+Run verify qua local cloud/dashboard sau khi k6 helper gửi `X-User-ID: ctx.userId`:
 
 ```text
-Run ID: #80
+Run ID: #87
 Script: cv-07-production-mixed-baseline.js
-Exit code: 99
+Exit code: 0
 summary_pushed: true
 finish_status: 200
 Config: 30 VUs, duration 5m, default sleep/env
@@ -1401,55 +1401,54 @@ Config: 30 VUs, duration 5m, default sleep/env
 
 | Metric | Value |
 | --- | ---: |
-| `checks_rate` | `0.84` |
-| `checks_passes/checks_fails` | `9,949 / 1,912` |
-| `http_req_failed_rate` | `0.16` |
-| `iterations` | `11,861` |
-| `iterations_rate` | `39.47/s` |
-| `http_reqs` | `11,861` |
-| `http_reqs_rate` | `39.47/s` |
-| `vus_min/vus_max` | `30 / 30` |
-| `constant_flow_duration_ms avg/med/p95/p99/max` | `259.04 / 2 / 2,495 / 3,993.40 / 6,198 ms` |
-| `http_req_duration avg/med/p95/p99/max` | `258.95 / 1.75 / 2,494.38 / 3,993.49 / 6,197.89 ms` |
+| `checks_rate` | `1` |
+| `checks_passes/checks_fails` | `12,742 / 0` |
+| `http_req_failed_rate` | `0` |
+| `iterations` | `12,742` |
+| `iterations_rate` | `42.28/s` |
+| `http_reqs` | `12,742` |
+| `http_reqs_rate` | `42.28/s` |
+| `vus_min/vus_max` | `5 / 30` |
+| `constant_flow_duration_ms avg/med/p95/p99/max` | `207.08 / 3 / 1,879.65 / 3,585.18 / 5,667 ms` |
+| `http_req_duration avg/med/p95/p99/max` | `206.97 / 2.85 / 1,879.93 / 3,585.50 / 5,665.79 ms` |
 
 Request breakdown:
 
 ```text
-baseline_product_list GET 200 count=3,457
-baseline_product_detail GET 200 count=2,907
-baseline_product_list GET 429 count=1,912
-baseline_cart_add POST 200 count=1,795
-baseline_report GET 200 count=1,258
-baseline_checkout POST 200 count=532
+baseline_product_list GET 200 count=5,767
+baseline_product_detail GET 200 count=3,207
+baseline_cart_add POST 200 count=1,880
+baseline_report GET 200 count=1,283
+baseline_checkout POST 200 count=605
 ```
 
-### Đọc 3 chart dashboard cho run #80
+### Đọc 3 chart dashboard cho run #87
 
-**Chart 1 — Response time.** Aggregate `http_req_duration` median rất thấp (~1.75ms) nhưng p95 ~2,494ms/p99 ~3,993ms do mixed workload có tail lớn. Tuy nhiên lỗi chính không phải latency mà là 1,912 responses `429` trên `baseline_product_list`.
+**Chart 1 — Response time.** `http_req_duration` p95 ~1,879.93ms, p99 tail cao do mixed workload có checkout/report/product branches; nhưng tất cả status đều expected 200, không còn 429.
 
-**Chart 2 — Execution timeline.** `iterations` và `http_reqs` đều sum 11,861. Failed-iteration buckets xuất hiện 108 buckets với tổng 1,912 failures, nên lỗi lặp lại trong run chứ không phải transient một lần.
+**Chart 2 — Execution timeline.** `iterations` và `http_reqs` đều sum 12,742. Operation mix hợp lý: product_list 5,767; detail 3,207; cart 1,880; report 1,283; checkout 605; failed iterations = 0.
 
 Dashboard/API bucket summary:
 
 ```text
-iterations buckets: count=301, sum=11861, min=13.00, max=60.00
-http_reqs buckets:  count=301, sum=11861, min=12.00, max=60.00
-failed iteration buckets: 108 buckets, sum=1912
+iterations buckets: count=302, sum=12742, min=5.00, max=60.00
+http_reqs buckets:  count=301, sum=12742, min=10.00, max=59.00
+không có failed iteration buckets
 ```
 
-**Chart 3 — VUs vs iter/s.** VUs flat đúng 30 trong 300 buckets. Vì VUs không tụt, 429 là backend/script contract issue dưới concurrency cố định.
+**Chart 3 — VUs vs iter/s.** Regular phase giữ 30 VUs; min 5 là end-tail bucket. VUs flat trong regular phase nên baseline valid.
 
 ```text
-vus buckets: count=300, min=30.00, max=30.00, avg=30.00
+vus buckets: count=301, min=5.00, max=30.00, avg=29.92
 ```
 
 ### Backend verdict
 
 ```text
-FAIL — cùng root cause với case 01: `baseline_product_list` bị 429 rate limit.
+PASS — X-User-ID header đã loại bỏ 429 trong production mixed baseline.
 ```
 
-Cần báo cùng issue với case 01: products list rate limiter gom nhiều simulated users vào cùng identity vì script không gửi identity header. Chốt contract giữa constant-vus practice và products-service rate limit.
+Không cần báo BE cho CV-07 sau fix. Nếu muốn tối ưu performance, p95 tail nên được đọc theo operation (checkout/report có thể kéo aggregate), nhưng đây không phải functional failure.
 
 ## Checklist đọc dashboard cho case 07
 

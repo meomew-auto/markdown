@@ -1685,12 +1685,12 @@ Kết luận thực tế:
 | iter/s tăng dần đầu run | Backend warm up (cache fill) | Bình thường, ghi nhận |
 | iter/s = 0 trong nhiều bucket | VU bị kẹt | Kiểm tra request timeout, sleep logic |
 
-## Real run — default constant-vus baseline
+## Real run — default constant-vus baseline after X-User-ID header
 
-Run verify qua local cloud/dashboard:
+Run verify qua local cloud/dashboard sau khi k6 helper gửi `X-User-ID: ctx.userId`:
 
 ```text
-Run ID: #68
+Run ID: #81
 Script: cv-01-business-hours-storefront.js
 Exit code: 99
 summary_pushed: true
@@ -1702,42 +1702,42 @@ Config: 20 VUs, duration 5m, default sleep/env
 
 | Metric | Value |
 | --- | ---: |
-| `checks_rate` | `0.85` |
-| `checks_passes/checks_fails` | `21,189 / 3,869` |
-| `http_req_failed_rate` | `0.15` |
-| `iterations` | `14,772` |
-| `iterations_rate` | `49.17/s` |
-| `http_reqs` | `25,058` |
-| `http_reqs_rate` | `83.42/s` |
+| `checks_rate` | `0.98` |
+| `checks_passes/checks_fails` | `24,564 / 391` |
+| `http_req_failed_rate` | `0.02` |
+| `iterations` | `14,686` |
+| `iterations_rate` | `48.89/s` |
+| `http_reqs` | `24,955` |
+| `http_reqs_rate` | `83.07/s` |
 | `vus_min/vus_max` | `20 / 20` |
-| `constant_flow_duration_ms avg/med/p95/p99/max` | `6.07 / 3 / 6 / 107 / 166 ms` |
-| `http_req_duration avg/med/p95/p99/max` | `3.49 / 1.18 / 4.01 / 100.87 / 166.48 ms` |
+| `constant_flow_duration_ms avg/med/p95/p99/max` | `8.48 / 5 / 8 / 109 / 182 ms` |
+| `http_req_duration avg/med/p95/p99/max` | `4.89 / 2.75 / 4.20 / 103.69 / 182.38 ms` |
 
 Request breakdown:
 
 ```text
-storefront_browse_detail GET 200 count=10,286
-storefront_browse_list GET 200 count=6,417
-storefront_cart_add POST 200 count=4,074
-storefront_browse_list GET 429 count=3,869
-storefront_checkout POST 200 count=412
+storefront_browse_detail GET 200 count=10,269
+storefront_browse_list GET 200 count=9,878
+storefront_cart_add POST 200 count=3,923
+storefront_checkout POST 200 count=494
+storefront_browse_list GET 429 count=391
 ```
 
-### Đọc 3 chart dashboard cho run #68
+### Đọc 3 chart dashboard cho run #81
 
-**Chart 1 — Response time.** Aggregate `http_req_duration` p95 chỉ ~4ms nên nếu chỉ nhìn latency sẽ tưởng nhanh. Nhưng breakdown cho thấy `storefront_browse_list` có 3,869 responses `429`; 429 thường trả nhanh nên không làm p95 xấu, nhưng làm functional checks fail.
+**Chart 1 — Response time.** Aggregate latency vẫn rất thấp (`http_req_duration` p95 ~4.20ms), nên nếu chỉ nhìn response-time chart sẽ bỏ lỡ vấn đề. Request breakdown mới là bằng chứng chính: `storefront_browse_list` còn 391 responses `429`.
 
-**Chart 2 — Execution timeline.** Execution timeline vẫn có throughput cao (`iterations` sum 14,772; `http_reqs` sum 25,058), nhưng failed-iteration buckets xuất hiện 117 bucket với tổng 3,869 failures. Đây là lỗi trải đều theo thời gian, không phải một spike ngắn.
+**Chart 2 — Execution timeline.** Execution timeline sum `iterations=14,686`, `http_reqs=24,955`; failed-iteration buckets còn 44 buckets với tổng 391 failures. So với run trước khi gửi `X-User-ID` (3,869 failures), lỗi giảm nhiều nhưng vẫn lặp lại trong run.
 
 Dashboard/API bucket summary:
 
 ```text
-iterations buckets: count=301, sum=14772, min=22.00, max=58.00
-http_reqs buckets:  count=301, sum=25058, min=4.00, max=99.00
-failed iteration buckets: 117 buckets, sum=3869
+iterations buckets: count=301, sum=14686, min=12.00, max=55.00
+http_reqs buckets:  count=301, sum=24955, min=37.00, max=94.00
+failed iteration buckets: 44 buckets, sum=391
 ```
 
-**Chart 3 — VUs vs iter/s.** VUs flat tuyệt đối ở 20 trong 300 buckets, nên test valid. Vì concurrency input không tụt, failures đến từ backend/script contract chứ không phải k6 không giữ VUs.
+**Chart 3 — VUs vs iter/s.** VUs flat tuyệt đối ở 20 trong 300 buckets, nên test valid. Vì VUs không tụt, phần 429 còn lại là contract/rate-limit threshold giữa CV-01 và products-service.
 
 ```text
 vus buckets: count=300, min=20.00, max=20.00, avg=20.00
@@ -1746,10 +1746,10 @@ vus buckets: count=300, min=20.00, max=20.00, avg=20.00
 ### Backend verdict
 
 ```text
-FAIL — có vấn đề contract/rate-limit trên products list.
+FAIL — X-User-ID header giảm mạnh 429 nhưng chưa hết; default CV-01 vẫn vượt products-list per-user rate limit.
 ```
 
-Cần báo BE/contract: endpoint `GET /api/sim/products` rate-limit theo identity/header/IP; script mô phỏng 20 users nhưng chỉ gắn `user_id` ở k6 tag, không gửi `X-User-ID`, nên nhiều user bị gom vào cùng bucket và nhận 429. Chốt contract: backend nhận user identity header cho practice, hoặc script gửi `X-User-ID`, hoặc profile practice được nâng limit.
+Option A đã được áp dụng ở k6 helper (`X-User-ID=ctx.userId`). Kết quả chứng minh BE đã phân bucket theo user tốt hơn, nhưng CV-01 vẫn vượt default per-user limit 100/min vì mỗi VU browse list quá nhanh/gần ngưỡng. Cần chốt tiếp: tăng `PRODUCTS_LIST_RATE_LIMIT_PER_MINUTE` hoặc thêm `constant-vus-practice` profile/limit cao hơn, hoặc đổi CV-01 script/threshold để chấp nhận 429 nếu đây là bài học rate-limit.
 
 ## "Nghịch lý" và misconceptions của constant-vus
 

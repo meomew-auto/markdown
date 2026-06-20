@@ -1468,12 +1468,12 @@ Kết luận thực tế:
 
 Điểm cốt lõi của case này: **vì VUs luôn phẳng 15 và duration luôn 5 phút, mọi thay đổi ở iter/s, latency, và failure rate đều là tín hiệu THẬT về auth service, không bị nhiễu bởi "lần này test chạy ít/mất concurrency hơn lần trước"**. Đó là lý do session stability gate dùng constant-vus.
 
-## Real run — default constant-vus baseline
+## Real run — default constant-vus baseline after X-User-ID header
 
-Run verify qua local cloud/dashboard:
+Run verify qua local cloud/dashboard sau khi k6 helper gửi `X-User-ID: ctx.userId`:
 
 ```text
-Run ID: #71
+Run ID: #82
 Script: cv-02-session-keepalive.js
 Exit code: 0
 summary_pushed: true
@@ -1489,12 +1489,12 @@ Config: 15 VUs, duration 5m, default sleep/env
 | `checks_passes/checks_fails` | `5,379 / 0` |
 | `http_req_failed_rate` | `0` |
 | `iterations` | `4,470` |
-| `iterations_rate` | `14.88/s` |
+| `iterations_rate` | `14.87/s` |
 | `http_reqs` | `5,379` |
-| `http_reqs_rate` | `17.91/s` |
+| `http_reqs_rate` | `17.90/s` |
 | `vus_min/vus_max` | `15 / 15` |
-| `constant_flow_duration_ms avg/med/p95/p99/max` | `7.21 / 3 / 26 / 27 / 94 ms` |
-| `http_req_duration avg/med/p95/p99/max` | `5.91 / 2.37 / 22.85 / 23.73 / 90.48 ms` |
+| `constant_flow_duration_ms avg/med/p95/p99/max` | `7.90 / 3 / 26 / 28 / 155 ms` |
+| `http_req_duration avg/med/p95/p99/max` | `6.49 / 2.68 / 23.03 / 24.90 / 105.53 ms` |
 
 Request breakdown:
 
@@ -1504,21 +1504,21 @@ session_refresh POST 200 count=894
 session_login POST 200 count=15
 ```
 
-### Đọc 3 chart dashboard cho run #71
+### Đọc 3 chart dashboard cho run #82
 
-**Chart 1 — Response time.** Response time thấp và ổn: `http_req_duration` p95 ~22.85ms, p99 ~23.73ms; `constant_flow_duration_ms` p95 ~26ms trước sleep 1s. Auth read/write path đều sạch.
+**Chart 1 — Response time.** `http_req_duration` p95 ~23.03ms, p99 thấp; `constant_flow_duration_ms` p95 ~26ms trước sleep 1s. Login/keepalive/refresh đều sạch.
 
-**Chart 2 — Execution timeline.** `iterations` sum 4,470 và `http_reqs` sum 5,379. Breakdown đúng mô hình: login 15 lần, keepalive 4,470 lần, refresh 894 lần (~iterations/5). Không có failed buckets.
+**Chart 2 — Execution timeline.** `iterations` sum 4,470 và `http_reqs` sum 5,379. Breakdown đúng mô hình: login 15, keepalive 4,470, refresh 894 (~iterations/5).
 
 Dashboard/API bucket summary:
 
 ```text
-iterations buckets: count=300, sum=4470, min=9.00, max=15.00
-http_reqs buckets:  count=300, sum=5379, min=11.00, max=33.00
+iterations buckets: count=300, sum=4470, min=10.00, max=15.00
+http_reqs buckets:  count=300, sum=5379, min=12.00, max=33.00
 không có failed iteration buckets
 ```
 
-**Chart 3 — VUs vs iter/s.** VUs flat đúng 15 trong 300 buckets. Iter/s dao động trong biên 9–15 iter/s, phù hợp sleep 1s + refresh định kỳ.
+**Chart 3 — VUs vs iter/s.** VUs flat đúng 15 trong 300 buckets. Iter/s dao động 10–15 iter/s, phù hợp sleep 1s và refresh định kỳ.
 
 ```text
 vus buckets: count=300, min=15.00, max=15.00, avg=15.00

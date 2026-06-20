@@ -158,6 +158,40 @@ E:\Khoa hoc\k6\.claude-constant-vus-chart-summary.json
 
 When updating docs, only copy numbers from real run records. Do not assume `iterations` or RPS targets for `constant-vus`; they are observed outputs.
 
+## Real run collection workflow used
+
+Default full suite runtime:
+
+```text
+7 cases × 5m ≈ 35 minutes, plus summary-final push/API collection.
+```
+
+For the latest default run, collection used:
+
+```text
+K6_CLOUD_HOST=http://localhost:18080
+Dashboard/API validation=http://localhost:13001/v1/tests/<run_id>/...
+summary-final POST=/v1/tests/<run_id>/summary-final
+finish POST=/v1/tests/<run_id> {"status":"finished"}
+```
+
+Important contract update for the latest run:
+
+```text
+constant-vus common request helper now sends X-User-ID: ctx.userId when userId is present.
+This maps simulated users to products-service rate-limit identity instead of falling back to ClientIP.
+```
+
+Collected files for audit/debug:
+
+```text
+E:\Khoa hoc\k6\.claude-constant-vus-fixed-run-results.json
+E:\Khoa hoc\k6\.claude-constant-vus-fixed-analysis.json
+E:\Khoa hoc\k6\.claude-constant-vus-fixed-chart-summary.json
+```
+
+When updating docs, only copy numbers from real run records. Do not assume `iterations` or RPS targets for `constant-vus`; they are observed outputs.
+
 ## What to collect when backend scripts are available
 
 | Nhóm | Cần lấy |

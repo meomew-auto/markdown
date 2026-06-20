@@ -382,6 +382,54 @@ Cách chốt contract đề xuất:
 
 Hiện script threshold expect gần như toàn 200, nên run #68 và #80 là FAIL hợp lệ.
 
+## Real run summary — default constant-vus suite after X-User-ID header
+
+Bộ 7 case đã được chạy lại với default config sau khi k6 helper gửi `X-User-ID: ctx.userId`, push final summary và verify qua dashboard/API `http://localhost:13001`.
+
+| Case | Run | Verdict | VUs | iterations | http_reqs | flow p95 | BE/contract note |
+| --- | ---: | --- | ---: | ---: | ---: | ---: | --- |
+| 01 | #81 | FAIL | 20 | 14,686 | 24,955 | 8 ms | threshold_failure; failed_business_iterations; 429 responses on product list: 391 |
+| 02 | #82 | PASS | 15 | 4,470 | 5,379 | 26 ms | không thấy BE issue từ run này |
+| 03 | #83 | PASS | 18 | 10,333 | 30,999 | 83 ms | không thấy BE issue từ run này |
+| 04 | #84 | PASS | 8 | 2,059 | 6,177 | 199 ms | không thấy BE issue từ run này |
+| 05 | #85 | PASS | 25 | 11,789 | 23,578 | 399 ms | không thấy BE issue từ run này |
+| 06 | #86 | PASS | 6 | 814 | 1,358 | 222.05 ms | không thấy BE issue từ run này |
+| 07 | #87 | PASS | 30 | 12,742 | 12,742 | 1,879.65 ms | không thấy BE issue từ run này |
+
+Kết luận cross-case:
+
+```text
+PASS: case 02, 03, 04, 05, 06, 07.
+FAIL: case 01 vẫn còn 391 responses 429 trên products list.
+```
+
+So sánh với run trước header:
+
+```text
+CV-01: 429 giảm từ 3,869 -> 391 nhưng chưa hết.
+CV-07: 429 giảm từ 1,912 -> 0, case pass.
+```
+
+Root cause còn lại của CV-01:
+
+```text
+X-User-ID đã giúp BE phân bucket theo simulated user.
+Nhưng default per-user products list limit là 100/min.
+CV-01 browse loop quá nhanh: mỗi VU có thể gọi products list gần/vượt 100 lần/phút.
+Do đó vẫn còn 429 dù đã tách user identity.
+```
+
+Cách chốt contract đề xuất:
+
+```text
+1. Thêm profile/limit riêng cho constant-vus practice, ví dụ X-Load-Profile: constant-vus-practice; hoặc
+2. Tăng PRODUCTS_LIST_RATE_LIMIT_PER_MINUTE cho môi trường practice; hoặc
+3. Giảm browse frequency/sleep/VUs của CV-01 nếu mục tiêu không phải test rate limit; hoặc
+4. Nếu 429 là expected lesson thì docs/threshold phải đổi để accept 429.
+```
+
+Hiện script threshold vẫn expect near-100% success, nên run #81 fail là hợp lệ.
+
 ## Thứ tự đề xuất học
 
 ```text

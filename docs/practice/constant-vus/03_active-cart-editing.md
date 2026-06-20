@@ -1470,12 +1470,12 @@ Kết luận thực tế:
 | summary data sai dù HTTP 200 | Read-model inconsistency | Kiểm CQRS sync, materialized view |
 | API/loop ratio < 2.5 | Flow incomplete | Kiểm script branch logic |
 
-## Real run — default constant-vus baseline
+## Real run — default constant-vus baseline after X-User-ID header
 
-Run verify qua local cloud/dashboard:
+Run verify qua local cloud/dashboard sau khi k6 helper gửi `X-User-ID: ctx.userId`:
 
 ```text
-Run ID: #73
+Run ID: #83
 Script: cv-03-active-cart-editing.js
 Exit code: 0
 summary_pushed: true
@@ -1488,39 +1488,39 @@ Config: 18 VUs, duration 5m, default sleep/env
 | Metric | Value |
 | --- | ---: |
 | `checks_rate` | `1` |
-| `checks_passes/checks_fails` | `30,831 / 0` |
+| `checks_passes/checks_fails` | `30,999 / 0` |
 | `http_req_failed_rate` | `0` |
-| `iterations` | `10,277` |
-| `iterations_rate` | `34.20/s` |
-| `http_reqs` | `30,831` |
-| `http_reqs_rate` | `102.61/s` |
+| `iterations` | `10,333` |
+| `iterations_rate` | `34.40/s` |
+| `http_reqs` | `30,999` |
+| `http_reqs_rate` | `103.19/s` |
 | `vus_min/vus_max` | `18 / 18` |
-| `constant_flow_duration_ms avg/med/p95/p99/max` | `25.53 / 11 / 90 / 193 / 408 ms` |
-| `http_req_duration avg/med/p95/p99/max` | `8.40 / 3.54 / 48.79 / 92.23 / 298.38 ms` |
+| `constant_flow_duration_ms avg/med/p95/p99/max` | `22.63 / 11 / 83 / 151 / 508 ms` |
+| `http_req_duration avg/med/p95/p99/max` | `7.45 / 3.63 / 31.36 / 91.45 / 394.33 ms` |
 
 Request breakdown:
 
 ```text
-active_cart_update PATCH 200 count=10,277
-active_cart_add POST 200 count=10,277
-active_cart_summary GET 200 count=10,277
+active_cart_update PATCH 200 count=10,333
+active_cart_add POST 200 count=10,333
+active_cart_summary GET 200 count=10,333
 ```
 
-### Đọc 3 chart dashboard cho run #73
+### Đọc 3 chart dashboard cho run #83
 
-**Chart 1 — Response time.** `http_req_duration` p95 ~48.79ms, p99 ~92.23ms; `constant_flow_duration_ms` p95 ~90ms. Cart add/update/summary đều 200.
+**Chart 1 — Response time.** `http_req_duration` p95 ~31.36ms; `constant_flow_duration_ms` p95 ~83ms. Cart add/update/summary đều 200.
 
-**Chart 2 — Execution timeline.** `iterations` sum 10,277, `http_reqs` sum 30,831 = 3×iterations. Operation breakdown add/update/summary đều đúng 10,277, không thiếu bước nào.
+**Chart 2 — Execution timeline.** `iterations` sum 10,333, `http_reqs` sum 30,999 = 3×iterations. Operation breakdown add/update/summary đều đúng 10,333.
 
 Dashboard/API bucket summary:
 
 ```text
-iterations buckets: count=301, sum=10277, min=18.00, max=36.00
-http_reqs buckets:  count=300, sum=30831, min=60.00, max=108.00
+iterations buckets: count=301, sum=10333, min=3.00, max=36.00
+http_reqs buckets:  count=301, sum=30999, min=36.00, max=108.00
 không có failed iteration buckets
 ```
 
-**Chart 3 — VUs vs iter/s.** VUs flat đúng 18 trong 300 buckets. Iter/s bucket 18–36, đây là closed-model output bình thường với sleep 0.5s và 3 API/loop.
+**Chart 3 — VUs vs iter/s.** VUs flat đúng 18 trong 300 buckets. Iter/s bucket 3–36, trong đó bucket thấp là đầu/cuối run; không có failed iterations.
 
 ```text
 vus buckets: count=300, min=18.00, max=18.00, avg=18.00
