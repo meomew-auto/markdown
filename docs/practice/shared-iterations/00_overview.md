@@ -319,7 +319,7 @@ Tail VUs tụt có thể chỉ nghĩa là backlog gần hết.
 | 03 | Payment webhook drain | Drain webhook backlog có duplicate | `100 jobs × 1 API = 100 calls` |
 | 04 | Cart cleanup | Cleanup stale cart item backlog | `90 jobs × 2 API = 180 calls` |
 | 05 | Cache warm | Warm fixed URL/cache-key backlog | `120 jobs × 1 API = 120 calls` |
-| 06 | Report export batch | Create/status/download report jobs | `60 jobs × 3 API = 180 calls` |
+| 06 | Report export batch | Create/status-poll/download report jobs | `60 jobs: create 60 + status polls >=60 + download 60` |
 | 07 | CI verification batch | Fixed API checklist | `100 jobs × 1 API = 100 calls` |
 
 ## Thứ tự đề xuất học

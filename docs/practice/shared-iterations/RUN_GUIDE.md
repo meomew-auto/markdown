@@ -106,7 +106,7 @@ Dấu hiệu dashboard authoritative là summary lấy từ k6 final summary exp
 | 03 | `SI_03_VUS` | `SI_03_JOBS` | `SI_03_DUPLICATE_EVERY` |
 | 04 | `SI_04_VUS` | `SI_04_JOBS` | - |
 | 05 | `SI_05_VUS` | `SI_05_JOBS` | - |
-| 06 | `SI_06_VUS` | `SI_06_JOBS` | `SI_06_READY_AFTER_MS` |
+| 06 | `SI_06_VUS` | `SI_06_JOBS` | `SI_06_READY_AFTER_MS`, `SI_06_STATUS_POLL_INTERVAL_MS`, `SI_06_STATUS_TIMEOUT_MS` |
 | 07 | `SI_07_VUS` | `SI_07_JOBS` | - |
 
 Caveat quan trọng khi override:
@@ -119,7 +119,7 @@ Ví dụ:
 
 - case 05 default `120 jobs` chia `60 homefeed / 60 detail`; nếu đổi thành `121 jobs`, split có thể không còn 60/60.
 - case 07 default `100 jobs` chia `5 operation × 20`; nếu `JOBS % 5 != 0`, split không đều.
-- case 06 `http_reqs = JOBS × 3`; đổi JOBS thì đổi luôn expected HTTP calls.
+- case 06 async report export: `http_reqs = JOBS × 2 + status_poll_count`, trong đó `status_poll_count >= JOBS`; đổi `JOBS`, `READY_AFTER_MS`, hoặc poll interval thì recompute expected HTTP calls.
 
 ## What to collect when backend scripts are available
 
@@ -156,7 +156,7 @@ Với mọi case, đọc theo thứ tự:
 4. shared_jobs_failed == 0 không?
 5. checks rate == 1 không?
 6. http_req_failed rate == 0 không?
-7. http_reqs/shared_api_calls_total == expected API formula không?
+7. http_reqs/shared_api_calls_total == expected API formula không? Với case 06: create + status polls + download, không hard-code 3 calls/job.
 8. operation breakdown có đúng coverage không?
 9. shared_job_duration_ms cho thấy job lifecycle nhanh/chậm thế nào?
 ```
