@@ -2,119 +2,190 @@
 
 ## Tình huống thực tế
 
-Warm một danh sách URL cố định sau deploy hoặc catalog change: homefeed và product detail.
+Sau deploy hoặc catalog change, platform/product muốn warm trước một danh sách URL/cache keys để traffic thật không phải trả cold-start cost.
 
-Đây không phải bài mô phỏng user traffic mở theo thời gian. Đây là bài:
+Danh sách warm là finite: homefeed keys và product detail keys. Nếu một key bị skip, user đầu tiên chạm key đó vẫn ăn cold latency.
 
-```text
-fixed backlog + worker pool + drain until done
-```
+Case này trả lời: 12 workers có gọi đủ 120 warm jobs không, và split homefeed/detail có đúng coverage không?
 
-Nói đời thường:
+Tóm tắt đời thường:
 
 ```text
-Có 120 job đang chờ.
-Dùng 12 worker xử lý hết.
-Ai xong trước thì lấy job tiếp theo.
-Hoàn tất khi không còn job nào trong backlog.
+Trigger: deploy, catalog cache invalidation, CDN/backend cache reset, hoặc traffic ramp trước campaign
+Backlog: 120 URL/cache-key warm jobs
+Risk nếu skip job: một URL/cache key vẫn cold khi user thật truy cập
 ```
 
-## Vì sao case này hợp với `shared-iterations`?
-
-Cache warm là finite URL backlog. Nhiều worker cùng gọi hết danh sách; không có khái niệm user identity cố định.
-
-Đọc config:
+Case này **không** cố gắng trả lời “production traffic giống thật chưa?”. Nó trả lời câu hỏi batch/ops cụ thể hơn:
 
 ```text
-iterations = 120
+Có xử lý đủ fixed backlog không?
+Mỗi job có đi đúng business flow không?
+Có job nào fail không?
 ```
 
-nghĩa là:
+## Yêu cầu cứng của case này
 
-```text
-cả scenario có 120 job tổng cộng
-```
+Case này chỉ valid nếu thỏa các yêu cầu cứng sau:
 
-không phải:
-
-```text
-mỗi VU chạy 120 job
-```
-
-Với `shared-iterations`, phân phối thực tế có thể lệch:
-
-```text
-VU nhanh  -> xử lý nhiều job hơn
-VU chậm   -> xử lý ít job hơn
-```
-
-Điều đó **không phải lỗi**. Pass/fail nằm ở tổng backlog có drain đủ và job có fail không.
-
-## Default config
-
-| Tham số | Giá trị mặc định |
+| Yêu cầu | Vì sao bắt buộc |
 | --- | --- |
-| SI_05_VUS | 12 |
-| SI_05_JOBS | 120 |
-| maxDuration | 8m |
-| executor | shared-iterations |
-| script | `si-05-cache-warm.js` |
+| Tổng completed iterations phải bằng `120` | Vì `120` là kích thước backlog, thiếu 1 job là coverage incomplete. |
+| `shared_jobs_total == 120` | Iteration chạy xong chưa đủ; job phải được mark hoàn tất end-to-end. |
+| `shared_jobs_failed == 0` | Có failed job nghĩa là business contract không đạt. |
+| `http_reqs/shared_api_calls_total == 120 × 1 = 120` | Mỗi job phải gọi đúng số API trong flow. |
+| Operation counts phải khớp expected breakdown | Tổng HTTP đúng nhưng thiếu một operation vẫn là coverage bug. |
+| Job identity phải derive từ `exec.scenario.iterationInTest` | Worker identity `__VU` không đại diện cho business job. |
+| Uneven per-VU distribution is normal | Worker nhanh xử lý nhiều job hơn là đúng mô hình shared pool. |
 
-Công thức chính:
+Nếu một trong các invariant về count/job fail, kết quả nên coi là **invalid hoặc fail**, không phải “pass nhưng hơi thiếu”.
+
+## Vì sao "cache warm fixed URL backlog" nên dùng `shared-iterations`?
+
+Mental model đúng:
 
 ```text
-JOBS = 120
-configured VUs = 12
-expected iterations = 120
-expected http_reqs = shared_api_calls_total = 120 × 1 = 120
+120 jobs đang nằm trong một queue/backlog.
+12 VUs là 12 workers.
+Worker nào rảnh thì lấy job kế tiếp.
+Batch kết thúc khi queue hết job.
 ```
 
-## Backlog/job model
+Nếu worker A xử lý 20 job còn worker B xử lý 8 job, điều đó không làm test sai. Nó chỉ nói worker A nhận được nhiều job hơn vì vòng lặp của nó quay lại sớm hơn.
 
-- Mỗi job là một URL cần warm.
-- Default alternating giữa `homefeed` và `detail`.
-- Geo/device headers giúp mô phỏng cache key khác nhau.
+### Vì sao không dùng executor khác?
 
-Selector đúng cho business job là job index toàn scenario, ví dụ:
+| Executor | Nghe có vẻ dùng được vì... | Vì sao đúng/sai cho fixed backlog? |
+| --- | --- | --- |
+| `shared-iterations` | Có tổng `iterations` chung và nhiều VU cùng chạy | **Đúng**: mô hình đúng là N job trong backlog, M worker xử lý đến khi hết việc. |
+| `per-vu-iterations` | Count cũng deterministic | Sai nếu VU không phải business identity. Nó ép mỗi VU làm quota bằng nhau, không giống worker queue. |
+| `constant-vus` | Nhìn giống worker pool | Sai khi cần exact count: tổng việc phụ thuộc duration và latency, không bảo đảm xử lý đúng N job. |
+| `constant-arrival-rate` | Kiểm soát được tốc độ vào | Sai cho batch drain: nó schedule arrivals theo rate, có thể drop, không phải danh sách job cố định cần xử lý hết. |
+| `ramping-vus` | Có thể tăng/giảm worker | Sai nếu mục tiêu là exact backlog completion; shape VU biến thiên làm khó so sánh coverage. |
+| `ramping-arrival-rate` | Mô phỏng traffic thay đổi | Sai cho fixed-job coverage; phù hợp traffic surge hơn là batch/checklist. |
+
+Kết luận:
+
+```text
+Cần exact total backlog coverage -> shared-iterations.
+Không cần mỗi VU có quota riêng -> không dùng per-vu-iterations.
+Không lấy duration/rate làm input chính -> không dùng constant-vus/arrival-rate.
+```
+
+## Config mapping: từ yêu cầu nghiệp vụ sang k6
+
+| Config/env | Giá trị | Ý nghĩa nghiệp vụ |
+| --- | --- | --- |
+| `SI_05_VUS` | 12 | Số worker cùng xử lý backlog |
+| `SI_05_JOBS` | 120 | Tổng số job toàn scenario |
+| `maxDuration` | 8m | Safety cap, không phải target duration |
+| `executor` | `shared-iterations` | Fixed global backlog + worker pool |
+
+Mapping quan trọng:
+
+```text
+business backlog size = 120 jobs
+k6 iterations         = 120
+worker pool size      = 12 VUs
+expected API calls    = 120 × 1 = 120
+```
+
+`maxDuration` chỉ là safety cap. Nếu cap này cắt run làm `iterations < 120`, kết quả không valid vì backlog chưa drain hết.
+
+Operation coverage expected:
+
+```text
+cache_warm_homefeed: 60
+cache_warm_detail: 60
+```
+
+## Technical semantics: shared backlog, worker pool, job identity
+
+Cách k6 vận hành nên được hiểu như sau:
+
+```text
+1. Scenario có một global quota: iterations = 120.
+2. Mỗi VU là worker, không phải user/business entity.
+3. VU lấy global iteration/job kế tiếp từ pool chung.
+4. VU nhanh có thể lấy thêm nhiều job.
+5. Scenario kết thúc khi global quota hết hoặc bị maxDuration/interruption cắt.
+```
+
+Do đó:
+
+```text
+__VU is worker, not business identity
+__ITER is per-worker local counter, not global job id
+exec.scenario.iterationInTest is the stable global job index
+iterations is total jobs
+uneven per-VU distribution is normal
+```
+
+Nếu script cần chọn business object như product/order/event/item/report/checklist, derive từ:
 
 ```js
 exec.scenario.iterationInTest
 ```
 
-Không dùng `__VU` làm identity chính cho backlog, vì `__VU` chỉ là worker đang cầm job hiện tại.
+Không derive từ:
+
+```js
+__VU
+```
+
+vì `__VU` chỉ nói worker nào đang cầm job hiện tại.
+
+## Technical root causes this case catches
+
+### Nguyên nhân kỹ thuật 1: Finite URL/cache-key backlog
+
+Cache warm là danh sách keys cần touch một lần. `shared-iterations` map trực tiếp: mỗi global job là một URL/cache key.
+
+### Nguyên nhân kỹ thuật 2: Cache key composition
+
+URL, product id, geo/device headers, và query params đều có thể tạo cache key khác nhau. Job index phải drive đúng key coverage.
+
+### Nguyên nhân kỹ thuật 3: Coverage versus cache-hit proof
+
+Request 200 chứng minh warm call đã được gửi. Nó chưa chứng minh future cache hit rate nếu BE không expose hit/miss metric.
+
+### Nguyên nhân kỹ thuật 4: Operation split
+
+Default 120 jobs split 60 homefeed + 60 detail. Nếu đổi JOBS, expected split phải recompute.
 
 ## Service/API flow
 
-| Bước | Method | Path | Service | Operation | Expected | Ý nghĩa |
+| Operation | Method | Path | Service | Expected | Expected count | Ý nghĩa |
 | --- | --- | --- | --- | --- | --- | --- |
-| A | `GET` | `/api/sim/products/homefeed?personalized=1&cpu_ms=2&db_rows=5&json_items=16` | `products-service` | `cache_warm_homefeed` | `200` | Warm homefeed cache key. |
-| B | `GET` | `/api/sim/products/:id?view=full&include_reviews=1&cpu_ms=2&db_rows=2` | `products-service` | `cache_warm_detail` | `200` | Warm product detail cache key. |
+| cache_warm_homefeed | `GET` | `/api/sim/products/homefeed?personalized=1&cpu_ms=2&db_rows=5&json_items=16` | products-service | `200` | 60 | Warm homefeed cache key. |
+| cache_warm_detail | `GET` | `/api/sim/products/:id?view=full&include_reviews=1&cpu_ms=2&db_rows=2` | products-service | `200` | 60 | Warm product detail cache key. |
 
-Expected operation breakdown:
-
-| Operation | Expected count |
-| --- | --- |
-| `cache_warm_homefeed` | 60 |
-| `cache_warm_detail` | 60 |
+Một job chỉ được coi là hoàn tất khi các operation cần thiết của job đó đã pass theo contract.
 
 ## Metrics và tags cần đọc
 
-| Metric | Expected | Ý nghĩa |
-| --- | --- | --- |
-| `shared_jobs_total` | `count == JOBS` | Đã hoàn tất đủ số job trong backlog. |
-| `shared_jobs_failed` | `count == 0` | Không job nào fail ở cấp business. |
-| `shared_api_calls_total` | khớp công thức API/job | Tổng request đi qua helper chung. |
-| `shared_job_duration_ms` | `count == JOBS` | End-to-end duration của job. |
-| `shared_sleep_seconds` | tùy case | Sleep/think time nếu script dùng. |
+| Metric | Type | Expected | Nó chứng minh gì? |
+| --- | --- | --- | --- |
+| `shared_jobs_total` | Counter | `count == JOBS` | Bao nhiêu business job đã hoàn tất end-to-end. |
+| `shared_jobs_failed` | Counter | `count == 0` | Có job nào fail ở tầng business không. |
+| `shared_api_calls_total` | Counter | khớp công thức API/job | Helper đã gửi đúng số API calls theo flow chưa. |
+| `shared_job_duration_ms` | Trend | `count == JOBS` | Thời gian end-to-end của từng job, không chỉ từng request. |
+| `shared_sleep_seconds` | Counter | tùy case | Tổng sleep/think/wait time nếu script mô phỏng delay. |
 
-Tags quan trọng:
+Tags chung:
 
-```text
-case_id, business_case, service, operation, endpoint, job_id,
-executor_family=shared_iterations, workload_shape=fixed_backlog
-```
+| Tag | Ý nghĩa |
+| --- | --- |
+| `case_id` | Case đang chạy, ví dụ `si-02-order-reconciliation`. |
+| `business_case` | Nhóm nghiệp vụ để FE/dashboard gom case. |
+| `service` | Backend service đang được gọi. |
+| `operation` | Bước nghiệp vụ/API cụ thể trong job. |
+| `endpoint` | Nhóm endpoint/API family. |
+| `job_id` | Business job trong backlog, derive từ global job index. |
+| `executor_family` | `shared_iterations`. |
+| `workload_shape` | `fixed_backlog`. |
 
-Riêng case này cần nhớ:
+Tags case này:
 
 ```text
 case_id       = si-05-cache-warm
@@ -124,31 +195,32 @@ service       = products-service
 
 ## Pass criteria
 
-Pass khi cả 4 nhóm tín hiệu đều đúng:
+Pass criteria tối thiểu:
 
 ```text
 checks rate == 1
 http_req_failed rate == 0
 shared_jobs_total count == 120
 shared_jobs_failed count == 0
+iterations count == 120
+http_reqs count == 120
+shared_api_calls_total count == 120
 ```
 
-Và count theo công thức phải khớp:
-
-```text
-iterations = 120
-http_reqs = shared_api_calls_total = 120 × 1 = 120
-```
-
-Nếu có tag breakdown theo `operation`, expected là:
+Operation breakdown phải khớp:
 
 ```text
 cache_warm_homefeed: 60
-```
-
-```text
 cache_warm_detail: 60
 ```
+
+Đừng thêm pass condition kiểu:
+
+```text
+mỗi VU phải xử lý 120 / 12 jobs
+```
+
+Vì đó không phải invariant của `shared-iterations`.
 
 ## Cách chạy
 
@@ -165,7 +237,7 @@ $env:BASE_URL = "http://localhost:80"
 k6 run .\k6-metrics-server\load-target\k6\shared-iterations\si-05-cache-warm.js
 ```
 
-Run lên private dashboard nếu dùng cloud output:
+Run lên private dashboard:
 
 ```powershell
 $env:BASE_URL = "http://localhost:80"
@@ -174,154 +246,217 @@ $env:K6_CLOUD_TOKEN = "student-token-1234567890"
 k6 run -o cloud .\k6-metrics-server\load-target\k6\shared-iterations\si-05-cache-warm.js
 ```
 
-Có thể override workload bằng env vars trong bảng config ở trên, ví dụ:
-
-```powershell
-$env:SI_05_JOBS = "20"
-$env:SI_05_VUS = "4"
-```
+Nếu backend script chưa có trong working tree, chỉ đọc phần expected formula trước; không tự điền run data.
 
 ## Đọc output summary
 
-Đọc summary theo checklist sau:
+Áp 5 bước giống cách đọc các case per-vu, nhưng invariant đổi sang **total backlog**, không phải per-user quota.
 
-1. `iterations` có bằng `120` không?
-2. `shared_jobs_total` có bằng `120` không?
-3. `shared_jobs_failed` có bằng `0` không?
-4. `checks` có pass 100% không?
-5. `http_req_failed` có bằng 0 không?
-6. `http_reqs` và `shared_api_calls_total` có bằng `120 × 1 = 120` không?
-7. `shared_job_duration_ms` có count bằng `120` không?
+### Bước 1 — Verify scenario/config
 
-Các điểm case-specific:
+Header phải thể hiện:
 
-- `iterations = 120` nghĩa là warm đủ 120 URL jobs.
+```text
+executor = shared-iterations
+vus = 12 hoặc env override
+total iterations/jobs = 120 hoặc env override
+```
+
+Nếu learner override env vars, phải recompute toàn bộ expected counts.
+
+### Bước 2 — Compute expected total jobs
+
+Default case này:
+
+```text
+JOBS = 120
+API_PER_JOB = 1
+expected iterations = 120
+expected http_reqs = 120 × 1 = 120
+```
+
+### Bước 3 — Compare summary counters
+
+Expected:
+
+```text
+iterations == 120
+shared_jobs_total == 120
+shared_jobs_failed == 0
+```
+
+Nếu `iterations < 120`:
+
+```text
+backlog chưa drain hết -> invalid result
+```
+
+Nếu `iterations == 120` nhưng `shared_jobs_total < 120`:
+
+```text
+iteration chạy xong nhưng job completion instrumentation/business branch bị thiếu
+```
+
+### Bước 4 — Compare API and operation counts
+
+Expected:
+
+```text
+http_reqs == 120
+shared_api_calls_total == 120
+cache_warm_homefeed: 60
+cache_warm_detail: 60
+```
+
+Tổng HTTP đúng nhưng operation split sai vẫn là coverage bug.
+
+### Bước 5 — Interpret duration/throughput
+
+`shared_job_duration_ms` trả lời:
+
+```text
+một business job end-to-end mất bao lâu
+```
+
+`http_req_duration` trả lời:
+
+```text
+mỗi request/API call mất bao lâu
+```
+
+Hai metric này khác nhau. Job nhiều API có thể có từng request nhanh nhưng full lifecycle vẫn chậm.
+
+Case-specific summary notes:
+
+- `iterations = 120` chứng minh 120 warm jobs chạy.
 - `http_reqs = 120` vì mỗi job warm đúng một URL.
-- Với default split chẵn, homefeed 60 và detail 60.
+- Default split cần là homefeed 60 và detail 60.
 
-Đừng bịa thêm per-VU fairness từ summary. Với shared pool, summary không cần chứng minh mỗi VU xử lý cùng số job.
+Không check mỗi VU làm bằng nhau. Invariant là total completed work, không phải equal work per VU.
 
 ## Đọc dashboard real-time charts cho case 05
 
-> Vì chưa có real run trong working tree hiện tại, phần này mô tả cách đọc expected dashboard. Khi đã chạy thật, bổ sung run ID, summary p95/p99/max và bucket sums giống series per-vu.
+> Phần này mô tả expected reading. Chỉ bổ sung run ID, p95/p99/max, bucket arrays sau khi chạy thật.
 
 ### Overview có 3 chart cần đọc
 
 | Chart | Câu hỏi chính | Không trả lời được |
 | --- | --- | --- |
-| Response time | Request/operation nào chậm? bucket nào có tail latency? | Backlog đã xử lý đủ chưa |
-| Execution timeline | Theo thời gian đã hoàn tất bao nhiêu job/request? | Mỗi VU có chia đều job không |
+| Response time | Operation/service nào chậm? bucket nào có tail latency? | Backlog đã xử lý đủ chưa |
+| Execution timeline | Theo thời gian đã hoàn tất bao nhiêu iterations/http_reqs/jobs? | Mỗi VU có làm bằng nhau không |
 | VUs vs iter/s | Worker pool drain backlog nhanh/chậm ra sao? | Business correctness của từng job |
 
 ### Chart 1 — Response time
 
-Chart này nên đọc theo `operation` tag.
+Đây là request-level latency. Với case này, đọc theo `operation`:
 
-Với case này, operation cần tách là:
-
-| Operation | Expected count |
-| --- | --- |
-| `cache_warm_homefeed` | 60 |
-| `cache_warm_detail` | 60 |
+```text
+cache_warm_homefeed: 60
+cache_warm_detail: 60
+```
 
 Cách đọc:
 
 ```text
-- avg: request thường nhanh/chậm thế nào
-- p95/p99: tail latency của phần lớn request
-- max: bucket nào có spike lớn nhất
+avg  -> request thường nhanh/chậm thế nào
+p95  -> phần lớn request có tail tới đâu
+p99  -> tail hiếm hơn
+max  -> spike lớn nhất trong bucket/run
 ```
 
-Nhưng kết luận đúng phải là:
+Nhưng đừng kết luận pass/fail chỉ từ latency. Response time chỉ giúp tìm bottleneck.
 
-```text
-Response time giúp tìm bottleneck.
-Pass/fail vẫn nằm ở checks + shared_jobs_total + shared_jobs_failed.
-```
+Case-specific bottleneck hints:
 
-Case-specific notes:
-
-- Response time nên tách homefeed/detail; homefeed có json_items/db_rows nhiều hơn nên có thể nặng hơn.
-- Execution timeline phải sum 120 iterations và 120 http_reqs.
-- VUs vs iter/s cho biết 12 worker warm list nhanh hay bị bottleneck.
+- Homefeed có `personalized`, `db_rows`, `json_items`; có thể nặng hơn detail.
+- Detail có product id/reviews; nếu spike chỉ ở detail, investigate detail cache/origin.
+- Response 200 không tự chứng minh hit rate; cần cache hit/miss metric nếu muốn kết luận đó.
 
 ### Chart 2 — Execution timeline
 
-Chart này dùng để kiểm backlog drain có đủ không.
+Chart này chứng minh backlog drain đủ theo thời gian.
 
-Kiểm tổng:
+Kiểm tổng bucket:
 
 ```text
 sum(iterations buckets) == 120
-sum(http_reqs buckets) == 120 × 1 = 120
+sum(http_reqs buckets) == 120
 sum(shared_jobs_total buckets) == 120
 sum(shared_jobs_failed buckets) == 0
 ```
 
-Nếu `iterations` đủ nhưng `shared_jobs_total` thiếu, nghĩa là script có iteration hoàn tất nhưng job không được mark done đúng cách.
-Nếu `shared_jobs_total` đủ nhưng `shared_jobs_failed > 0`, nghĩa là backlog đã chạy hết nhưng có job business fail.
+Invalid patterns:
+
+| Pattern | Nghĩa |
+| --- | --- |
+| `iterations` đủ nhưng `shared_jobs_total` thiếu | iteration complete nhưng business job chưa mark done |
+| `http_reqs` đủ nhưng operation split sai | tổng request đủ nhưng coverage lệch |
+| `shared_jobs_failed > 0` | business failure dù HTTP có thể vẫn 200 |
+| buckets không cộng ra summary | đọc nhầm point/bucket hoặc data chưa final |
 
 Đừng nhầm:
 
 ```text
-Mỗi point = một time bucket / metrics frame.
-Không phải một request.
-Không phải một job.
+Mỗi point = 1 time bucket / metrics frame.
+Không phải 1 request.
+Không phải 1 job.
 ```
 
 ### Chart 3 — VUs vs iter/s
 
-Expected shape:
+Chart này giải thích worker-pool shape:
 
 ```text
-- Khi còn backlog: VUs gần configured VUs (12)
-- Khi backlog gần hết: VUs có thể tụt ở tail
-- iter/s cao thấp tùy latency và số API/job
+- VUs gần 12 khi backlog còn nhiều việc
+- iter/s tăng/giảm theo latency và số API/job
+- VUs có thể tụt ở tail khi backlog gần hết
+- fast VUs có thể xử lý nhiều job hơn slow VUs
 ```
 
-Điểm quan trọng:
+Đừng đọc chart này thành:
 
 ```text
-VUs ổn định không chứng minh chia đều job.
-Tail VUs tụt không phải lỗi nếu iterations/shared_jobs_total vẫn đủ.
+mỗi VU phải xử lý 120 / 12 jobs
 ```
 
-### Checklist đọc biểu đồ case 05
-
-```text
-[ ] Response time đã tách operation chưa?
-[ ] Execution timeline cộng iterations ra 120 chưa?
-[ ] Execution timeline cộng http_reqs ra 120 × 1 = 120 chưa?
-[ ] shared_jobs_total == 120 chưa?
-[ ] shared_jobs_failed == 0 chưa?
-[ ] VUs shape có hợp worker pool không?
-```
+Với `shared-iterations`, đó là yêu cầu sai.
 
 ### Cách chốt từ summary -> 3 chart
 
 ```text
-1. Summary xác nhận pass/fail bằng counters/thresholds.
+1. Summary quyết định pass/fail bằng counters/thresholds.
 2. Execution timeline xác nhận backlog drain đủ theo thời gian.
-3. Response time xác định operation nào chậm.
-4. VUs vs iter/s giải thích worker pool hoạt động thế nào.
-5. Kết luận nghiệp vụ: batch có xử lý đủ và sạch không.
+3. Response time tìm operation/service chậm.
+4. VUs vs iter/s giải thích worker pool hoạt động ra sao.
+5. Business decision dựa trên total coverage + failed jobs + operation breakdown.
 ```
 
-## Kết luận thực tế: team platform/product quyết định gì?
+## Kết luận thực tế: output -> quyết định
 
-Team platform/product có thể mở traffic sau deploy khi fixed warm list đã drain đủ, không fail, và operation split đúng. Nếu warm thiếu URL, dashboard latency đẹp cũng không đủ vì cache coverage chưa hoàn tất.
+| Output thấy gì | Nghĩa nghiệp vụ | Hành động |
+| --- | --- | --- |
+| 120 calls, 60/60 split, no failures | Warm list executed | Proceed with traffic ramp, with cache-metric caveat |
+| fewer than 120 jobs | Cache coverage incomplete | Do not proceed |
+| homefeed failures | Homefeed path not warmed | Investigate products/homefeed |
+| detail failures | Product detail path not warmed | Investigate detail path |
+| Counts pass but latency high | Origin path heavy during warm | Investigate before spike |
+| No cache-hit metric | Only warm execution proven | Avoid claiming verified hit rate |
 
 ## Mở rộng
 
-- Thêm geo/device vào tag để xem cache key nào chậm.
-- Tăng JOBS theo URL list production.
-- Chạy vòng 2 để so cold-warm latency nếu BE/cache hỗ trợ.
+- Thêm tag domain-specific để lọc theo nhóm job quan trọng.
+- Tăng `JOBS` để mô phỏng backlog production lớn hơn.
+- Thêm threshold latency theo `operation` nếu muốn chuyển từ functional batch sang performance gate.
+- Khi có real run, bổ sung run ID, summary thật, operation breakdown thật, và bucket sums thật.
 
 ## Anti-pattern
 
-- Dùng aggregate p95 để kết luận mọi URL đã warm.
-- Không tách homefeed/detail nên không biết nhóm nào chậm.
-- Kỳ vọng mỗi VU warm đúng 10 URL; worker nhanh có thể làm nhiều hơn.
+- Dùng `__VU` làm business identity chính cho backlog.
+- Fail test chỉ vì VU distribution không đều.
+- Dùng `constant-vus` rồi suy ra exact job count từ duration.
+- Dùng arrival-rate executor cho bài toán drain fixed queue.
+- Chỉ nhìn response time đẹp mà không kiểm `shared_jobs_total` và operation counts.
+- Giữ expected formulas cũ sau khi override `JOBS`.
 
 ## Reference
 

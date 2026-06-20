@@ -1,6 +1,27 @@
 # Run Guide — shared-iterations practice
 
-> File này dùng chung cho 7 case `shared-iterations`. Mỗi case có thêm config/env vars riêng.
+> File này dùng chung cho 7 case `shared-iterations`. Mỗi case có thêm giải thích nghiệp vụ, formula, dashboard checklist trong doc riêng.
+
+## Important: real runs are optional
+
+Các docs trong series này hiện đang giải thích **semantics + expected formulas**. Chỉ bổ sung run ID, p95/p99/max, chart bucket thật khi đã chạy thật script.
+
+Lý do: trong working tree hiện tại, folder BE được mô tả là:
+
+```text
+k6-metrics-server/load-target/k6/shared-iterations/
+```
+
+nhưng có thể chưa tồn tại ở repo đang mở. Vì vậy:
+
+```text
+Không bịa run #...
+Không bịa p95/p99/max.
+Không bịa bucket chart.
+Không nói "đã chạy pass" nếu chưa chạy thật.
+```
+
+Khi BE folder có mặt, dùng guide này để chạy và thu số thật.
 
 ## Stack cần có
 
@@ -61,8 +82,8 @@ Private dashboard:
 k6 run -o cloud .\k6-metrics-server\load-target\k6\shared-iterations\si-01-catalog-audit.js
 ```
 
-Nếu dùng wrapper có push final summary, ưu tiên wrapper để dashboard summary khớp CLI summary.
-Dấu hiệu dashboard authoritative là summary lấy từ k6 final summary export thay vì chỉ HDR approximation.
+Nếu có wrapper push final summary, ưu tiên wrapper để dashboard summary khớp CLI summary.
+Dấu hiệu dashboard authoritative là summary lấy từ k6 final summary export thay vì chỉ từ HDR approximation.
 
 ## Commands từng case
 
@@ -88,12 +109,40 @@ Dấu hiệu dashboard authoritative là summary lấy từ k6 final summary exp
 | 06 | `SI_06_VUS` | `SI_06_JOBS` | `SI_06_READY_AFTER_MS` |
 | 07 | `SI_07_VUS` | `SI_07_JOBS` | - |
 
-Ví dụ chạy nhỏ để demo nhanh:
+Caveat quan trọng khi override:
 
-```powershell
-$env:SI_06_JOBS = "10"
-$env:SI_06_VUS = "2"
-k6 run -o cloud .\k6-metrics-server\load-target\k6\shared-iterations\si-06-report-export-batch.js
+```text
+Nếu đổi JOBS, phải recompute expected formulas.
+```
+
+Ví dụ:
+
+- case 05 default `120 jobs` chia `60 homefeed / 60 detail`; nếu đổi thành `121 jobs`, split có thể không còn 60/60.
+- case 07 default `100 jobs` chia `5 operation × 20`; nếu `JOBS % 5 != 0`, split không đều.
+- case 06 `http_reqs = JOBS × 3`; đổi JOBS thì đổi luôn expected HTTP calls.
+
+## What to collect when backend scripts are available
+
+Khi chạy thật để update docs với số thật, collect tối thiểu:
+
+| Nhóm | Cần lấy |
+| --- | --- |
+| Run identity | run ID, command, env overrides, exit code |
+| Summary counters | `iterations`, `http_reqs`, `checks`, `http_req_failed` |
+| Shared metrics | `shared_jobs_total`, `shared_jobs_failed`, `shared_api_calls_total`, `shared_job_duration_ms`, `shared_sleep_seconds` |
+| Operation breakdown | count theo `operation`, `service`, status code |
+| Response time | avg/p95/p99/max theo operation |
+| Dashboard timeline | bucket sums của iterations/http_reqs/jobs/failures |
+| VUs/iter/s | worker-pool shape, tail behavior |
+
+Chỉ sau khi có số thật mới thêm vào docs:
+
+```text
+run #...
+summary p95/p99/max
+chart bucket arrays
+percentile_source
+final verdict PASS/FAIL
 ```
 
 ## Cách đọc kết quả chung
@@ -101,13 +150,27 @@ k6 run -o cloud .\k6-metrics-server\load-target\k6\shared-iterations\si-06-repor
 Với mọi case, đọc theo thứ tự:
 
 ```text
-1. iterations == JOBS
-2. shared_jobs_total == JOBS
-3. shared_jobs_failed == 0
-4. checks rate == 1
-5. http_req_failed rate == 0
-6. http_reqs/shared_api_calls_total == expected API formula
-7. shared_job_duration_ms count == JOBS
+1. Header/config có đúng executor shared-iterations không?
+2. iterations == JOBS không?
+3. shared_jobs_total == JOBS không?
+4. shared_jobs_failed == 0 không?
+5. checks rate == 1 không?
+6. http_req_failed rate == 0 không?
+7. http_reqs/shared_api_calls_total == expected API formula không?
+8. operation breakdown có đúng coverage không?
+9. shared_job_duration_ms cho thấy job lifecycle nhanh/chậm thế nào?
+```
+
+Không check:
+
+```text
+mỗi VU phải làm số job bằng nhau
+```
+
+Vì với shared pool:
+
+```text
+uneven per-VU distribution is normal
 ```
 
 ## Debug khi fail
@@ -119,16 +182,18 @@ Với mọi case, đọc theo thứ tự:
 | `shared_jobs_failed > 0` | job business fail | lọc dashboard theo `operation`, `job_id` |
 | `http_req_failed > 0` | HTTP non-2xx/network fail | xem request breakdown/status code |
 | `checks < 100%` | status/schema/contract fail | xem check nào fail, đối chiếu expectedStatus |
+| operation count mismatch | coverage lệch | kiểm job selector và branch logic |
 
 ## Dashboard checklist
 
 ```text
-[ ] Response time tách theo operation/service
-[ ] Execution timeline cộng iterations ra JOBS
-[ ] Execution timeline cộng http_reqs ra expected API calls
-[ ] shared_jobs_total cộng ra JOBS
-[ ] shared_jobs_failed cộng ra 0
-[ ] VUs vs iter/s đúng worker-pool shape
+[ ] Response time đã tách theo operation/service chưa?
+[ ] Execution timeline cộng iterations ra JOBS chưa?
+[ ] Execution timeline cộng http_reqs ra expected API calls chưa?
+[ ] shared_jobs_total cộng ra JOBS chưa?
+[ ] shared_jobs_failed cộng ra 0 chưa?
+[ ] VUs vs iter/s đúng worker-pool shape chưa?
+[ ] Có ai đang đọc nhầm VU distribution là pass/fail không?
 ```
 
 ## Reference

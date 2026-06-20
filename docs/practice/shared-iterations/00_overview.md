@@ -2,151 +2,216 @@
 
 ## Mục đích series
 
-Series này dạy **WHEN/WHY dùng `shared-iterations`** qua 7 case backend thực tế:
+Series này dạy **WHEN/WHY dùng `shared-iterations`** bằng 7 case backend thực tế.
+
+Điểm quan trọng: đây không phải series mô phỏng user journey. Đây là series mô phỏng kiểu việc sau:
 
 ```text
-Có một backlog/job list cố định.
-Nhiều VU hoạt động như worker pool.
+Có một danh sách job/backlog cố định.
+Có nhiều worker cùng xử lý danh sách đó.
 Worker nào xong job trước thì lấy job tiếp theo.
-Test kết thúc khi toàn bộ backlog đã được xử lý.
+Batch kết thúc khi toàn bộ backlog đã được xử lý.
 ```
 
-Điểm khác quan trọng nhất so với `per-vu-iterations`:
+Nói ngắn gọn:
 
 ```text
-shared-iterations:
-  iterations = tổng số job của cả scenario
-  vus        = số worker cùng xử lý backlog
-
-per-vu-iterations:
-  iterations = số vòng MỖI VU phải chạy
-  vus        = số identity cố định
+shared-iterations = fixed global backlog drained by worker pool
 ```
 
-Vì vậy, với `shared-iterations`, đừng đọc `iterations: 100` thành “mỗi VU chạy 100 vòng”. Đọc đúng là:
+## Mental model: fixed global backlog + worker pool
+
+Ví dụ config:
+
+```js
+export const options = {
+  scenarios: {
+    demo: {
+      executor: "shared-iterations",
+      vus: 3,
+      iterations: 10,
+    },
+  },
+};
+```
+
+Đọc đúng:
 
 ```text
-cả scenario có tổng cộng 100 job cần hoàn tất
+Có 10 job tổng cộng.
+Có 3 VU đóng vai worker.
+3 worker cùng lấy job từ pool chung.
+Ai xong trước thì lấy job kế tiếp.
 ```
 
-## Đặc trưng `shared-iterations`
+Không đọc thành:
 
 ```text
-- Fixed backlog: tổng job biết trước
-- Worker pool: nhiều VU cùng bốc job từ pool chung
-- VU nhanh có thể xử lý nhiều job hơn VU chậm
-- Không đảm bảo chia đều job cho từng VU
-- Total work = iterations (DETERMINISTIC nếu không bị interrupt/drop)
-- Kết quả đúng/sai nằm ở: hoàn tất đủ backlog, không job failed
+3 VU × 10 iterations = 30 job
 ```
 
-## Vì sao không dùng `__VU` làm business identity?
-
-Trong `shared-iterations`, `__VU` chỉ là worker đang xử lý job hiện tại.
-
-Ví dụ:
+Với `shared-iterations`, field `iterations` luôn là:
 
 ```text
-vus = 3
-iterations = 9
+tổng số iteration/job của toàn scenario
 ```
 
-Kết quả có thể là:
+không phải:
 
 ```text
-VU 1 xử lý 5 job
-VU 2 xử lý 3 job
-VU 3 xử lý 1 job
+số iteration mỗi VU
 ```
 
-Đó là bình thường. Vì vậy nếu mỗi job cần identity ổn định, hãy derive identity từ **job index** thay vì `__VU`.
+Câu hỏi đúng:
 
-Trong bộ BE này, contract dùng pattern:
+```text
+Did the pool finish all 10 jobs?
+```
+
+Câu hỏi sai:
+
+```text
+Did each VU run the same number of jobs?
+```
+
+Vì nếu VU 1 nhanh hơn VU 2, phân phối có thể là:
+
+```text
+VU 1: 5 jobs
+VU 2: 3 jobs
+VU 3: 2 jobs
+```
+
+Đó là bình thường, thậm chí đúng với mô hình worker queue.
+
+## Vì sao `shared-iterations` tồn tại?
+
+Nó giải quyết một class bài toán rất cụ thể:
+
+```text
+Tôi biết chính xác có N việc cần làm.
+Tôi muốn M worker làm cho xong N việc đó.
+Tôi không quan tâm worker nào làm bao nhiêu, miễn tổng việc hoàn tất đủ và sạch.
+```
+
+Ví dụ đời thực:
+
+| Tình huống | N là gì? | Worker là gì? | Done nghĩa là gì? |
+| --- | --- | --- | --- |
+| Catalog audit | số SKU/product cần audit | VU workers | mọi SKU được list/detail verify |
+| Order reconciliation | số order pending/failed | VU workers | mọi order confirm + status verify |
+| Webhook drain | số webhook event trong queue | VU consumers | mọi event process an toàn |
+| Cart cleanup | số stale cart item | VU workers | mọi item update + summary verify |
+| Cache warm | số URL/cache key | VU warmers | mọi URL được gọi |
+| Report export | số report job | VU workers | create/status/download đủ |
+| CI checklist | số API contract check | VU workers | coverage đủ, checks pass |
+
+## Executor comparison: chọn executor nào?
+
+| Executor | Why tempting | Why right/wrong for fixed backlog |
+| --- | --- | --- |
+| `shared-iterations` | Fixed global jobs, worker pool | **Đúng**: `iterations` là tổng job, VU nào rảnh lấy job tiếp. |
+| `per-vu-iterations` | Deterministic count | Sai nếu VU không phải business identity. Nó ép mỗi VU quota bằng nhau. |
+| `constant-vus` | Simple worker pool | Sai khi cần exact count: tổng job phụ thuộc duration và latency. |
+| `constant-arrival-rate` | Controls rate | Sai vì nó schedule arrivals, không phải drain fixed queue; có thể có dropped iterations. |
+| `ramping-vus` | Vary workers | Sai nếu exact backlog completion là requirement chính. |
+| `ramping-arrival-rate` | Vary traffic rate | Sai cho exact fixed-job coverage; hợp traffic surge hơn. |
+
+Rule nhớ nhanh:
+
+```text
+Cần mỗi user/account làm đúng N việc  -> per-vu-iterations
+Cần tổng N job được xử lý bởi M worker -> shared-iterations
+Cần chạy trong T phút                  -> constant-vus/ramping-vus
+Cần RPS/arrival rate                   -> arrival-rate executors
+```
+
+## Technical semantics that matter
+
+### 1. Global shared iteration counter
+
+Trong `shared-iterations`, k6 có một quota chung cho scenario:
+
+```text
+totalIters = iterations
+```
+
+Mỗi VU chạy vòng lặp:
+
+```text
+lấy số iteration kế tiếp từ counter chung
+nếu counter còn trong quota -> chạy job
+nếu counter vượt quota -> dừng
+```
+
+Nghĩa là VU không được cấp trước một quota riêng.
+
+### 2. Fast VUs pull more jobs
+
+Nếu một VU đang gặp job nhẹ hơn, network nhanh hơn, hoặc backend response nhanh hơn, nó có thể quay lại lấy job tiếp theo trước VU khác.
+
+Đây là feature, không phải bug:
+
+```text
+worker queue ngoài đời cũng vậy:
+worker nào rảnh trước thì lấy ticket tiếp theo
+```
+
+### 3. `__VU` là worker identity, không phải business identity
+
+Trong các case này:
+
+```text
+__VU = worker đang xử lý job hiện tại
+```
+
+Không nên dùng `__VU` làm product ID, order ID, event ID, report ID, cache key chính.
+
+Nếu dùng `__VU`, bạn có thể chỉ lặp lại vài identity worker và bỏ sót phần lớn backlog.
+
+### 4. `__ITER` là local counter của VU
+
+`__ITER` chỉ đếm iteration của riêng VU đó.
+
+Ví dụ VU 1 có `__ITER=4` không có nghĩa đó là global job #4. VU 2 cũng có thể có `__ITER=4`.
+
+Vì vậy, global job identity nên dựa vào:
 
 ```js
 exec.scenario.iterationInTest
 ```
 
-để chọn job ổn định trong backlog. Ý nghĩa:
+Ý nghĩa:
 
 ```text
-iterationInTest = số thứ tự job trong toàn scenario
+số thứ tự iteration/job trong toàn scenario
 ```
 
-Không phụ thuộc worker/VU nào đang chạy job đó.
+### 5. `maxDuration` là safety cap, không phải target duration
 
-## Khi nào nên dùng `shared-iterations`?
-
-Dùng khi câu hỏi nghiệp vụ là:
+Nếu `maxDuration` cắt test trước khi đủ job, kết quả không còn valid.
 
 ```text
-Có N việc cố định, M worker xử lý hết được không?
+iterations < JOBS
 ```
 
-Các ví dụ thực tế:
+nghĩa là:
 
-| Tình huống | Vì sao hợp `shared-iterations` |
-| --- | --- |
-| Audit fixed SKU/product backlog | Có danh sách SKU cần audit, xử lý đủ là xong |
-| Reconcile order backlog | Có danh sách order pending/failed cần xác minh |
-| Drain webhook/queue backlog | Có N message/event cần consume hết |
-| Cleanup stale cart items | Có danh sách record cũ cần cleanup |
-| Warm cache sau deploy | Có fixed URL list cần gọi trước |
-| Export report batch | Có N report job cần tạo/tải xuống |
-| CI API checklist | Có checklist API cố định cần verify sau deploy |
+```text
+backlog chưa drain hết
+```
 
-## Khi nào KHÔNG nên dùng?
+Không được nói batch pass chỉ vì phần job đã chạy không lỗi.
 
-Không nên dùng nếu mục tiêu là:
+## Common metrics của bộ shared cases
 
-| Mục tiêu | Executor hợp hơn | Lý do |
+| Metric | Type | Cách đọc |
 | --- | --- | --- |
-| Mỗi user/account chạy đúng N vòng | `per-vu-iterations` | Identity phải bound vào VU |
-| Test traffic kéo dài 5 phút | `constant-vus` | Duration là input chính |
-| Test 100 RPS ổn định | `constant-arrival-rate` | Rate là input chính |
-| Campaign surge tăng/giảm theo thời gian | `ramping-arrival-rate` | Arrival rate biến thiên |
-| User concurrency tăng dần | `ramping-vus` | VU count biến thiên |
-
-## Bảng tổng hợp 7 case
-
-| # | Case | Business case | Service/API chính | Expected work |
-| --- | --- | --- | --- | --- |
-| 01 | Catalog audit | Audit fixed product backlog | `products-service`: list + detail | `80 jobs × 2 calls = 160 http_reqs` |
-| 02 | Order reconciliation | Reconcile pending/failed orders | `order-service`: confirm + status | `120 jobs × 2 calls = 240 http_reqs` |
-| 03 | Payment webhook drain | Drain webhook backlog có duplicate | `order-service`: payment webhook | `100 jobs × 1 call = 100 http_reqs` |
-| 04 | Cart cleanup | Cleanup stale cart items | `cart-service`: update + summary | `90 jobs × 2 calls = 180 http_reqs` |
-| 05 | Cache warm | Warm fixed URL backlog | `products-service`: homefeed/detail | `120 jobs × 1 call = 120 http_reqs` |
-| 06 | Report export batch | Create/status/download reports | `report-service`: report jobs | `60 jobs × 3 calls = 180 http_reqs` |
-| 07 | CI verification batch | Verify fixed API checklist | mixed products/cart/order/report | `100 jobs × 1 call = 100 http_reqs` |
-
-## Contract chung FE/learner cần đọc
-
-BE cung cấp catalog:
-
-```text
-k6-metrics-server/load-target/k6/shared-iterations/case-catalog.json
-```
-
-FE nên đọc các field chính:
-
-| Field | Ý nghĩa |
-| --- | --- |
-| `id` | ID case, ví dụ `si-01-catalog-audit` |
-| `script` | File k6 script learner sẽ chạy |
-| `businessCase` | Tình huống nghiệp vụ |
-| `whySharedIterations` | Vì sao executor này đúng |
-| `defaultConfig` | VUS/JOBS/maxDuration mặc định |
-| `calls[]` | Service/API/method/path/body/status expected |
-
-## Metrics chung của bộ case
-
-| Metric | Type | Đọc như thế nào |
-| --- | --- | --- |
-| `shared_jobs_total` | Counter | Tổng số job đã hoàn tất. Expected `count == JOBS`. |
-| `shared_jobs_failed` | Counter | Số job business fail. Expected `count == 0`. |
-| `shared_api_calls_total` | Counter | Tổng request gửi qua helper chung. Nên khớp công thức API/job. |
-| `shared_job_duration_ms` | Trend | End-to-end duration của một job. Count nên bằng `JOBS`. |
-| `shared_sleep_seconds` | Counter | Tổng sleep/think time nếu case có mô phỏng delay. |
+| `shared_jobs_total` | Counter | Tổng job đã hoàn tất end-to-end. Expected `count == JOBS`. |
+| `shared_jobs_failed` | Counter | Job fail ở tầng business. Expected `count == 0`. |
+| `shared_api_calls_total` | Counter | Tổng API calls gửi qua helper chung. Expected khớp công thức API/job. |
+| `shared_job_duration_ms` | Trend | Duration của full job lifecycle. Count nên bằng `JOBS`. |
+| `shared_sleep_seconds` | Counter | Sleep/wait time nếu case có mô phỏng delay. |
 
 Pass criteria chung:
 
@@ -157,77 +222,58 @@ shared_jobs_total count == JOBS
 shared_jobs_failed count == 0
 ```
 
-## Tags chung để lọc dashboard
+## Common invalid-result patterns
 
-| Tag | Ý nghĩa |
-| --- | --- |
-| `case_id` | Case nào đang chạy, ví dụ `si-04-cart-cleanup` |
-| `business_case` | Nhóm nghiệp vụ |
-| `service` | Backend service được gọi |
-| `operation` | Operation cụ thể trong flow |
-| `endpoint` | Endpoint/API family |
-| `job_id` | Business job trong backlog |
-| `executor_family` | `shared_iterations` |
-| `workload_shape` | `fixed_backlog` |
+| Pattern | Meaning | Action |
+| --- | --- | --- |
+| `iterations < JOBS` | Backlog chưa xử lý hết | Invalid result, fix cause and rerun |
+| `shared_jobs_total < JOBS` | Script/backend không mark complete đủ job | Kiểm instrumentation, branch lỗi, exception |
+| `shared_jobs_failed > 0` | Có job business fail | Block/investigate theo `job_id`, `operation` |
+| Operation counts mismatch | Coverage gap | Invalid hoặc mapping bug |
+| VU distribution uneven | Normal worker pool behavior | Do not fail |
+| Latency high but counts complete | Functional pass, performance risk | Investigate operation latency |
 
-## Cách đọc summary theo công thức
-
-Luôn đọc theo thứ tự:
-
-```text
-1. iterations có bằng JOBS không?
-2. shared_jobs_total có bằng JOBS không?
-3. shared_jobs_failed có bằng 0 không?
-4. checks có pass 100% không?
-5. http_req_failed có bằng 0 không?
-6. http_reqs/shared_api_calls_total có khớp công thức API/job không?
-7. shared_job_duration_ms cho biết job end-to-end nhanh/chậm thế nào?
-```
-
-Ví dụ case 06:
-
-```text
-JOBS = 60
-mỗi job = create + status + download = 3 API calls
-
-Expected:
-  iterations = 60
-  shared_jobs_total = 60
-  shared_jobs_failed = 0
-  http_reqs = shared_api_calls_total = 60 × 3 = 180
-```
-
-## Cách đọc dashboard 3 chart
+## Dashboard semantics for shared-iterations
 
 ### Chart 1 — Response time
 
 Chart này trả lời:
 
 ```text
-API nào chậm theo thời gian?
-Bucket nào có p95/max cao?
-Operation nào là bottleneck?
+Request path / operation nào chậm?
+Bucket nào có tail latency?
+Service nào đang là bottleneck?
 ```
 
-Với shared-iterations, nên lọc theo `operation` vì một job có thể gọi nhiều API.
+Vì một job có thể có nhiều API call, luôn đọc theo tag:
+
+```text
+service
+operation
+endpoint
+```
 
 Đừng nhầm:
 
 ```text
-Response time chart chỉ nói từng request chậm/nhanh.
-Nó không tự chứng minh backlog đã xử lý đủ.
+Response time chart không tự chứng minh backlog đã chạy đủ.
+Nó chỉ nói request latency.
 ```
 
-Muốn biết job end-to-end, đọc thêm `shared_job_duration_ms`.
+Muốn biết job end-to-end, đọc thêm:
+
+```text
+shared_job_duration_ms
+```
 
 ### Chart 2 — Execution timeline
 
 Chart này trả lời:
 
 ```text
-Backlog được drain theo nhịp nào?
-Mỗi time bucket hoàn tất bao nhiêu iterations/http_reqs/jobs?
-Có bucket nào bị fail không?
+Backlog được drain theo thời gian như thế nào?
+Mỗi bucket hoàn tất bao nhiêu iterations/http_reqs/jobs?
+Có bucket nào có failed jobs không?
 ```
 
 Kiểm tổng:
@@ -239,38 +285,59 @@ sum(shared_jobs_total buckets) == JOBS
 sum(shared_jobs_failed buckets) == 0
 ```
 
+Đừng nhầm:
+
+```text
+Mỗi point = 1 time bucket / metrics frame.
+Không phải 1 request.
+Không phải 1 job.
+```
+
 ### Chart 3 — VUs vs iter/s
 
 Chart này trả lời:
 
 ```text
-Worker pool có được dùng đúng không?
-VUs có duy trì gần configured vus khi còn backlog không?
-iter/s drain backlog nhanh hay chậm?
+Worker pool drain backlog nhanh/chậm ra sao?
+VUs có gần configured worker count khi còn việc không?
+iter/s có tụt/spike ở giai đoạn nào?
 ```
 
 Đừng nhầm:
 
 ```text
-VU count ổn định không có nghĩa mỗi VU làm số job bằng nhau.
-Tail VU drop là bình thường khi backlog gần hết.
+VUs ổn định không có nghĩa mỗi VU làm số job bằng nhau.
+Tail VUs tụt có thể chỉ nghĩa là backlog gần hết.
 ```
+
+## Bảng tổng hợp 7 case
+
+| # | Case | Business case | Expected work |
+| --- | --- | --- | --- |
+| 01 | Catalog audit | Audit fixed SKU/product backlog | `80 jobs × 2 API = 160 calls` |
+| 02 | Order reconciliation | Reconcile pending/failed order backlog | `120 jobs × 2 API = 240 calls` |
+| 03 | Payment webhook drain | Drain webhook backlog có duplicate | `100 jobs × 1 API = 100 calls` |
+| 04 | Cart cleanup | Cleanup stale cart item backlog | `90 jobs × 2 API = 180 calls` |
+| 05 | Cache warm | Warm fixed URL/cache-key backlog | `120 jobs × 1 API = 120 calls` |
+| 06 | Report export batch | Create/status/download report jobs | `60 jobs × 3 API = 180 calls` |
+| 07 | CI verification batch | Fixed API checklist | `100 jobs × 1 API = 100 calls` |
 
 ## Thứ tự đề xuất học
 
 ```text
-1. Đọc 00_overview.md (file này)
-2. Đọc RUN_GUIDE.md để biết stack/env/run pattern
-3. Làm case 01 catalog audit để hiểu fixed backlog đơn giản
-4. Làm case 02/03 để hiểu idempotency/retry/drain
-5. Làm case 04/05 để hiểu cleanup/cache warm
-6. Làm case 06 để hiểu job lifecycle nhiều API
-7. Làm case 07 để hiểu CI fixed checklist
+1. Đọc 00_overview.md để hiểu worker-pool/backlog mental model.
+2. Đọc RUN_GUIDE.md để biết stack/env/run pattern.
+3. Làm case 01 để hiểu audit backlog đơn giản.
+4. Làm case 02/03 để hiểu reconciliation + idempotency/queue drain.
+5. Làm case 04/05 để hiểu cleanup/cache warm.
+6. Làm case 06 để hiểu job lifecycle nhiều API.
+7. Làm case 07 để hiểu deterministic CI checklist.
 ```
 
 ## Reference
 
-- Quick index: `../../20260515_01_shared-iterations-quick-index.md`
-- Tham số và công thức: `../../20260515_02_shared-iterations-tham-so-cong-thuc.md`
+- Run guide: `./RUN_GUIDE.md`
+- Shared-iterations quick index: `../../20260515_01_shared-iterations-quick-index.md`
+- Tham số/công thức: `../../20260515_02_shared-iterations-tham-so-cong-thuc.md`
 - Worked example: `../../20260515_03_shared-iterations-quickpizza-two-requests-worked-example.md`
-- Practice per-vu để so sánh: `../per-vu-iterations/00_overview.md`
+- Per-vu comparison series: `../per-vu-iterations/00_overview.md`
