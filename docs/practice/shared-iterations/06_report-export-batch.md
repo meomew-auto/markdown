@@ -503,6 +503,78 @@ else:
   fail job
 ```
 
+## Real run sau khi sửa async polling
+
+Run verify qua local cloud/dashboard:
+
+```text
+Run ID: #67
+Exit code: 0
+summary_pushed: true
+finish_status: 200
+```
+
+Summary chính:
+
+| Metric | Value |
+| --- | ---: |
+| `checks_rate` | `1` |
+| `checks_passes/checks_fails` | `240 / 0` |
+| `http_req_failed_rate` | `0` |
+| `iterations` | `60` |
+| `http_reqs` | `180` |
+| `vus_max` | `6` |
+| `shared_jobs_failed_rate` | `0` |
+| `shared_job_duration_ms avg/med/p95/p99` | `202.53 / 200 / 294.05 / 297.64 ms` |
+| `http_req_duration avg/med/p95/p99` | `33.88 / 6.92 / 92.90 / 96.87 ms` |
+
+Request breakdown:
+
+```text
+report_job_create    POST 202 count=60
+report_job_status    GET  200 count=60
+report_job_download  GET  200 count=60
+```
+
+Kết luận run #67:
+
+```text
+PASS.
+Không còn report_job_download GET 202.
+60/60 jobs completed lifecycle.
+status_poll_count = 60 nên http_reqs = 120 + 60 = 180.
+```
+
+### Dashboard validation tại `http://localhost:13001`
+
+Đã verify cùng run #67 qua dashboard API:
+
+```text
+GET /v1/tests/67/summary
+GET /v1/tests/67/request-breakdown?group_by=name&limit=200
+GET /v1/tests/67/series?metric=iterations&max_points=200
+GET /v1/tests/67/series?metric=http_reqs&max_points=200
+GET /v1/tests/67/series?metric=vus&max_points=200
+GET /v1/tests/67/series?metric=shared_jobs_total&max_points=200
+GET /v1/tests/67/series?metric=shared_jobs_failed&max_points=200
+```
+
+Bucket sums:
+
+| Series | Buckets | Sum / shape |
+| --- | --- | --- |
+| `iterations` | 3 buckets | `6 + 25 + 29 = 60` |
+| `shared_jobs_total` | 3 buckets | `6 + 25 + 29 = 60` |
+| `shared_jobs_failed` | 0 points | nghĩa là `0 failed jobs` |
+| `http_reqs` | 3 buckets | `19 + 86 + 75 = 180` |
+| `vus` | 2 buckets | `6 -> 5`, rồi về 0 khi backlog cạn |
+
+Cách đọc 3 chart cho run #67:
+
+1. **Response time**: aggregate `http_req_duration` p95 khoảng `92.90ms`, nhưng business lifecycle phải đọc `shared_job_duration_ms` p95 khoảng `294.05ms` vì nó gồm cả async wait/poll + download.
+2. **Execution timeline**: `iterations` và `shared_jobs_total` cùng sum `60`; `http_reqs` sum `180`; breakdown create/status/download đều `60`, nên lifecycle coverage đủ.
+3. **VUs vs iter/s**: worker pool lên gần `6` khi backlog còn việc, còn `5` ở bucket sau vì backlog gần hết; đây là tail-drain bình thường của `shared-iterations`, không phải lỗi chia tải.
+
 ## Reference
 
 - Overview: `./00_overview.md`
