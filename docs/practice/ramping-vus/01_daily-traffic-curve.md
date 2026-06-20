@@ -337,111 +337,106 @@ Case-specific notes:
 - Nếu iter/s flatten ở peak, đọc `ramping_flow_duration_ms` và operation p95.
 
 <!-- REAL_RUN_START -->
-## Real run 2026-06-20 — run #40
+## Contract rerun 2026-06-20 — run #51
 
-Run này dùng default env của case:
+Run này ép đúng contract/tải đã ghi trong tài liệu, kể cả khi backend script default hiện tại đã đổi nhẹ hơn.
 
 ```text
-BASE_URL = http://localhost:80
-K6_CLOUD_HOST = http://localhost:18080
-K6_CLOUD_METRIC_PUSH_INTERVAL = 1s
-K6_CLOUD_AGGREGATION_PERIOD = 1s
-K6_CLOUD_AGGREGATION_WAIT_PERIOD = 2s
+BASE_URL=http://localhost:80
+K6_CLOUD_HOST=http://localhost:18080
+RV_01_START_VUS=2
+RV_01_MORNING_VUS=8
+RV_01_PEAK_VUS=24
+RV_01_AFTERNOON_VUS=12
+RV_01_DURATION_SCALE=0.25
+RV_01_SLEEP_SECONDS=0.4
 ```
 
 | Item | Value |
 | --- | --- |
 | Script | `rv-01-daily-traffic-curve.js` |
-| Run ID | `40` |
+| Run ID | `51` |
 | Exit code | `99` |
-| Verdict | **FAIL** — Không đạt |
+| Verdict | **FAIL** — Không đạt theo contract gốc |
 | Summary final pushed | true |
 | Finish status | 200 |
 | Expected VU shape | `2 -> 8 -> 24 -> 12 -> 2` |
 | Observed `vus` min/max | 2 / 24 |
 
-### Summary thật của run
+### Summary thật của contract rerun
 
 | Metric | Value | Cách đọc |
 | --- | ---: | --- |
-| `checks` | 96.54% (7093/7347) | Check status/contract pass bao nhiêu. |
-| `http_req_failed` | 3.45% (254/7347) | HTTP/API failure theo k6. |
-| `ramping_active_iterations_failed` | 254 | User-loop failures của case. |
-| `iterations` | 4390 (38.73/s) | Output, không phải target. |
-| `http_reqs` | 7347 (64.81/s) | Tổng API calls thật. |
-| `ramping_active_iterations` | 4390 | Completed user loops. |
-| `ramping_api_calls_total` | 7347 | Custom API counter, phải khớp `http_reqs` trong case này. |
-| `ramping_sleep_seconds` | 1756.0s | Think time do script thêm. |
-| `http_req_duration` | avg 5.22ms, p95 17.7ms, p99 90.1ms, max 142ms | Request-level latency. |
-| `ramping_flow_duration_ms` | avg 8.84ms, p95 79.0ms, p99 92.0ms, max 142ms | Full user-loop latency. |
-| `iteration_duration` | avg 409ms, p95 480ms, p99 492ms, max 542ms | Bao gồm flow + think/sleep. |
+| `checks` | 99.59% (7208/7237) | Check status/contract pass bao nhiêu. |
+| `http_req_failed` | 0.40% (29/7237) | HTTP/API failure theo k6. |
+| `ramping_active_iterations_failed` | 29 | User-loop failures của case. |
+| `iterations` | 4381 (38.66/s) | Output, không phải target. |
+| `http_reqs` | 7237 (63.87/s) | Tổng API calls thật. |
+| `ramping_active_iterations` | 4381 | Completed user loops. |
+| `ramping_api_calls_total` | 7237 | Custom API counter. |
+| `ramping_sleep_seconds` | 1752.4s | Think time do script thêm. |
+| `http_req_duration` | avg 5.68ms, p95 5.75ms, p99 88.0ms, max 126ms | Request-level latency. |
+| `ramping_flow_duration_ms` | avg 9.54ms, p95 76.0ms, p99 90.0ms, max 126ms | Full user-loop latency. |
+| `iteration_duration` | avg 410ms, p95 476ms, p99 491ms, max 527ms | Bao gồm flow + think/sleep. |
 
 Threshold failures:
 
-- checks 96.54% <= required 99%
-- http_req_failed 3.45% >= limit 1%
-- ramping_active_iterations_failed 254 >= limit 25
+- ramping_active_iterations_failed 29 >= limit 25
 
 ### Request breakdown thật
 
 | Operation | Method | Status | Count | Tỷ lệ trên total HTTP |
 | --- | --- | ---: | ---: | ---: |
-| `daily_curve_detail` | GET | 200 | 2957 | 40.25% |
-| `daily_curve_list` | GET | 200 | 2703 | 36.79% |
-| `daily_curve_cart_add` | POST | 200 | 1081 | 14.71% |
-| `daily_curve_checkout` | POST | 200 | 352 | 4.79% |
-| `daily_curve_list` | GET | 429 | 254 | 3.46% |
+| `daily_curve_detail` | GET | 200 | 2856 | 39.46% |
+| `daily_curve_list` | GET | 200 | 2827 | 39.06% |
+| `daily_curve_cart_add` | POST | 200 | 1215 | 16.79% |
+| `daily_curve_checkout` | POST | 200 | 310 | 4.28% |
+| `daily_curve_list` | GET | 429 | 29 | 0.40% |
 
 ### Phân tích từ summary -> 3 chart
 
 #### 1. Response time chart
 
-Latency tổng không xấu: HTTP p95 17.69ms, p99 90.10ms. Vấn đề chính không phải chậm mà là 254 request list trả 429.
-
-Chart aggregates của run:
+Latency request vẫn ổn, nhưng `daily_curve_list` còn 29 request 429. Vì vậy chart response time không phải bottleneck chính; lỗi là product-list throttling/capacity ở mức nhỏ nhưng vượt cap failed-iteration.
 
 | Aggregate | Value |
 | --- | ---: |
-| Response-time points | 4288 |
-| Avg của các window avg | 7.87ms |
-| Max window p95 | 142ms |
-| Max window p99 | 142ms |
-| Max request window | 142ms |
-| Windows p95 > 100ms | 9 |
+| Response-time points | 4302 |
+| Avg của các window avg | 7.99ms |
+| Max window p95 | 126ms |
+| Max window p99 | 126ms |
+| Max request window | 126ms |
+| Windows p95 > 100ms | 5 |
 | Windows p95 > 500ms | 0 |
 
 #### 2. Execution timeline chart
 
-Execution timeline có 139 failed-iteration points, tổng 254 failed iterations, peak failed bucket 25 tại 2026-06-20T06:00:49Z. Đây là failure cluster trong high-traffic/peak part của daily curve.
+Execution timeline cho thấy tổng failed iterations = 29, đúng bằng số `daily_curve_list` 429. `checks` và `http_req_failed` vẫn pass, nhưng custom failed-iteration cap `count<25` fail.
 
 | Aggregate | Value |
 | --- | ---: |
-| Sum `iterations` buckets | 4390 |
-| Sum `http_reqs` buckets | 7347 |
-| Peak iter/s bucket | 62 |
-| Peak http_req/s bucket | 109 |
-| Failed-iteration points | 139 |
-| Sum failed iterations | 254 |
-| Peak failed-iteration bucket | 25 |
+| Sum `iterations` buckets | 4381 |
+| Sum `http_reqs` buckets | 7237 |
+| Peak iter/s bucket | 61 |
+| Peak http_req/s bucket | 104 |
+| Failed-iteration points | 15 |
+| Sum failed iterations | 29 |
+| Peak failed-iteration bucket | 4 |
 
 #### 3. VUs vs iter/s chart
 
-VU series đạt đúng peak 24 VUs, peak iter/s bucket 62 và peak http_req/s bucket 109. VU shape ổn; backend product-list/rate-limit không giữ được contract 200.
+VU shape đạt peak 24 đúng contract. Nghĩa là test đã bơm đúng active-user curve; backend/product-list vẫn còn leak 429 khi chạy đúng contract 2 -> 8 -> 24 -> 12 -> 2.
 
 | Aggregate | Value |
 | --- | ---: |
 | VU sample points | 113 |
 | VUs min/max series | 2 / 24 |
 | Avg VUs series | 15.87 |
-| Peak iter/s bucket | 62 |
+| Peak iter/s bucket | 61 |
 
-### Kết luận riêng của run #40
+### Kết luận contract rerun #51
 
-Run fail vì product list bị rate-limit/429 ở daily browse branch. Detail/cart/checkout đều 200; lỗi tập trung ở `daily_curve_list`.
-
-BE note:
-
-> BE cần kiểm tra rate-limit/capacity của `GET /api/sim/products` cho traffic daily default 24 VUs. Nếu 429 là chủ ý thì phải đổi case contract/threshold; nếu không, cần tăng limit/cache hoặc giảm false throttling để `daily_curve_list` trả 200 trong default run.
+Chưa OK hoàn toàn theo contract gốc. Case 01 gần pass, nhưng vẫn fail vì `ramping_active_iterations_failed=29` vượt cap 25. Cần BE giảm 429 của `daily_curve_list` thêm ít nhất xuống <25 failed loops, tốt nhất về 0.
 <!-- REAL_RUN_END -->
 
 ## Đọc dashboard real-time charts cho case 01

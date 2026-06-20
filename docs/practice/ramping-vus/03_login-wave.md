@@ -335,44 +335,47 @@ Case-specific notes:
 - Failures ở refresh có thể không hiện trong aggregate nếu count nhỏ; phải lọc operation.
 
 <!-- REAL_RUN_START -->
-## Real run 2026-06-20 — run #42
+## Contract rerun 2026-06-20 — run #53
 
-Run này dùng default env của case:
+Run này ép đúng contract/tải đã ghi trong tài liệu, kể cả khi backend script default hiện tại đã đổi nhẹ hơn.
 
 ```text
-BASE_URL = http://localhost:80
-K6_CLOUD_HOST = http://localhost:18080
-K6_CLOUD_METRIC_PUSH_INTERVAL = 1s
-K6_CLOUD_AGGREGATION_PERIOD = 1s
-K6_CLOUD_AGGREGATION_WAIT_PERIOD = 2s
+BASE_URL=http://localhost:80
+K6_CLOUD_HOST=http://localhost:18080
+RV_03_START_VUS=1
+RV_03_MID_VUS=12
+RV_03_PEAK_VUS=28
+RV_03_COOLDOWN_VUS=5
+RV_03_DURATION_SCALE=0.25
+RV_03_SLEEP_SECONDS=0.5
 ```
 
 | Item | Value |
 | --- | --- |
 | Script | `rv-03-login-wave.js` |
-| Run ID | `42` |
+| Run ID | `53` |
 | Exit code | `0` |
-| Verdict | **PASS** — Đạt |
+| Verdict | **PASS** — Đạt theo contract gốc |
 | Summary final pushed | true |
 | Finish status | 200 |
 | Expected VU shape | `1 -> 12 -> 28 -> 5` |
 | Observed `vus` min/max | 1 / 28 |
 
-### Summary thật của run
+### Summary thật của contract rerun
 
 | Metric | Value | Cách đọc |
 | --- | ---: | --- |
-| `checks` | 100.00% (3886/3886) | Check status/contract pass bao nhiêu. |
-| `http_req_failed` | 0.00% (0/3886) | HTTP/API failure theo k6. |
+| `checks` | 100.00% (3891/3891) | Check status/contract pass bao nhiêu. |
+| `http_req_failed` | 0.00% (0/3891) | HTTP/API failure theo k6. |
 | `ramping_active_iterations_failed` | 0 | User-loop failures của case. |
-| `iterations` | 2534 (37.02/s) | Output, không phải target. |
-| `http_reqs` | 3886 (56.77/s) | Tổng API calls thật. |
-| `ramping_active_iterations` | 2534 | Completed user loops. |
-| `ramping_api_calls_total` | 3886 | Custom API counter, phải khớp `http_reqs` trong case này. |
-| `ramping_sleep_seconds` | 1267.0s | Think time do script thêm. |
-| `http_req_duration` | avg 5.17ms, p95 22.9ms, p99 23.5ms, max 33.9ms | Request-level latency. |
-| `ramping_flow_duration_ms` | avg 8.05ms, p95 27.0ms, p99 29.0ms, max 48.0ms | Full user-loop latency. |
-| `iteration_duration` | avg 508ms, p95 528ms, p99 530ms, max 549ms | Bao gồm flow + think/sleep. |
+| `iterations` | 2537 (37.05/s) | Output, không phải target. |
+| `http_reqs` | 3891 (56.82/s) | Tổng API calls thật. |
+| `ramping_active_iterations` | 2537 | Completed user loops. |
+| `ramping_api_calls_total` | 3891 | Custom API counter. |
+| `ramping_sleep_seconds` | 1268.5s | Think time do script thêm. |
+| `http_req_duration` | avg 5.01ms, p95 22.7ms, p99 23.3ms, max 55.0ms | Request-level latency. |
+| `ramping_flow_duration_ms` | avg 7.84ms, p95 27.0ms, p99 28.6ms, max 55.0ms | Full user-loop latency. |
+| `iteration_duration` | avg 508ms, p95 527ms, p99 529ms, max 555ms | Bao gồm flow + think/sleep. |
 
 Threshold failures:
 
@@ -382,60 +385,54 @@ Không có threshold failure.
 
 | Operation | Method | Status | Count | Tỷ lệ trên total HTTP |
 | --- | --- | ---: | ---: | ---: |
-| `login_wave_me` | GET | 200 | 2534 | 65.21% |
-| `login_wave_login` | POST | 200 | 845 | 21.74% |
-| `login_wave_refresh` | POST | 200 | 507 | 13.05% |
+| `login_wave_me` | GET | 200 | 2537 | 65.20% |
+| `login_wave_login` | POST | 200 | 846 | 21.74% |
+| `login_wave_refresh` | POST | 200 | 508 | 13.06% |
 
 ### Phân tích từ summary -> 3 chart
 
 #### 1. Response time chart
 
-HTTP p95 22.87ms, p99 23.47ms; flow p95 27ms. Không thấy tail latency bất thường.
-
-Chart aggregates của run:
+Auth latency sạch: không có 4xx/5xx, HTTP p95 thấp và ổn định.
 
 | Aggregate | Value |
 | --- | ---: |
-| Response-time points | 2537 |
-| Avg của các window avg | 6.42ms |
-| Max window p95 | 33.9ms |
-| Max window p99 | 33.9ms |
-| Max request window | 33.9ms |
+| Response-time points | 2542 |
+| Avg của các window avg | 6.24ms |
+| Max window p95 | 54.9ms |
+| Max window p99 | 54.9ms |
+| Max request window | 55.0ms |
 | Windows p95 > 100ms | 0 |
 | Windows p95 > 500ms | 0 |
 
 #### 2. Execution timeline chart
 
-Execution timeline không có failed-iteration points. Mix đúng: `auth/me` mỗi iteration, login khoảng mỗi 3 iteration, refresh khoảng mỗi 5 iteration.
+Không có failed iterations. Mix đúng: `auth/me` mỗi loop, login khoảng mỗi 3 loop, refresh khoảng mỗi 5 loop.
 
 | Aggregate | Value |
 | --- | ---: |
-| Sum `iterations` buckets | 2534 |
-| Sum `http_reqs` buckets | 3886 |
+| Sum `iterations` buckets | 2537 |
+| Sum `http_reqs` buckets | 3891 |
 | Peak iter/s bucket | 56 |
-| Peak http_req/s bucket | 86 |
+| Peak http_req/s bucket | 87 |
 | Failed-iteration points | 0 |
 | Sum failed iterations | 0 |
 | Peak failed-iteration bucket | 0 |
 
 #### 3. VUs vs iter/s chart
 
-VU series đạt peak 28 VUs, peak iter/s bucket 56 và peak http_req/s bucket 86. Shape login wave đúng và iter/s scale ổn.
+VU shape đạt peak 28 đúng contract. iter/s/http_req/s scale ổn theo login wave.
 
 | Aggregate | Value |
 | --- | ---: |
 | VU sample points | 68 |
 | VUs min/max series | 1 / 28 |
-| Avg VUs series | 18.94 |
+| Avg VUs series | 18.96 |
 | Peak iter/s bucket | 56 |
 
-### Kết luận riêng của run #42
+### Kết luận contract rerun #53
 
-Run pass sạch: checks 100%, HTTP failed 0%, failed iterations 0. Auth/session wave giữ được contract.
-
-BE note:
-
-> Không cần báo BE bug cho case 03 trong run này.
+OK theo contract gốc.
 <!-- REAL_RUN_END -->
 
 ## Đọc dashboard real-time charts cho case 03

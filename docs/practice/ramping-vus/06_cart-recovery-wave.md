@@ -333,44 +333,46 @@ Case-specific notes:
 - Failed loops at peak likely indicate cart write/read capacity issue.
 
 <!-- REAL_RUN_START -->
-## Real run 2026-06-20 — run #45
+## Contract rerun 2026-06-20 — run #56
 
-Run này dùng default env của case:
+Run này ép đúng contract/tải đã ghi trong tài liệu, kể cả khi backend script default hiện tại đã đổi nhẹ hơn.
 
 ```text
-BASE_URL = http://localhost:80
-K6_CLOUD_HOST = http://localhost:18080
-K6_CLOUD_METRIC_PUSH_INTERVAL = 1s
-K6_CLOUD_AGGREGATION_PERIOD = 1s
-K6_CLOUD_AGGREGATION_WAIT_PERIOD = 2s
+BASE_URL=http://localhost:80
+K6_CLOUD_HOST=http://localhost:18080
+RV_06_START_VUS=1
+RV_06_PEAK_VUS=22
+RV_06_LATE_VUS=8
+RV_06_DURATION_SCALE=0.25
+RV_06_SLEEP_SECONDS=0.6
 ```
 
 | Item | Value |
 | --- | --- |
 | Script | `rv-06-cart-recovery-wave.js` |
-| Run ID | `45` |
+| Run ID | `56` |
 | Exit code | `0` |
-| Verdict | **PASS** — Đạt |
+| Verdict | **PASS** — Đạt theo contract gốc |
 | Summary final pushed | true |
 | Finish status | 200 |
 | Expected VU shape | `1 -> 22 -> 8 -> 1` |
 | Observed `vus` min/max | 2 / 22 |
 
-### Summary thật của run
+### Summary thật của contract rerun
 
 | Metric | Value | Cách đọc |
 | --- | ---: | --- |
-| `checks` | 100.00% (4910/4910) | Check status/contract pass bao nhiêu. |
-| `http_req_failed` | 0.00% (0/4910) | HTTP/API failure theo k6. |
+| `checks` | 100.00% (4895/4895) | Check status/contract pass bao nhiêu. |
+| `http_req_failed` | 0.00% (0/4895) | HTTP/API failure theo k6. |
 | `ramping_active_iterations_failed` | 0 | User-loop failures của case. |
-| `iterations` | 1964 (26.00/s) | Output, không phải target. |
-| `http_reqs` | 4910 (65.01/s) | Tổng API calls thật. |
-| `ramping_active_iterations` | 1964 | Completed user loops. |
-| `ramping_api_calls_total` | 4910 | Custom API counter, phải khớp `http_reqs` trong case này. |
-| `ramping_sleep_seconds` | 1178.4s | Think time do script thêm. |
-| `http_req_duration` | avg 3.82ms, p95 5.62ms, p99 9.76ms, max 93.8ms | Request-level latency. |
-| `ramping_flow_duration_ms` | avg 9.76ms, p95 13.0ms, p99 29.0ms, max 117ms | Full user-loop latency. |
-| `iteration_duration` | avg 610ms, p95 613ms, p99 629ms, max 718ms | Bao gồm flow + think/sleep. |
+| `iterations` | 1958 (26.04/s) | Output, không phải target. |
+| `http_reqs` | 4895 (65.09/s) | Tổng API calls thật. |
+| `ramping_active_iterations` | 1958 | Completed user loops. |
+| `ramping_api_calls_total` | 4895 | Custom API counter. |
+| `ramping_sleep_seconds` | 1174.8s | Think time do script thêm. |
+| `http_req_duration` | avg 4.78ms, p95 5.78ms, p99 59.5ms, max 178ms | Request-level latency. |
+| `ramping_flow_duration_ms` | avg 12.2ms, p95 17.1ms, p99 98.0ms, max 278ms | Full user-loop latency. |
+| `iteration_duration` | avg 613ms, p95 618ms, p99 699ms, max 878ms | Bao gồm flow + think/sleep. |
 
 Threshold failures:
 
@@ -380,37 +382,35 @@ Không có threshold failure.
 
 | Operation | Method | Status | Count | Tỷ lệ trên total HTTP |
 | --- | --- | ---: | ---: | ---: |
-| `cart_recovery_summary` | GET | 200 | 1964 | 40.00% |
-| `cart_recovery_add` | POST | 200 | 1964 | 40.00% |
-| `cart_recovery_update` | PATCH | 200 | 982 | 20.00% |
+| `cart_recovery_summary` | GET | 200 | 1958 | 40.00% |
+| `cart_recovery_add` | POST | 200 | 1958 | 40.00% |
+| `cart_recovery_update` | PATCH | 200 | 979 | 20.00% |
 
 ### Phân tích từ summary -> 3 chart
 
 #### 1. Response time chart
 
-HTTP p95 5.62ms, p99 9.76ms; flow p95 13ms. Cart read/write latency thấp và ổn định.
-
-Chart aggregates của run:
+Cart latency thấp, không có failed request.
 
 | Aggregate | Value |
 | --- | ---: |
-| Response-time points | 3228 |
-| Avg của các window avg | 3.74ms |
-| Max window p95 | 94.0ms |
-| Max window p99 | 94.0ms |
-| Max request window | 93.8ms |
-| Windows p95 > 100ms | 0 |
+| Response-time points | 3234 |
+| Avg của các window avg | 4.76ms |
+| Max window p95 | 178ms |
+| Max window p99 | 178ms |
+| Max request window | 178ms |
+| Windows p95 > 100ms | 1 |
 | Windows p95 > 500ms | 0 |
 
 #### 2. Execution timeline chart
 
-Execution timeline không có failed iterations. Mix đúng: summary/add mỗi iteration, update đúng khoảng một nửa iterations.
+Không có failed iterations. Summary/add mỗi loop, update khoảng một nửa loops đúng thiết kế.
 
 | Aggregate | Value |
 | --- | ---: |
-| Sum `iterations` buckets | 1964 |
-| Sum `http_reqs` buckets | 4910 |
-| Peak iter/s bucket | 38 |
+| Sum `iterations` buckets | 1958 |
+| Sum `http_reqs` buckets | 4895 |
+| Peak iter/s bucket | 41 |
 | Peak http_req/s bucket | 95 |
 | Failed-iteration points | 0 |
 | Sum failed iterations | 0 |
@@ -418,22 +418,18 @@ Execution timeline không có failed iterations. Mix đúng: summary/add mỗi i
 
 #### 3. VUs vs iter/s chart
 
-VU series đạt peak 22 VUs, peak iter/s bucket 38 và peak http_req/s bucket 95. Shape notification wave đúng.
+VU shape đạt peak 22 đúng contract. Recovery wave ổn.
 
 | Aggregate | Value |
 | --- | ---: |
 | VU sample points | 75 |
 | VUs min/max series | 2 / 22 |
-| Avg VUs series | 15.96 |
-| Peak iter/s bucket | 38 |
+| Avg VUs series | 16.00 |
+| Peak iter/s bucket | 41 |
 
-### Kết luận riêng của run #45
+### Kết luận contract rerun #56
 
-Run pass sạch: checks 100%, HTTP failed 0%, failed iterations 0. Cart recovery wave ổn.
-
-BE note:
-
-> Không cần báo BE bug cho case 06 trong run này.
+OK theo contract gốc.
 <!-- REAL_RUN_END -->
 
 ## Đọc dashboard real-time charts cho case 06

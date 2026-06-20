@@ -335,107 +335,104 @@ Case-specific notes:
 - Nếu iter/s thấp nhưng checks pass, kiểm sleep/ready_after trước khi kết luận backend fail.
 
 <!-- REAL_RUN_START -->
-## Real run 2026-06-20 — run #44
+## Contract rerun 2026-06-20 — run #55
 
-Run này dùng default env của case:
+Run này ép đúng contract/tải đã ghi trong tài liệu, kể cả khi backend script default hiện tại đã đổi nhẹ hơn.
 
 ```text
-BASE_URL = http://localhost:80
-K6_CLOUD_HOST = http://localhost:18080
-K6_CLOUD_METRIC_PUSH_INTERVAL = 1s
-K6_CLOUD_AGGREGATION_PERIOD = 1s
-K6_CLOUD_AGGREGATION_WAIT_PERIOD = 2s
+BASE_URL=http://localhost:80
+K6_CLOUD_HOST=http://localhost:18080
+RV_05_START_VUS=1
+RV_05_MID_VUS=5
+RV_05_PEAK_VUS=14
+RV_05_DURATION_SCALE=0.25
+RV_05_SLEEP_SECONDS=1
+RV_05_READY_AFTER_MS=50
 ```
 
 | Item | Value |
 | --- | --- |
 | Script | `rv-05-reporting-ramp.js` |
-| Run ID | `44` |
-| Exit code | `99` |
-| Verdict | **FAIL** — Không đạt |
+| Run ID | `55` |
+| Exit code | `0` |
+| Verdict | **PASS** — Đạt theo contract gốc |
 | Summary final pushed | true |
 | Finish status | 200 |
 | Expected VU shape | `1 -> 5 -> 14 -> 1` |
 | Observed `vus` min/max | 1 / 14 |
 
-### Summary thật của run
+### Summary thật của contract rerun
 
 | Metric | Value | Cách đọc |
 | --- | ---: | --- |
-| `checks` | 75.00% (315/420) | Check status/contract pass bao nhiêu. |
-| `http_req_failed` | 0.00% (0/420) | HTTP/API failure theo k6. |
-| `ramping_active_iterations_failed` | 105 | User-loop failures của case. |
-| `iterations` | 315 (3.75/s) | Output, không phải target. |
-| `http_reqs` | 420 (5.00/s) | Tổng API calls thật. |
-| `ramping_active_iterations` | 315 | Completed user loops. |
-| `ramping_api_calls_total` | 420 | Custom API counter, phải khớp `http_reqs` trong case này. |
-| `ramping_sleep_seconds` | 315.0s | Think time do script thêm. |
-| `http_req_duration` | avg 1.15s, p95 2.61s, p99 2.90s, max 3.30s | Request-level latency. |
-| `ramping_flow_duration_ms` | avg 1.53s, p95 2.80s, p99 3.18s, max 3.60s | Full user-loop latency. |
-| `iteration_duration` | avg 2.53s, p95 3.80s, p99 4.18s, max 4.60s | Bao gồm flow + think/sleep. |
+| `checks` | 100.00% (503/503) | Check status/contract pass bao nhiêu. |
+| `http_req_failed` | 0.00% (0/503) | HTTP/API failure theo k6. |
+| `ramping_active_iterations_failed` | 0 | User-loop failures của case. |
+| `iterations` | 301 (3.60/s) | Output, không phải target. |
+| `http_reqs` | 503 (6.02/s) | Tổng API calls thật. |
+| `ramping_active_iterations` | 301 | Completed user loops. |
+| `ramping_api_calls_total` | 503 | Custom API counter. |
+| `ramping_sleep_seconds` | 301.0s | Think time do script thêm. |
+| `http_req_duration` | avg 975ms, p95 2.51s, p99 2.90s, max 3.10s | Request-level latency. |
+| `ramping_flow_duration_ms` | avg 1.65s, p95 2.90s, p99 3.20s, max 3.40s | Full user-loop latency. |
+| `iteration_duration` | avg 2.65s, p95 3.90s, p99 4.20s, max 4.40s | Bao gồm flow + think/sleep. |
 
 Threshold failures:
 
-- checks 75.00% <= required 99%
-- ramping_active_iterations_failed 105 >= limit 15
+Không có threshold failure.
 
 ### Request breakdown thật
 
 | Operation | Method | Status | Count | Tỷ lệ trên total HTTP |
 | --- | --- | ---: | ---: | ---: |
-| `reporting_ramp_dashboard` | GET | 200 | 315 | 75.00% |
-| `reporting_ramp_create_job` | POST | 202 | 105 | 25.00% |
+| `reporting_ramp_dashboard` | GET | 200 | 301 | 59.84% |
+| `reporting_ramp_create_job` | POST | 202 | 101 | 20.08% |
+| `reporting_ramp_job_status` | GET | 200 | 101 | 20.08% |
 
 ### Phân tích từ summary -> 3 chart
 
 #### 1. Response time chart
 
-HTTP p95 2.61s, p99 2.90s; flow p95 2.80s. Reporting là workload heavy nên latency cao, nhưng lỗi chính là status expectation mismatch chứ không phải HTTP transport failure (`http_req_failed=0`).
-
-Chart aggregates của run:
+Reporting vẫn heavy, p95 tính bằng giây là expected với report jobs. Quan trọng là status contract 202 đã được xử lý đúng.
 
 | Aggregate | Value |
 | --- | ---: |
-| Response-time points | 420 |
-| Avg của các window avg | 1.15s |
-| Max window p95 | 3.30s |
-| Max window p99 | 3.30s |
-| Max request window | 3.30s |
-| Windows p95 > 100ms | 382 |
-| Windows p95 > 500ms | 239 |
+| Response-time points | 503 |
+| Avg của các window avg | 975ms |
+| Max window p95 | 3.10s |
+| Max window p99 | 3.10s |
+| Max request window | 3.10s |
+| Windows p95 > 100ms | 427 |
+| Windows p95 > 500ms | 241 |
 
 #### 2. Execution timeline chart
 
-Execution timeline có 105 failed iterations đúng bằng số `reporting_ramp_create_job` calls. Không có `reporting_ramp_job_status` trong request breakdown vì script chỉ parse job_id khi `create.ok` true; status 202 làm `create.ok=false`.
+Không còn mismatch 202/200. Request breakdown có đủ dashboard -> create_job 202 -> job_status 200.
 
 | Aggregate | Value |
 | --- | ---: |
-| Sum `iterations` buckets | 315 |
-| Sum `http_reqs` buckets | 420 |
-| Peak iter/s bucket | 6 |
-| Peak http_req/s bucket | 9 |
-| Failed-iteration points | 105 |
-| Sum failed iterations | 105 |
-| Peak failed-iteration bucket | 3 |
+| Sum `iterations` buckets | 301 |
+| Sum `http_reqs` buckets | 503 |
+| Peak iter/s bucket | 8 |
+| Peak http_req/s bucket | 12 |
+| Failed-iteration points | 0 |
+| Sum failed iterations | 0 |
+| Peak failed-iteration bucket | 0 |
 
 #### 3. VUs vs iter/s chart
 
-VU series đạt peak 14 VUs, peak iter/s bucket 6 và peak http_req/s bucket 9. Low VU nhưng flow heavy/ready wait làm iter/s thấp — expected với reporting.
+VU shape đạt peak 14 đúng contract. Low iter/s là expected vì report flow và ready wait dài.
 
 | Aggregate | Value |
 | --- | ---: |
 | VU sample points | 83 |
 | VUs min/max series | 1 / 14 |
-| Avg VUs series | 9.60 |
-| Peak iter/s bucket | 6 |
+| Avg VUs series | 9.59 |
+| Peak iter/s bucket | 8 |
 
-### Kết luận riêng của run #44
+### Kết luận contract rerun #55
 
-Run fail vì contract script/backend không khớp ở create report job. Endpoint trả HTTP 202 nhưng helper đang check status 200, nên 105 create-job checks fail và không gọi status endpoint.
-
-BE note:
-
-> BE/script pack cần sửa `rv-05-reporting-ramp.js`: `requestJson(... reporting_ramp_create_job ...)` phải truyền expectedStatus `202` hoặc helper phải cho phép 202. Sau đó script mới parse `data.job_id` và gọi `reporting_ramp_job_status`. Nếu API contract thật là 200 thì backend phải đổi endpoint; nhưng docs/case flow hiện ghi expected 202.
+OK theo contract gốc. Case 05 đã fix đúng lỗi 202 vs 200.
 <!-- REAL_RUN_END -->
 
 ## Đọc dashboard real-time charts cho case 05

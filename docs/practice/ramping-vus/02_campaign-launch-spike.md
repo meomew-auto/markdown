@@ -336,110 +336,107 @@ Case-specific notes:
 - Nếu p95 không recover ở recovery stage, nghi queue/resource saturation.
 
 <!-- REAL_RUN_START -->
-## Real run 2026-06-20 — run #41
+## Contract rerun 2026-06-20 — run #52
 
-Run này dùng default env của case:
+Run này ép đúng contract/tải đã ghi trong tài liệu, kể cả khi backend script default hiện tại đã đổi nhẹ hơn.
 
 ```text
-BASE_URL = http://localhost:80
-K6_CLOUD_HOST = http://localhost:18080
-K6_CLOUD_METRIC_PUSH_INTERVAL = 1s
-K6_CLOUD_AGGREGATION_PERIOD = 1s
-K6_CLOUD_AGGREGATION_WAIT_PERIOD = 2s
+BASE_URL=http://localhost:80
+K6_CLOUD_HOST=http://localhost:18080
+RV_02_START_VUS=1
+RV_02_PRELAUNCH_VUS=6
+RV_02_SPIKE_VUS=36
+RV_02_RECOVERY_VUS=8
+RV_02_DURATION_SCALE=0.25
+RV_02_SLEEP_SECONDS=0.2
 ```
 
 | Item | Value |
 | --- | --- |
 | Script | `rv-02-campaign-launch-spike.js` |
-| Run ID | `41` |
+| Run ID | `52` |
 | Exit code | `99` |
-| Verdict | **FAIL** — Không đạt |
+| Verdict | **FAIL** — Không đạt theo contract gốc |
 | Summary final pushed | true |
 | Finish status | 200 |
 | Expected VU shape | `1 -> 6 -> 36 -> 8 -> 1` |
 | Observed `vus` min/max | 1 / 36 |
 
-### Summary thật của run
+### Summary thật của contract rerun
 
 | Metric | Value | Cách đọc |
 | --- | ---: | --- |
-| `checks` | 86.61% (14972/17285) | Check status/contract pass bao nhiêu. |
-| `http_req_failed` | 13.38% (2313/17285) | HTTP/API failure theo k6. |
-| `ramping_active_iterations_failed` | 2313 | User-loop failures của case. |
-| `iterations` | 6914 (106.22/s) | Output, không phải target. |
-| `http_reqs` | 17285 (265.55/s) | Tổng API calls thật. |
-| `ramping_active_iterations` | 6914 | Completed user loops. |
-| `ramping_api_calls_total` | 17285 | Custom API counter, phải khớp `http_reqs` trong case này. |
-| `ramping_sleep_seconds` | 1382.8s | Think time do script thêm. |
-| `http_req_duration` | avg 1.16ms, p95 3.12ms, p99 3.80ms, max 31.1ms | Request-level latency. |
-| `ramping_flow_duration_ms` | avg 3.05ms, p95 6.00ms, p99 7.00ms, max 48.0ms | Full user-loop latency. |
-| `iteration_duration` | avg 203ms, p95 206ms, p99 208ms, max 249ms | Bao gồm flow + think/sleep. |
+| `checks` | 87.90% (10782/12265) | Check status/contract pass bao nhiêu. |
+| `http_req_failed` | 12.09% (1483/12265) | HTTP/API failure theo k6. |
+| `ramping_active_iterations_failed` | 1483 | User-loop failures của case. |
+| `iterations` | 4906 (75.33/s) | Output, không phải target. |
+| `http_reqs` | 12265 (188.33/s) | Tổng API calls thật. |
+| `ramping_active_iterations` | 4906 | Completed user loops. |
+| `ramping_api_calls_total` | 12265 | Custom API counter. |
+| `ramping_sleep_seconds` | 981.2s | Think time do script thêm. |
+| `http_req_duration` | avg 34.4ms, p95 196ms, p99 292ms, max 389ms | Request-level latency. |
+| `ramping_flow_duration_ms` | avg 86.2ms, p95 204ms, p99 299ms, max 390ms | Full user-loop latency. |
+| `iteration_duration` | avg 287ms, p95 404ms, p99 499ms, max 591ms | Bao gồm flow + think/sleep. |
 
 Threshold failures:
 
-- checks 86.61% <= required 98%
-- http_req_failed 13.38% >= limit 2%
-- ramping_active_iterations_failed 2313 >= limit 40
+- checks 87.90% <= required 98%
+- http_req_failed 12.09% >= limit 2%
+- ramping_active_iterations_failed 1483 >= limit 40
 
 ### Request breakdown thật
 
 | Operation | Method | Status | Count | Tỷ lệ trên total HTTP |
 | --- | --- | ---: | ---: | ---: |
-| `campaign_product_detail` | GET | 200 | 6914 | 40.00% |
-| `campaign_landing` | GET | 200 | 4601 | 26.62% |
-| `campaign_cart_add` | POST | 200 | 3457 | 20.00% |
-| `campaign_landing` | GET | 429 | 2313 | 13.38% |
+| `campaign_product_detail` | GET | 200 | 4906 | 40.00% |
+| `campaign_landing` | GET | 200 | 3423 | 27.91% |
+| `campaign_cart_add` | POST | 200 | 2453 | 20.00% |
+| `campaign_landing` | GET | 429 | 1483 | 12.09% |
 
 ### Phân tích từ summary -> 3 chart
 
 #### 1. Response time chart
 
-Latency rất thấp: HTTP p95 3.12ms, p99 3.80ms. Điều này cho thấy service trả 429 nhanh, không phải bị slow timeout.
-
-Chart aggregates của run:
+HTTP p95 tăng lên mức cao hơn các case browse nhẹ và có 1483 request `campaign_landing` trả 429. Đây là lỗi rõ của campaign landing dưới spike 36 VUs + sleep 0.2s.
 
 | Aggregate | Value |
 | --- | ---: |
-| Response-time points | 4276 |
-| Avg của các window avg | 1.44ms |
-| Max window p95 | 31.0ms |
-| Max window p99 | 31.0ms |
-| Max request window | 31.1ms |
-| Windows p95 > 100ms | 0 |
+| Response-time points | 4161 |
+| Avg của các window avg | 36.6ms |
+| Max window p95 | 390ms |
+| Max window p99 | 390ms |
+| Max request window | 389ms |
+| Windows p95 > 100ms | 850 |
 | Windows p95 > 500ms | 0 |
 
 #### 2. Execution timeline chart
 
-Execution timeline có 490 failed-iteration points, tổng 2313 failed iterations, peak failed bucket 178 tại 2026-06-20T06:01:38Z. Lỗi đúng vào spike shape 36 VUs.
+Execution timeline cho thấy failed iterations = 1483, đúng bằng số `campaign_landing` 429. Đây không còn là lỗi nhỏ; checks và http_req_failed đều fail xa threshold.
 
 | Aggregate | Value |
 | --- | ---: |
-| Sum `iterations` buckets | 6914 |
-| Sum `http_reqs` buckets | 17285 |
-| Peak iter/s bucket | 180 |
-| Peak http_req/s bucket | 450 |
-| Failed-iteration points | 490 |
-| Sum failed iterations | 2313 |
-| Peak failed-iteration bucket | 178 |
+| Sum `iterations` buckets | 4906 |
+| Sum `http_reqs` buckets | 12265 |
+| Peak iter/s bucket | 151 |
+| Peak http_req/s bucket | 375 |
+| Failed-iteration points | 341 |
+| Sum failed iterations | 1483 |
+| Peak failed-iteration bucket | 115 |
 
 #### 3. VUs vs iter/s chart
 
-VU series đạt đúng peak 36 VUs, peak iter/s bucket 180 và peak http_req/s bucket 450. Load shape đúng; product landing bị rate-limit quá mức cho campaign spike.
+VU shape đạt peak 36 đúng contract gốc. Khi chạy đúng shape 1 -> 6 -> 36 -> 8 -> 1, product landing chưa chịu được tải spike như tài liệu đề ra.
 
 | Aggregate | Value |
 | --- | ---: |
 | VU sample points | 65 |
 | VUs min/max series | 1 / 36 |
-| Avg VUs series | 21.63 |
-| Peak iter/s bucket | 180 |
+| Avg VUs series | 21.60 |
+| Peak iter/s bucket | 151 |
 
-### Kết luận riêng của run #41
+### Kết luận contract rerun #52
 
-Run fail nặng ở campaign landing. `campaign_product_detail` và `campaign_cart_add` đều 200, nhưng `campaign_landing` có 2313 request 429.
-
-BE note:
-
-> BE cần xử lý `GET /api/sim/products?...campaign=flash`/operation `campaign_landing`. Default case chỉ cho phép http_req_failed <2% và failed iterations <40, nhưng thực tế 13.38% HTTP failed và 2313 failed iterations. Nếu muốn dạy spike throttling thì tạo case riêng/đổi expected 429; còn case này đang mô tả campaign launch phải pass ở mức default.
+Chưa OK theo contract gốc. Trước đó default mới 24 VUs + sleep 0.8s pass, nhưng khi ép lại contract gốc 36 VUs + sleep 0.2s thì vẫn fail nặng. Cần BE quyết định: sửa capacity/rate-limit để pass contract cũ, hoặc chính thức đổi tài liệu contract xuống tải mới.
 <!-- REAL_RUN_END -->
 
 ## Đọc dashboard real-time charts cho case 02

@@ -129,39 +129,40 @@ Caveat:
 | Dashboard | VU shape, iter/s shape, response time by operation, failure clusters |
 
 <!-- LATEST_RERUN_START -->
-## Latest rerun snapshot — 2026-06-20
+## Latest contract rerun snapshot — 2026-06-20
 
-Rerun command pattern used for all cases:
+Rerun này ép đúng contract gốc bằng env overrides. Đặc biệt:
+
+```text
+rv-02: RV_02_SPIKE_VUS=36, RV_02_SLEEP_SECONDS=0.2
+rv-07: RV_07_PEAK_VUS=30, RV_07_SLEEP_SECONDS=0.5
+```
+
+Command pattern:
 
 ```powershell
 cd E:\Projects\k6\k6-metrics-server
 $env:BASE_URL = "http://localhost:80"
 $env:K6_CLOUD_HOST = "http://localhost:18080"
 $env:K6_CLOUD_TOKEN = "student-token-1234567890"
-$env:K6_CLOUD_METRIC_PUSH_INTERVAL = "1s"
-$env:K6_CLOUD_AGGREGATION_PERIOD = "1s"
-$env:K6_CLOUD_AGGREGATION_WAIT_PERIOD = "2s"
+# set RV_NN_* overrides theo từng case
 k6 run -o cloud --summary-export <tmp.json> --summary-trend-stats "avg,min,med,max,p(90),p(95),p(99)" .\load-target\k6\ramping-vus\<script>.js
 ```
 
-| Case | Run ID | Exit | Verdict | Key summary |
-| --- | ---: | ---: | --- | --- |
-| 01 Daily traffic curve | 40 | 99 | **FAIL** | checks 96.54%, http_failed 3.45%, failed_iters 254 |
-| 02 Campaign launch spike | 41 | 99 | **FAIL** | checks 86.61%, http_failed 13.38%, failed_iters 2313 |
-| 03 Login wave | 42 | 0 | **PASS** | checks 100.00%, http_failed 0.00%, failed_iters 0 |
-| 04 Checkout ramp | 43 | 0 | **PASS** | checks 100.00%, http_failed 0.00%, failed_iters 0 |
-| 05 Reporting ramp | 44 | 99 | **FAIL** | checks 75.00%, http_failed 0.00%, failed_iters 105 |
-| 06 Cart recovery wave | 45 | 0 | **PASS** | checks 100.00%, http_failed 0.00%, failed_iters 0 |
-| 07 Production traffic curve | 46 | 99 | **FAIL** | checks 98.41%, http_failed 1.58%, failed_iters 66 |
+| Case | Run | Contract override | Exit | Verdict | Key summary |
+| --- | ---: | --- | ---: | --- | --- |
+| 01 Daily traffic curve | 51 | `RV_01_AFTERNOON_VUS=12; RV_01_MORNING_VUS=8; RV_01_PEAK_VUS=24; RV_01_SLEEP_SECONDS=0.4; RV_01_START_VUS=2` | 99 | **FAIL** | checks 99.59%, http_failed 0.40%, failed_iters 29 |
+| 02 Campaign launch spike | 52 | `RV_02_PRELAUNCH_VUS=6; RV_02_RECOVERY_VUS=8; RV_02_SLEEP_SECONDS=0.2; RV_02_SPIKE_VUS=36; RV_02_START_VUS=1` | 99 | **FAIL** | checks 87.90%, http_failed 12.09%, failed_iters 1483 |
+| 03 Login wave | 53 | `RV_03_COOLDOWN_VUS=5; RV_03_MID_VUS=12; RV_03_PEAK_VUS=28; RV_03_SLEEP_SECONDS=0.5; RV_03_START_VUS=1` | 0 | **PASS** | checks 100.00%, http_failed 0.00%, failed_iters 0 |
+| 04 Checkout ramp | 54 | `RV_04_MID_VUS=8; RV_04_PEAK_VUS=18; RV_04_SLEEP_SECONDS=0.8; RV_04_START_VUS=1` | 0 | **PASS** | checks 100.00%, http_failed 0.00%, failed_iters 0 |
+| 05 Reporting ramp | 55 | `RV_05_MID_VUS=5; RV_05_PEAK_VUS=14; RV_05_SLEEP_SECONDS=1; RV_05_START_VUS=1` | 0 | **PASS** | checks 100.00%, http_failed 0.00%, failed_iters 0 |
+| 06 Cart recovery wave | 56 | `RV_06_LATE_VUS=8; RV_06_PEAK_VUS=22; RV_06_SLEEP_SECONDS=0.6; RV_06_START_VUS=1` | 0 | **PASS** | checks 100.00%, http_failed 0.00%, failed_iters 0 |
+| 07 Production traffic curve | 57 | `RV_07_LATE_VUS=8; RV_07_MID_VUS=12; RV_07_PEAK_VUS=30; RV_07_SLEEP_SECONDS=0.5; RV_07_START_VUS=2` | 0 | **PASS** | checks 100.00%, http_failed 0.00%, failed_iters 0 |
 
-Backend/script issues found in this rerun:
+Kết luận:
 
-| Area | Evidence | Suggested fix |
-| --- | --- | --- |
-| Products list rate-limit/capacity | Cases 01/02/07 have `GET /api/sim/products` 429 rows. | Decide contract: if default practice should pass, raise/tune product list limit/cache; if 429 is intentional, change expected status/threshold and docs. |
-| Reporting job status contract | Case 05 `reporting_ramp_create_job` returns 202 but script checks 200. | Update `rv-05-reporting-ramp.js` to pass expected status 202 to `requestJson`, then parse `data.job_id` and execute status check. |
-
-Use the per-case `Real run` section for detailed summary -> 3 chart analysis.
+- Nếu mục tiêu là **contract gốc trong docs**, hiện **case 01 và 02 chưa OK**.
+- Nếu mục tiêu là **backend script default mới**, các case đã nhẹ hơn và có thể pass, nhưng đó không phải contract ban đầu của tài liệu.
 <!-- LATEST_RERUN_END -->
 
 ## Cách đọc kết quả chung
