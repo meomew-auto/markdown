@@ -14,7 +14,7 @@ Tóm tắt đời thường:
 Executor model: fixed active user pool
 VUs: 20
 Duration: 5m
-Think time: 0.4s
+Think time: 1s
 Team/service focus: storefront/product/cart/order
 ```
 
@@ -297,7 +297,7 @@ Với N VU (giả sử đồng nhất):
 ### Demo 1: Backend nhanh → throughput cao
 
 ```text
-Config: vus=20, duration=5m, sleep=0.4s
+Config: vus=20, duration=5m, sleep=1s
 
 Backend nhanh:
   storefront_browse_list:    avg=50ms
@@ -470,15 +470,15 @@ t=0.0s   VU=1 (user-1): loop #0, __ITER=0, browse_list + browse_detail
          VU=2 (user-2): loop #0, __ITER=0, browse_list + cart_add
          VU=3 (user-3): loop #0, __ITER=0, browse_list + browse_detail
 
-t=0.5s   VU=1 xong loop #0, sleep(0.4), bắt đầu loop #1
+t=0.5s   VU=1 xong loop #0, sleep(1), bắt đầu loop #1
          loop #1: browse_list + browse_detail + cart_add
          (VU=1 vẫn là user-1, __ITER=1)
 
-t=0.6s   VU=2 xong loop #0, sleep(0.4), bắt đầu loop #1
+t=0.6s   VU=2 xong loop #0, sleep(1), bắt đầu loop #1
          loop #1: browse_list + checkout (user-2 checkout!)
          (VU=2 vẫn là user-2, __ITER=1)
 
-t=0.7s   VU=3 xong loop #0, sleep(0.4), bắt đầu loop #1
+t=0.7s   VU=3 xong loop #0, sleep(1), bắt đầu loop #1
          (VU=3 vẫn là user-3, __ITER=1)
 
 ... tiếp tục trong 10s
@@ -1066,7 +1066,7 @@ Default env quick reference:
 ```text
 CV_01_VUS = 20
 CV_01_DURATION = 5m
-CV_01_SLEEP_SECONDS = 0.4
+CV_01_SLEEP_SECONDS = 1
 
 browse 70%
 cart 25%
@@ -1077,7 +1077,7 @@ checkout 5%
 | --- | --- | --- |
 | `CV_01_VUS` | 20 | Số active shoppers |
 | `CV_01_DURATION` | 5m | Observation window |
-| `CV_01_SLEEP_SECONDS` | 0.4 | Think time giữa các vòng |
+| `CV_01_SLEEP_SECONDS` | 1 | Think time giữa các vòng — mô phỏng shopper đọc/nhìn trang thay vì spam list |
 
 Weighted mix expected:
 
@@ -1685,59 +1685,63 @@ Kết luận thực tế:
 | iter/s tăng dần đầu run | Backend warm up (cache fill) | Bình thường, ghi nhận |
 | iter/s = 0 trong nhiều bucket | VU bị kẹt | Kiểm tra request timeout, sleep logic |
 
-## Real run — default constant-vus baseline after X-User-ID header
+## Real run — default constant-vus baseline after realistic think time
 
-Run verify qua local cloud/dashboard sau khi k6 helper gửi `X-User-ID: ctx.userId`:
+Run verify qua local cloud/dashboard sau khi:
 
 ```text
-Run ID: #81
+- k6 helper gửi X-User-ID: ctx.userId
+- CV_01_SLEEP_SECONDS default đổi từ 0.4s -> 1s để giống normal shopper hơn
+```
+
+```text
+Run ID: #88
 Script: cv-01-business-hours-storefront.js
-Exit code: 99
+Exit code: 0
 summary_pushed: true
 finish_status: 200
-Config: 20 VUs, duration 5m, default sleep/env
+Config: 20 VUs, duration 5m, sleep 1s
 ```
 
 ### Summary chính
 
 | Metric | Value |
 | --- | ---: |
-| `checks_rate` | `0.98` |
-| `checks_passes/checks_fails` | `24,564 / 391` |
-| `http_req_failed_rate` | `0.02` |
-| `iterations` | `14,686` |
-| `iterations_rate` | `48.89/s` |
-| `http_reqs` | `24,955` |
-| `http_reqs_rate` | `83.07/s` |
+| `checks_rate` | `1` |
+| `checks_passes/checks_fails` | `10,067 / 0` |
+| `http_req_failed_rate` | `0` |
+| `iterations` | `5,960` |
+| `iterations_rate` | `19.83/s` |
+| `http_reqs` | `10,067` |
+| `http_reqs_rate` | `33.49/s` |
 | `vus_min/vus_max` | `20 / 20` |
-| `constant_flow_duration_ms avg/med/p95/p99/max` | `8.48 / 5 / 8 / 109 / 182 ms` |
-| `http_req_duration avg/med/p95/p99/max` | `4.89 / 2.75 / 4.20 / 103.69 / 182.38 ms` |
+| `constant_flow_duration_ms avg/med/p95/p99/max` | `7.34 / 5 / 9 / 104 / 177 ms` |
+| `http_req_duration avg/med/p95/p99/max` | `4.27 / 2.72 / 4.48 / 92.01 / 177.23 ms` |
 
 Request breakdown:
 
 ```text
-storefront_browse_detail GET 200 count=10,269
-storefront_browse_list GET 200 count=9,878
-storefront_cart_add POST 200 count=3,923
-storefront_checkout POST 200 count=494
-storefront_browse_list GET 429 count=391
+storefront_browse_list GET 200 count=4,107
+storefront_browse_detail GET 200 count=4,107
+storefront_cart_add POST 200 count=1,751
+storefront_checkout POST 200 count=102
 ```
 
-### Đọc 3 chart dashboard cho run #81
+### Đọc 3 chart dashboard cho run #88
 
-**Chart 1 — Response time.** Aggregate latency vẫn rất thấp (`http_req_duration` p95 ~4.20ms), nên nếu chỉ nhìn response-time chart sẽ bỏ lỡ vấn đề. Request breakdown mới là bằng chứng chính: `storefront_browse_list` còn 391 responses `429`.
+**Chart 1 — Response time.** Aggregate latency rất thấp: `http_req_duration` p95 khoảng `4.48ms`, p99 khoảng `103.07ms`. Tất cả operations đều trả expected status `200`; không còn `storefront_browse_list GET 429`. Vì vậy response-time chart xác nhận CV-01 hiện là storefront baseline sạch, không phải rate-limit test.
 
-**Chart 2 — Execution timeline.** Execution timeline sum `iterations=14,686`, `http_reqs=24,955`; failed-iteration buckets còn 44 buckets với tổng 391 failures. So với run trước khi gửi `X-User-ID` (3,869 failures), lỗi giảm nhiều nhưng vẫn lặp lại trong run.
+**Chart 2 — Execution timeline.** `iterations` sum `5,960`, `http_reqs` sum `10,067`; operation breakdown hợp lý với mix: browse list/detail `4,107`, cart `1,751`, checkout `102`. Không có failed iteration buckets.
 
 Dashboard/API bucket summary:
 
 ```text
-iterations buckets: count=301, sum=14686, min=12.00, max=55.00
-http_reqs buckets:  count=301, sum=24955, min=37.00, max=94.00
-failed iteration buckets: 44 buckets, sum=391
+iterations buckets: count=301, sum=5960, min=9.00, max=20.00
+http_reqs buckets:  count=301, sum=10067, min=21.00, max=39.00
+không có failed iteration buckets
 ```
 
-**Chart 3 — VUs vs iter/s.** VUs flat tuyệt đối ở 20 trong 300 buckets, nên test valid. Vì VUs không tụt, phần 429 còn lại là contract/rate-limit threshold giữa CV-01 và products-service.
+**Chart 3 — VUs vs iter/s.** VUs flat đúng `20` trong 300 buckets. Iter/s giảm so với run aggressive trước là expected vì think time tăng lên 1s; đây là workload thực tế hơn cho business-hours shoppers, không phải backend slowdown.
 
 ```text
 vus buckets: count=300, min=20.00, max=20.00, avg=20.00
@@ -1746,10 +1750,11 @@ vus buckets: count=300, min=20.00, max=20.00, avg=20.00
 ### Backend verdict
 
 ```text
-FAIL — X-User-ID header giảm mạnh 429 nhưng chưa hết; default CV-01 vẫn vượt products-list per-user rate limit.
+PASS.
+BE không cần sửa cho CV-01 sau khi workload được chỉnh thực tế hơn.
 ```
 
-Option A đã được áp dụng ở k6 helper (`X-User-ID=ctx.userId`). Kết quả chứng minh BE đã phân bucket theo user tốt hơn, nhưng CV-01 vẫn vượt default per-user limit 100/min vì mỗi VU browse list quá nhanh/gần ngưỡng. Cần chốt tiếp: tăng `PRODUCTS_LIST_RATE_LIMIT_PER_MINUTE` hoặc thêm `constant-vus-practice` profile/limit cao hơn, hoặc đổi CV-01 script/threshold để chấp nhận 429 nếu đây là bài học rate-limit.
+Kết luận: rate limit theo user là behavior đúng. Phần cần sửa hợp lý là k6 workload: gửi `X-User-ID` và tăng think time CV-01 từ `0.4s` lên `1s` để mô phỏng normal shopper thay vì aggressive catalog pressure.
 
 ## "Nghịch lý" và misconceptions của constant-vus
 

@@ -175,11 +175,12 @@ summary-final POST=/v1/tests/<run_id>/summary-final
 finish POST=/v1/tests/<run_id> {"status":"finished"}
 ```
 
-Important contract update for the latest run:
+Important contract/workload updates for the latest run:
 
 ```text
 constant-vus common request helper now sends X-User-ID: ctx.userId when userId is present.
 This maps simulated users to products-service rate-limit identity instead of falling back to ClientIP.
+CV-01 default think time is now 1s, making business-hours storefront behave like normal shoppers instead of catalog pressure.
 ```
 
 Collected files for audit/debug:

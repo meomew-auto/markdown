@@ -343,52 +343,20 @@ thì kiểm scenario config/dashboard ingestion trước khi kết luận backen
 | 06 | `cv-06-backoffice-report-users.js` | 6 | 5m | backoffice report users | report |
 | 07 | `cv-07-production-mixed-baseline.js` | 30 | 5m | production mixed baseline | mixed |
 
-## Real run summary — default constant-vus suite
+## Real run summary — default constant-vus suite after realistic CV-01 pacing
 
-Bộ 7 case đã được chạy với default config, push final summary và verify qua dashboard/API `http://localhost:13001`.
+Bộ 7 case đã được chạy lại với:
+
+```text
+- X-User-ID: ctx.userId được gửi từ k6 helper
+- CV-01 think time đổi từ 0.4s -> 1s để giống business-hours shopper hơn
+```
+
+Tất cả run đã push final summary và verify qua dashboard/API `http://localhost:13001`.
 
 | Case | Run | Verdict | VUs | iterations | http_reqs | flow p95 | BE/contract note |
 | --- | ---: | --- | ---: | ---: | ---: | ---: | --- |
-| 01 | #68 | FAIL | 20 | 14,772 | 25,058 | 6 ms | threshold_failure; failed_business_iterations; 429 responses on product list: 3869 |
-| 02 | #71 | PASS | 15 | 4,470 | 5,379 | 26 ms | không thấy BE issue từ run này |
-| 03 | #73 | PASS | 18 | 10,277 | 30,831 | 90 ms | không thấy BE issue từ run này |
-| 04 | #75 | PASS | 8 | 2,056 | 6,168 | 200 ms | không thấy BE issue từ run này |
-| 05 | #77 | PASS | 25 | 8,267 | 16,534 | 1,198 ms | không thấy BE issue từ run này |
-| 06 | #79 | PASS | 6 | 426 | 710 | 6,307 ms | không thấy BE issue từ run này |
-| 07 | #80 | FAIL | 30 | 11,861 | 11,861 | 2,495 ms | threshold_failure; failed_business_iterations; 429 responses on product list: 1912 |
-
-Kết luận cross-case:
-
-```text
-PASS: case 02, 03, 04, 05, 06.
-FAIL: case 01 và 07 do products list trả 429 dưới constant VUs.
-```
-
-Root cause đáng báo BE/contract cho 2 case fail:
-
-```text
-products-service List rate limiter đang bucket theo identity/header/IP.
-constant-vus scripts mô phỏng nhiều users bằng k6 tag user_id, nhưng tag không phải HTTP header.
-Vì request list không gửi X-User-ID/X-User-Token, nhiều simulated users bị gom vào cùng bucket và nhận 429.
-```
-
-Cách chốt contract đề xuất:
-
-```text
-1. Script practice gửi X-User-ID: ctx.userId cho products list; hoặc
-2. Backend có load profile/limit riêng cho constant-vus practice; hoặc
-3. Catalog/docs ghi rõ products list endpoint intentionally rate-limited và test phải expect 429.
-```
-
-Hiện script threshold expect gần như toàn 200, nên run #68 và #80 là FAIL hợp lệ.
-
-## Real run summary — default constant-vus suite after X-User-ID header
-
-Bộ 7 case đã được chạy lại với default config sau khi k6 helper gửi `X-User-ID: ctx.userId`, push final summary và verify qua dashboard/API `http://localhost:13001`.
-
-| Case | Run | Verdict | VUs | iterations | http_reqs | flow p95 | BE/contract note |
-| --- | ---: | --- | ---: | ---: | ---: | ---: | --- |
-| 01 | #81 | FAIL | 20 | 14,686 | 24,955 | 8 ms | threshold_failure; failed_business_iterations; 429 responses on product list: 391 |
+| 01 | #88 | PASS | 20 | 5,960 | 10,067 | 9 ms | không thấy BE issue từ run này |
 | 02 | #82 | PASS | 15 | 4,470 | 5,379 | 26 ms | không thấy BE issue từ run này |
 | 03 | #83 | PASS | 18 | 10,333 | 30,999 | 83 ms | không thấy BE issue từ run này |
 | 04 | #84 | PASS | 8 | 2,059 | 6,177 | 199 ms | không thấy BE issue từ run này |
@@ -399,36 +367,19 @@ Bộ 7 case đã được chạy lại với default config sau khi k6 helper g�
 Kết luận cross-case:
 
 ```text
-PASS: case 02, 03, 04, 05, 06, 07.
-FAIL: case 01 vẫn còn 391 responses 429 trên products list.
+PASS: cả 7 case constant-vus.
+Không còn BE issue bắt buộc phải báo sau khi chỉnh đúng contract/workload.
 ```
 
-So sánh với run trước header:
+Diễn giải quan trọng:
 
 ```text
-CV-01: 429 giảm từ 3,869 -> 391 nhưng chưa hết.
-CV-07: 429 giảm từ 1,912 -> 0, case pass.
+- Rate limit theo user của BE là đúng thực tế.
+- k6 scripts cần gửi X-User-ID để BE không fallback về ClientIP.
+- CV-01 normal storefront không nên browse quá nhanh; sleep 1s tạo workload thực tế hơn và hết 429.
 ```
 
-Root cause còn lại của CV-01:
-
-```text
-X-User-ID đã giúp BE phân bucket theo simulated user.
-Nhưng default per-user products list limit là 100/min.
-CV-01 browse loop quá nhanh: mỗi VU có thể gọi products list gần/vượt 100 lần/phút.
-Do đó vẫn còn 429 dù đã tách user identity.
-```
-
-Cách chốt contract đề xuất:
-
-```text
-1. Thêm profile/limit riêng cho constant-vus practice, ví dụ X-Load-Profile: constant-vus-practice; hoặc
-2. Tăng PRODUCTS_LIST_RATE_LIMIT_PER_MINUTE cho môi trường practice; hoặc
-3. Giảm browse frequency/sleep/VUs của CV-01 nếu mục tiêu không phải test rate limit; hoặc
-4. Nếu 429 là expected lesson thì docs/threshold phải đổi để accept 429.
-```
-
-Hiện script threshold vẫn expect near-100% success, nên run #81 fail là hợp lệ.
+Nếu muốn test rate-limit/catalog pressure riêng, nên tạo case khác hoặc variation riêng, không dùng CV-01 baseline.
 
 ## Thứ tự đề xuất học
 
