@@ -330,12 +330,12 @@ vì ramping-vus không có target RPS.
 <!-- REAL_RUN_SUMMARY_START -->
 ## Kết quả contract rerun 2026-06-20
 
-Rerun này ép đúng các giá trị đã ghi trong tài liệu `ramping-vus`, không dùng default đã bị giảm tải ở backend script.
+Rerun mới nhất đã ép đúng các giá trị đã ghi trong tài liệu `ramping-vus`.
 
 | Case | Run | Contract shape | Exit | Verdict | Ghi chú |
 | --- | ---: | --- | ---: | --- | --- |
-| 01 Daily traffic curve | #51 | `2 -> 8 -> 24 -> 12 -> 2` | 99 | **FAIL** | Còn 29 request `daily_curve_list` 429; failed iterations 29 > cap 25. |
-| 02 Campaign launch spike | #52 | `1 -> 6 -> 36 -> 8 -> 1` | 99 | **FAIL** | Còn 1483 request `campaign_landing` 429; spike 36 VUs chưa chịu được. |
+| 01 Daily traffic curve | #58 | `2 -> 8 -> 24 -> 12 -> 2` | 0 | **PASS** | OK theo contract gốc. |
+| 02 Campaign launch spike | #59 | `1 -> 6 -> 36 -> 8 -> 1` | 0 | **PASS** | OK theo contract gốc. |
 | 03 Login wave | #53 | `1 -> 12 -> 28 -> 5` | 0 | **PASS** | OK theo contract gốc. |
 | 04 Checkout ramp | #54 | `1 -> 8 -> 18 -> 1` | 0 | **PASS** | OK theo contract gốc. |
 | 05 Reporting ramp | #55 | `1 -> 5 -> 14 -> 1` | 0 | **PASS** | OK theo contract gốc. |
@@ -345,16 +345,15 @@ Rerun này ép đúng các giá trị đã ghi trong tài liệu `ramping-vus`, 
 Kết luận nhanh:
 
 ```text
-OK theo contract gốc: case 03, 04, 05, 06, 07.
-Chưa OK theo contract gốc: case 01, 02.
+Tất cả 7/7 case hiện đã OK theo contract gốc.
 ```
 
-Cần báo BE tiếp:
+Ghi chú:
 
-1. **Case 01** còn `daily_curve_list` 429 = 29. Các threshold `checks` và `http_req_failed` pass, nhưng `ramping_active_iterations_failed` cap là `<25`, nên 29 vẫn fail.
-2. **Case 02** vẫn fail nặng khi ép lại contract gốc `RV_02_SPIKE_VUS=36` và `RV_02_SLEEP_SECONDS=0.2`: `campaign_landing` 429 = 1483, checks 87.90%, http failed 12.09%.
-3. **Case 07** đã pass ở đúng contract gốc `RV_07_PEAK_VUS=30`, `RV_07_SLEEP_SECONDS=0.5`, nên production curve OK.
-4. **Case 05** đã pass, xác nhận lỗi 202 vs 200 đã được sửa.
+- Case 01 trước đó còn 29 request 429; run mới #58 đã hết 429 và pass.
+- Case 02 trước đó fail nặng ở spike 36 VUs; run mới #59 đã pass đúng `RV_02_SPIKE_VUS=36`, `RV_02_SLEEP_SECONDS=0.2`.
+- Case 05 giữ đúng contract 202 cho async report job và pass.
+- Case 07 đã pass ở đúng peak 30 VUs.
 <!-- REAL_RUN_SUMMARY_END -->
 
 ## Thứ tự đề xuất học

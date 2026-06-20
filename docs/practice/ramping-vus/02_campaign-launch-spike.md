@@ -336,9 +336,9 @@ Case-specific notes:
 - Nếu p95 không recover ở recovery stage, nghi queue/resource saturation.
 
 <!-- REAL_RUN_START -->
-## Contract rerun 2026-06-20 — run #52
+## Contract rerun 2026-06-20 — run #59
 
-Run này ép đúng contract/tải đã ghi trong tài liệu, kể cả khi backend script default hiện tại đã đổi nhẹ hơn.
+Run này ép đúng contract/tải đã ghi trong tài liệu, sau lần BE fix mới nhất.
 
 ```text
 BASE_URL=http://localhost:80
@@ -354,9 +354,9 @@ RV_02_SLEEP_SECONDS=0.2
 | Item | Value |
 | --- | --- |
 | Script | `rv-02-campaign-launch-spike.js` |
-| Run ID | `52` |
-| Exit code | `99` |
-| Verdict | **FAIL** — Không đạt theo contract gốc |
+| Run ID | `59` |
+| Exit code | `0` |
+| Verdict | **PASS** — Đạt theo contract gốc |
 | Summary final pushed | true |
 | Finish status | 200 |
 | Expected VU shape | `1 -> 6 -> 36 -> 8 -> 1` |
@@ -366,77 +366,74 @@ RV_02_SLEEP_SECONDS=0.2
 
 | Metric | Value | Cách đọc |
 | --- | ---: | --- |
-| `checks` | 87.90% (10782/12265) | Check status/contract pass bao nhiêu. |
-| `http_req_failed` | 12.09% (1483/12265) | HTTP/API failure theo k6. |
-| `ramping_active_iterations_failed` | 1483 | User-loop failures của case. |
-| `iterations` | 4906 (75.33/s) | Output, không phải target. |
-| `http_reqs` | 12265 (188.33/s) | Tổng API calls thật. |
-| `ramping_active_iterations` | 4906 | Completed user loops. |
-| `ramping_api_calls_total` | 12265 | Custom API counter. |
-| `ramping_sleep_seconds` | 981.2s | Think time do script thêm. |
-| `http_req_duration` | avg 34.4ms, p95 196ms, p99 292ms, max 389ms | Request-level latency. |
-| `ramping_flow_duration_ms` | avg 86.2ms, p95 204ms, p99 299ms, max 390ms | Full user-loop latency. |
-| `iteration_duration` | avg 287ms, p95 404ms, p99 499ms, max 591ms | Bao gồm flow + think/sleep. |
+| `checks` | 100.00% (11655/11655) | Check status/contract pass bao nhiêu. |
+| `http_req_failed` | 0.00% (0/11655) | HTTP/API failure theo k6. |
+| `ramping_active_iterations_failed` | 0 | User-loop failures của case. |
+| `iterations` | 4662 (71.52/s) | Output, không phải target. |
+| `http_reqs` | 11655 (178.81/s) | Tổng API calls thật. |
+| `ramping_active_iterations` | 4662 | Completed user loops. |
+| `ramping_api_calls_total` | 11655 | Custom API counter. |
+| `ramping_sleep_seconds` | 932.4s | Think time do script thêm. |
+| `http_req_duration` | avg 40.4ms, p95 197ms, p99 294ms, max 399ms | Request-level latency. |
+| `ramping_flow_duration_ms` | avg 101ms, p95 205ms, p99 301ms, max 407ms | Full user-loop latency. |
+| `iteration_duration` | avg 302ms, p95 405ms, p99 501ms, max 608ms | Bao gồm flow + think/sleep. |
 
 Threshold failures:
 
-- checks 87.90% <= required 98%
-- http_req_failed 12.09% >= limit 2%
-- ramping_active_iterations_failed 1483 >= limit 40
+Không có threshold failure.
 
 ### Request breakdown thật
 
 | Operation | Method | Status | Count | Tỷ lệ trên total HTTP |
 | --- | --- | ---: | ---: | ---: |
-| `campaign_product_detail` | GET | 200 | 4906 | 40.00% |
-| `campaign_landing` | GET | 200 | 3423 | 27.91% |
-| `campaign_cart_add` | POST | 200 | 2453 | 20.00% |
-| `campaign_landing` | GET | 429 | 1483 | 12.09% |
+| `campaign_product_detail` | GET | 200 | 4662 | 40.00% |
+| `campaign_landing` | GET | 200 | 4662 | 40.00% |
+| `campaign_cart_add` | POST | 200 | 2331 | 20.00% |
 
 ### Phân tích từ summary -> 3 chart
 
 #### 1. Response time chart
 
-HTTP p95 tăng lên mức cao hơn các case browse nhẹ và có 1483 request `campaign_landing` trả 429. Đây là lỗi rõ của campaign landing dưới spike 36 VUs + sleep 0.2s.
+Không còn `campaign_landing` 429 ở contract gốc 36 VUs + sleep 0.2s. HTTP p95 khoảng 197ms và p99 khoảng 294ms, cao hơn case nhẹ nhưng vẫn sạch lỗi.
 
 | Aggregate | Value |
 | --- | ---: |
-| Response-time points | 4161 |
-| Avg của các window avg | 36.6ms |
-| Max window p95 | 390ms |
-| Max window p99 | 390ms |
-| Max request window | 389ms |
-| Windows p95 > 100ms | 850 |
+| Response-time points | 4121 |
+| Avg của các window avg | 41.5ms |
+| Max window p95 | 398ms |
+| Max window p99 | 398ms |
+| Max request window | 399ms |
+| Windows p95 > 100ms | 996 |
 | Windows p95 > 500ms | 0 |
 
 #### 2. Execution timeline chart
 
-Execution timeline cho thấy failed iterations = 1483, đúng bằng số `campaign_landing` 429. Đây không còn là lỗi nhỏ; checks và http_req_failed đều fail xa threshold.
+Execution timeline không còn failed iterations. Request breakdown chỉ có 3 operation status 200: landing, product detail, cart add.
 
 | Aggregate | Value |
 | --- | ---: |
-| Sum `iterations` buckets | 4906 |
-| Sum `http_reqs` buckets | 12265 |
-| Peak iter/s bucket | 151 |
-| Peak http_req/s bucket | 375 |
-| Failed-iteration points | 341 |
-| Sum failed iterations | 1483 |
-| Peak failed-iteration bucket | 115 |
+| Sum `iterations` buckets | 4662 |
+| Sum `http_reqs` buckets | 11655 |
+| Peak iter/s bucket | 121 |
+| Peak http_req/s bucket | 294 |
+| Failed-iteration points | 0 |
+| Sum failed iterations | 0 |
+| Peak failed-iteration bucket | 0 |
 
 #### 3. VUs vs iter/s chart
 
-VU shape đạt peak 36 đúng contract gốc. Khi chạy đúng shape 1 -> 6 -> 36 -> 8 -> 1, product landing chưa chịu được tải spike như tài liệu đề ra.
+VU shape đạt peak 36 đúng contract `1 -> 6 -> 36 -> 8 -> 1`. Đây là lần rerun chứng minh campaign spike gốc đã chịu được tải 36 VUs.
 
 | Aggregate | Value |
 | --- | ---: |
 | VU sample points | 65 |
 | VUs min/max series | 1 / 36 |
-| Avg VUs series | 21.60 |
-| Peak iter/s bucket | 151 |
+| Avg VUs series | 21.58 |
+| Peak iter/s bucket | 121 |
 
-### Kết luận contract rerun #52
+### Kết luận contract rerun #59
 
-Chưa OK theo contract gốc. Trước đó default mới 24 VUs + sleep 0.8s pass, nhưng khi ép lại contract gốc 36 VUs + sleep 0.2s thì vẫn fail nặng. Cần BE quyết định: sửa capacity/rate-limit để pass contract cũ, hoặc chính thức đổi tài liệu contract xuống tải mới.
+OK theo contract gốc. Case 02 đã pass ở đúng `RV_02_SPIKE_VUS=36` và `RV_02_SLEEP_SECONDS=0.2`.
 <!-- REAL_RUN_END -->
 
 ## Đọc dashboard real-time charts cho case 02

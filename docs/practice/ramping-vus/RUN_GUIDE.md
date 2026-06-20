@@ -131,38 +131,23 @@ Caveat:
 <!-- LATEST_RERUN_START -->
 ## Latest contract rerun snapshot — 2026-06-20
 
-Rerun này ép đúng contract gốc bằng env overrides. Đặc biệt:
-
-```text
-rv-02: RV_02_SPIKE_VUS=36, RV_02_SLEEP_SECONDS=0.2
-rv-07: RV_07_PEAK_VUS=30, RV_07_SLEEP_SECONDS=0.5
-```
-
-Command pattern:
-
-```powershell
-cd E:\Projects\k6\k6-metrics-server
-$env:BASE_URL = "http://localhost:80"
-$env:K6_CLOUD_HOST = "http://localhost:18080"
-$env:K6_CLOUD_TOKEN = "student-token-1234567890"
-# set RV_NN_* overrides theo từng case
-k6 run -o cloud --summary-export <tmp.json> --summary-trend-stats "avg,min,med,max,p(90),p(95),p(99)" .\load-target\k6\ramping-vus\<script>.js
-```
+Rerun mới nhất ép đúng contract gốc bằng env overrides. Kết quả: **7/7 PASS**.
 
 | Case | Run | Contract override | Exit | Verdict | Key summary |
 | --- | ---: | --- | ---: | --- | --- |
-| 01 Daily traffic curve | 51 | `RV_01_AFTERNOON_VUS=12; RV_01_MORNING_VUS=8; RV_01_PEAK_VUS=24; RV_01_SLEEP_SECONDS=0.4; RV_01_START_VUS=2` | 99 | **FAIL** | checks 99.59%, http_failed 0.40%, failed_iters 29 |
-| 02 Campaign launch spike | 52 | `RV_02_PRELAUNCH_VUS=6; RV_02_RECOVERY_VUS=8; RV_02_SLEEP_SECONDS=0.2; RV_02_SPIKE_VUS=36; RV_02_START_VUS=1` | 99 | **FAIL** | checks 87.90%, http_failed 12.09%, failed_iters 1483 |
+| 01 Daily traffic curve | 58 | `RV_01_AFTERNOON_VUS=12; RV_01_MORNING_VUS=8; RV_01_PEAK_VUS=24; RV_01_SLEEP_SECONDS=0.4; RV_01_START_VUS=2` | 0 | **PASS** | checks 100.00%, http_failed 0.00%, failed_iters 0 |
+| 02 Campaign launch spike | 59 | `RV_02_PRELAUNCH_VUS=6; RV_02_RECOVERY_VUS=8; RV_02_SLEEP_SECONDS=0.2; RV_02_SPIKE_VUS=36; RV_02_START_VUS=1` | 0 | **PASS** | checks 100.00%, http_failed 0.00%, failed_iters 0 |
 | 03 Login wave | 53 | `RV_03_COOLDOWN_VUS=5; RV_03_MID_VUS=12; RV_03_PEAK_VUS=28; RV_03_SLEEP_SECONDS=0.5; RV_03_START_VUS=1` | 0 | **PASS** | checks 100.00%, http_failed 0.00%, failed_iters 0 |
 | 04 Checkout ramp | 54 | `RV_04_MID_VUS=8; RV_04_PEAK_VUS=18; RV_04_SLEEP_SECONDS=0.8; RV_04_START_VUS=1` | 0 | **PASS** | checks 100.00%, http_failed 0.00%, failed_iters 0 |
 | 05 Reporting ramp | 55 | `RV_05_MID_VUS=5; RV_05_PEAK_VUS=14; RV_05_SLEEP_SECONDS=1; RV_05_START_VUS=1` | 0 | **PASS** | checks 100.00%, http_failed 0.00%, failed_iters 0 |
 | 06 Cart recovery wave | 56 | `RV_06_LATE_VUS=8; RV_06_PEAK_VUS=22; RV_06_SLEEP_SECONDS=0.6; RV_06_START_VUS=1` | 0 | **PASS** | checks 100.00%, http_failed 0.00%, failed_iters 0 |
 | 07 Production traffic curve | 57 | `RV_07_LATE_VUS=8; RV_07_MID_VUS=12; RV_07_PEAK_VUS=30; RV_07_SLEEP_SECONDS=0.5; RV_07_START_VUS=2` | 0 | **PASS** | checks 100.00%, http_failed 0.00%, failed_iters 0 |
 
-Kết luận:
+Các điểm quan trọng:
 
-- Nếu mục tiêu là **contract gốc trong docs**, hiện **case 01 và 02 chưa OK**.
-- Nếu mục tiêu là **backend script default mới**, các case đã nhẹ hơn và có thể pass, nhưng đó không phải contract ban đầu của tài liệu.
+- `rv-02` pass với `RV_02_SPIKE_VUS=36`, `RV_02_SLEEP_SECONDS=0.2`.
+- `rv-07` pass với `RV_07_PEAK_VUS=30`, `RV_07_SLEEP_SECONDS=0.5`.
+- Không còn 429 trong case 01/02 ở run mới nhất.
 <!-- LATEST_RERUN_END -->
 
 ## Cách đọc kết quả chung

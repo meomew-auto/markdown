@@ -337,9 +337,9 @@ Case-specific notes:
 - Nếu iter/s flatten ở peak, đọc `ramping_flow_duration_ms` và operation p95.
 
 <!-- REAL_RUN_START -->
-## Contract rerun 2026-06-20 — run #51
+## Contract rerun 2026-06-20 — run #58
 
-Run này ép đúng contract/tải đã ghi trong tài liệu, kể cả khi backend script default hiện tại đã đổi nhẹ hơn.
+Run này ép đúng contract/tải đã ghi trong tài liệu, sau lần BE fix mới nhất.
 
 ```text
 BASE_URL=http://localhost:80
@@ -355,9 +355,9 @@ RV_01_SLEEP_SECONDS=0.4
 | Item | Value |
 | --- | --- |
 | Script | `rv-01-daily-traffic-curve.js` |
-| Run ID | `51` |
-| Exit code | `99` |
-| Verdict | **FAIL** — Không đạt theo contract gốc |
+| Run ID | `58` |
+| Exit code | `0` |
+| Verdict | **PASS** — Đạt theo contract gốc |
 | Summary final pushed | true |
 | Finish status | 200 |
 | Expected VU shape | `2 -> 8 -> 24 -> 12 -> 2` |
@@ -367,76 +367,75 @@ RV_01_SLEEP_SECONDS=0.4
 
 | Metric | Value | Cách đọc |
 | --- | ---: | --- |
-| `checks` | 99.59% (7208/7237) | Check status/contract pass bao nhiêu. |
-| `http_req_failed` | 0.40% (29/7237) | HTTP/API failure theo k6. |
-| `ramping_active_iterations_failed` | 29 | User-loop failures của case. |
-| `iterations` | 4381 (38.66/s) | Output, không phải target. |
-| `http_reqs` | 7237 (63.87/s) | Tổng API calls thật. |
-| `ramping_active_iterations` | 4381 | Completed user loops. |
-| `ramping_api_calls_total` | 7237 | Custom API counter. |
-| `ramping_sleep_seconds` | 1752.4s | Think time do script thêm. |
-| `http_req_duration` | avg 5.68ms, p95 5.75ms, p99 88.0ms, max 126ms | Request-level latency. |
-| `ramping_flow_duration_ms` | avg 9.54ms, p95 76.0ms, p99 90.0ms, max 126ms | Full user-loop latency. |
-| `iteration_duration` | avg 410ms, p95 476ms, p99 491ms, max 527ms | Bao gồm flow + think/sleep. |
+| `checks` | 100.00% (7329/7329) | Check status/contract pass bao nhiêu. |
+| `http_req_failed` | 0.00% (0/7329) | HTTP/API failure theo k6. |
+| `ramping_active_iterations_failed` | 0 | User-loop failures của case. |
+| `iterations` | 4380 (38.64/s) | Output, không phải target. |
+| `http_reqs` | 7329 (64.66/s) | Tổng API calls thật. |
+| `ramping_active_iterations` | 4380 | Completed user loops. |
+| `ramping_api_calls_total` | 7329 | Custom API counter. |
+| `ramping_sleep_seconds` | 1752.0s | Think time do script thêm. |
+| `http_req_duration` | avg 5.62ms, p95 5.82ms, p99 89.0ms, max 122ms | Request-level latency. |
+| `ramping_flow_duration_ms` | avg 9.52ms, p95 78.0ms, p99 92.0ms, max 121ms | Full user-loop latency. |
+| `iteration_duration` | avg 410ms, p95 478ms, p99 492ms, max 522ms | Bao gồm flow + think/sleep. |
 
 Threshold failures:
 
-- ramping_active_iterations_failed 29 >= limit 25
+Không có threshold failure.
 
 ### Request breakdown thật
 
 | Operation | Method | Status | Count | Tỷ lệ trên total HTTP |
 | --- | --- | ---: | ---: | ---: |
-| `daily_curve_detail` | GET | 200 | 2856 | 39.46% |
-| `daily_curve_list` | GET | 200 | 2827 | 39.06% |
-| `daily_curve_cart_add` | POST | 200 | 1215 | 16.79% |
-| `daily_curve_checkout` | POST | 200 | 310 | 4.28% |
-| `daily_curve_list` | GET | 429 | 29 | 0.40% |
+| `daily_curve_list` | GET | 200 | 2949 | 40.24% |
+| `daily_curve_detail` | GET | 200 | 2949 | 40.24% |
+| `daily_curve_cart_add` | POST | 200 | 1117 | 15.24% |
+| `daily_curve_checkout` | POST | 200 | 314 | 4.28% |
 
 ### Phân tích từ summary -> 3 chart
 
 #### 1. Response time chart
 
-Latency request vẫn ổn, nhưng `daily_curve_list` còn 29 request 429. Vì vậy chart response time không phải bottleneck chính; lỗi là product-list throttling/capacity ở mức nhỏ nhưng vượt cap failed-iteration.
+Latency request ổn và không còn 429. `daily_curve_list`, `daily_curve_detail`, `daily_curve_cart_add`, `daily_curve_checkout` đều status 200. Đây là dấu hiệu BE đã xử lý xong product-list throttling cho daily curve peak 24 VUs.
 
 | Aggregate | Value |
 | --- | ---: |
-| Response-time points | 4302 |
-| Avg của các window avg | 7.99ms |
-| Max window p95 | 126ms |
-| Max window p99 | 126ms |
-| Max request window | 126ms |
-| Windows p95 > 100ms | 5 |
+| Response-time points | 4284 |
+| Avg của các window avg | 8.04ms |
+| Max window p95 | 122ms |
+| Max window p99 | 122ms |
+| Max request window | 122ms |
+| Windows p95 > 100ms | 9 |
 | Windows p95 > 500ms | 0 |
 
 #### 2. Execution timeline chart
 
-Execution timeline cho thấy tổng failed iterations = 29, đúng bằng số `daily_curve_list` 429. `checks` và `http_req_failed` vẫn pass, nhưng custom failed-iteration cap `count<25` fail.
+Execution timeline không còn failed iterations. Tổng request breakdown chỉ có status 200, nên lỗi 29 failed loops ở run #51 đã hết.
 
 | Aggregate | Value |
 | --- | ---: |
-| Sum `iterations` buckets | 4381 |
-| Sum `http_reqs` buckets | 7237 |
-| Peak iter/s bucket | 61 |
-| Peak http_req/s bucket | 104 |
-| Failed-iteration points | 15 |
-| Sum failed iterations | 29 |
-| Peak failed-iteration bucket | 4 |
+| Sum `iterations` buckets | 4380 |
+| Sum `http_reqs` buckets | 7329 |
+| Peak iter/s bucket | 64 |
+| Peak http_req/s bucket | 113 |
+| Failed-iteration points | 0 |
+| Sum failed iterations | 0 |
+| Peak failed-iteration bucket | 0 |
 
 #### 3. VUs vs iter/s chart
 
-VU shape đạt peak 24 đúng contract. Nghĩa là test đã bơm đúng active-user curve; backend/product-list vẫn còn leak 429 khi chạy đúng contract 2 -> 8 -> 24 -> 12 -> 2.
+VU shape đạt peak 24 đúng contract `2 -> 8 -> 24 -> 12 -> 2`. Peak/plateau chạy đúng active-user curve và thresholds đều pass.
 
 | Aggregate | Value |
 | --- | ---: |
 | VU sample points | 113 |
 | VUs min/max series | 2 / 24 |
-| Avg VUs series | 15.87 |
-| Peak iter/s bucket | 61 |
+| Avg VUs series | 15.86 |
+| Peak iter/s bucket | 64 |
 
-### Kết luận contract rerun #51
+### Kết luận contract rerun #58
 
-Chưa OK hoàn toàn theo contract gốc. Case 01 gần pass, nhưng vẫn fail vì `ramping_active_iterations_failed=29` vượt cap 25. Cần BE giảm 429 của `daily_curve_list` thêm ít nhất xuống <25 failed loops, tốt nhất về 0.
+OK theo contract gốc. Case 01 đã pass sau fix mới nhất.
 <!-- REAL_RUN_END -->
 
 ## Đọc dashboard real-time charts cho case 01
