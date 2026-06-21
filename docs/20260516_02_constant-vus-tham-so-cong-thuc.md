@@ -2776,8 +2776,31 @@ peak_rate = vus / iter_time
 ```text
 Quán phở có 4 nhân viên (VU).
 Mỗi nhân viên phục vụ 1 khách mất 2 phút (iter_time).
-=> 1 phút phục vụ được 4 / 2 = 2 khách
-=> 60 giây phục vụ được 60 × 2 = 120 khách (peak rate)
+
+Phân tích từng bước:
+
+  Bước 1 — tốc độ 1 nhân viên:
+    iter_time = 2 phút/khách
+    → đảo đơn vị: 1/iter_time = 1/2 = 0.5 khách/phút
+    Nghĩa: 1 nhân viên trong 1 phút làm được nửa khách
+           (2 phút mới xong 1 khách)
+
+  Bước 2 — tốc độ 4 nhân viên (cả quán):
+    peak_rate = vus × (1/iter_time)
+              = 4 × 0.5
+              = 2 khách/phút
+
+    Viết gọn: peak_rate = vus / iter_time = 4 / 2 = 2 khách/phút
+
+    Số 2 ở đây là THROUGHPUT (khách/phút), không phải số VU hay số phút.
+    Nó là: 4 nhân viên × (tốc độ mỗi người) = throughput cả quán.
+
+  Bước 3 — quy ra giây nếu cần:
+    2 khách/phút = 2/60 = 0.033 khách/giây
+    Hoặc: 60 giây × 0.033 = 2 khách (trong 1 phút)
+
+Đừng nhầm: 4/2 = 2 không phải "4 VU chia cho 2 phút ra 2 VU/phút".
+Mà là: 4 VU cùng làm, mỗi VU tốc độ 0.5 khách/phút → 2 khách/phút.
 ```
 
 **Áp vào k6**:
@@ -2788,7 +2811,9 @@ config:
   duration: "30s"
 code: sleep(0.5)  -> iter_time ≈ 0.5s
 
-peak_rate = 4 / 0.5 = 8 iter/giây
+Bước 1: 1/iter_time = 1/0.5 = 2 iter/s  (tốc độ 1 VU)
+Bước 2: peak_rate = 4 × 2 = 8 iter/s    (tốc độ 4 VU)
+        Viết gọn: peak_rate = 4 / 0.5 = 8 iter/s
 ```
 
 **Khi nào dùng**: muốn ước lượng throughput trước khi chạy. Đây là
