@@ -71,6 +71,44 @@ Công thức count khi chạy:
                 = 300s × (30 / iter_time)
                 = 9000 / iter_time
 
+Phân tích kỹ con số 9000:
+
+  9000 = vus × duration = 30 × 300
+
+  Đây là TÍCH (vus × duration), không phải "tổng quỹ thời gian".
+  Với constant-vus, KHÔNG có chuyện 30 VU "xài chung" 9000s.
+
+  Cách đọc CHUẨN với bản chất constant-vus (VU cố định, chạy song song):
+
+    count = vus × (duration / iter_time)
+          = 30  × (300 / iter_time)
+          = 9000 / iter_time
+
+  Đọc là:
+    - Bài test kéo dài 300s, VÀ mỗi VU cũng chạy đủ 300s (vì 30 VU
+      cùng start, cùng kết thúc, chạy SONG SONG suốt duration).
+    - Mỗi VU có 300s RIÊNG của nó, hoàn thành được 300/iter_time iteration.
+    - 30 VU chạy song song → nhân 30 → 9000/iter_time.
+
+  timeline: |--------- 300s ---------|
+  VU-1:     |--iter--|--iter--|--iter--|--iter--|...   (300/iter_time lần)
+  VU-2:     |--iter--|--iter--|--iter--|--iter--|...
+  VU-3:     |--iter--|--iter--|--iter--|--iter--|...
+  ...
+  VU-30:    |--iter--|--iter--|--iter--|--iter--|...
+
+  Tất cả 30 VU cùng có 300s — thời gian KHÔNG bị cộng dồn.
+  "9000" chỉ là tích trung gian (vus × duration), không mang ý nghĩa
+  vật lý độc lập. Không nên đọc là "tổng quỹ 9000s chia cho iter_time".
+
+  Sai: "tổng quỹ thời gian 9000s, chia cho iter_time"
+       → ngụ ý 30 VU xài chung 9000s, VU nào lấy nhiều thì VU khác ít.
+       → SAI với constant-vus: mỗi VU có ĐỦ 300s, không chia sẻ.
+
+  Đúng: "30 bản sao độc lập của cùng hành vi 'chạy 300s'"
+        → mỗi VU làm được 300/iter_time iteration.
+        → 30 VU × 300/iter_time = 9000/iter_time.
+
 iter_time KHÔNG cố định, biến thiên do:
   - HTTP latency (mạng, server load, GC pause)
   - DB query time (cache hit/miss, lock contention)
