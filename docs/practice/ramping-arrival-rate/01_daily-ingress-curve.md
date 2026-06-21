@@ -1,7 +1,7 @@
 # Case 01: Campaign Warmup Surge
 
-> **Script:** `rar-01-campaign-warmup-surge.js`  
-> **Executor:** `ramping-arrival-rate` | **Open model** | **Peak:** 28 arrivals/s  
+> **Script:** `rar-01-campaign-warmup-surge.js`
+> **Executor:** `ramping-arrival-rate` | **Open model** | **Peak:** 28 arrivals/s
 > **Focus:** products browse/detail + cart add trong campaign warmup -> surge -> recovery.
 
 ## 1. Tình huống thực tế

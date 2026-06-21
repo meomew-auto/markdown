@@ -3182,8 +3182,14 @@ Tất cả khớp vì demo dùng sleep cố định. Với HTTP thật, iter_tim
 
 #### Tình huống 2: "Đã có target throughput, cần bao nhiêu VU?"
 
-Đây là dạng phổ biến nhất với `constant-vus`: biết throughput target,
-hỏi đặt `vus` bao nhiêu.
+Đây là dạng phổ biến nhất với `constant-vus`: biết throughput target
+(X iter/s), hỏi đặt `vus` bao nhiêu. Thực chất chính là Bước 3 trong
+Tình huống 1, nhưng đây là lúc bạn chưa có config gì cả — chỉ có con số
+target trong đầu và W đo được từ chạy thử.
+
+Dùng chung demo `examples/constant_vus_sizing_demo.js`.
+
+**── Công thức ──**
 
 ```text
 Công thức gốc: peak_rate = vus / iter_time     (Công thức 1)
@@ -3193,131 +3199,261 @@ Thực tế phải làm tròn LÊN:
   vus = ceil(target_rate × iter_time)
 ```
 
-**Ví dụ thực tế (dùng demo `constant_vus_sizing_demo.js`):**
+Vì VU là số nguyên. Thiếu VU → rate thực tế < target. Thừa 1 VU → rate
+hơi cao hơn target (an toàn hơn là thiếu).
 
-```text
-Ví dụ A: Muốn 20 iter/s, iter_time đo được 0.5s
-  vus = ceil(20 × 0.5) = ceil(10) = 10 VU
+**── Ví dụ A: target 20 iter/s, W = 0.5s ──**
 
-  Chạy: k6 run -e TARGET_RATE=20 examples/constant_vus_sizing_demo.js
-  Summary: iterations.........: 200 19.98/s  ✓  (gần 20)
-           vus................: 10
-
-Ví dụ B: Muốn 5 iter/s, iter_time = 0.5s
-  vus = ceil(5 × 0.5) = ceil(2.5) = 3 VU
-
-  Chạy: k6 run -e TARGET_RATE=5 examples/constant_vus_sizing_demo.js
-  Summary: iterations.........: 50 5.0/s  ✓
-           vus................: 3
-
-Ví dụ C: Muốn 7 iter/s, iter_time = 0.3s
-  vus = ceil(7 × 0.3) = ceil(2.1) = 3 VU
+```bash
+k6 run -e TARGET_RATE=20 examples/constant_vus_sizing_demo.js
 ```
 
-**Lưu ý quan trọng:**
+Code làm gì:
+  `const calculatedVUs = Math.ceil(20 × 0.5) = Math.ceil(10) = 10`
+  → config có `vus: 10`
+
+Output:
+```text
+  iteration_duration...: avg=500.42ms     ← W thực tế ~0.5s
+  iterations...........: 200 19.982147/s ← 19.98/s ≈ 20 ✓
+  vus..................: 10  min=10 max=10
+```
+
+Kiểm tra:
+  CT1 đảo: vus = ceil(20 × 0.5) = 10 → config vus=10 ✓
+  CT3:     total ≈ 10 × 10 / 0.5 = 200 → summary = 200 ✓
+  CT1:     peak = 10 / 0.5 = 20 iter/s → summary 19.98 ≈ 20 ✓
+
+**── Ví dụ B: target 5 iter/s, W = 0.5s ──**
+
+```bash
+k6 run -e TARGET_RATE=5 examples/constant_vus_sizing_demo.js
+```
+
+  vus = ceil(5 × 0.5) = ceil(2.5) = 3 VU
+
+```text
+  iteration_duration...: avg=500.34ms
+  iterations...........: 50 5.0/s        ← 5.0/s = target ✓
+  vus..................: 3  min=3 max=3
+```
+
+**── Ví dụ C: target 7 iter/s, W = 0.3s (giả định code nhanh hơn) ──**
+
+  vus = ceil(7 × 0.3) = ceil(2.1) = 3 VU
+  peak = 3 / 0.3 = 10 iter/s → rate thực tế ~10/s (cao hơn target 7/s)
+
+  → ceil() làm vus nhảy bậc, rate thực tế có thể cao hơn target. Đây là
+  hệ quả của việc VU là số nguyên. Nếu cần rate chính xác tuyệt đối →
+  dùng constant-arrival-rate.
+
+**── Lưu ý quan trọng ──**
 
 ```text
 constant-vus KHÔNG đảm bảo target_rate đúng tuyệt đối.
 Nếu iter_time biến thiên, rate thực tế cũng biến thiên:
-  iter_time tăng (server chậm) → rate giảm
+  iter_time tăng (server chậm) → rate = vus / iter_time giảm
   iter_time giảm (server nhanh) → rate tăng
 
-→ constant-vus rate = vus / iter_time_thực_tế (phụ thuộc latency)
+→ rate phụ thuộc latency, không cố định.
 → Nếu cần rate CHÍNH XÁC bất kể latency: dùng constant-arrival-rate.
 ```
 
 #### Tình huống 3: "Đã có sẵn N VU, hỏi throughput được bao nhiêu?"
 
 Ngược với Tình huống 2: đã biết số VU (vd do giới hạn tài khoản test,
-hoặc do server giới hạn connection), muốn ước lượng throughput sẽ đạt.
+server giới hạn connection, hoặc sếp bảo "chỉ được dùng 4 VU"), muốn ước
+lượng throughput sẽ đạt trước khi chạy.
 
-```text
-Bước 1: Đo iter_time (chạy thử 1 VU)
-   W = iteration_duration của code
+Demo: `examples/constant_vus_reverse_sizing_demo.js`
 
-Bước 2: Tính peak (Công thức 1)
-   peak_rate = N / W
+```js
+import exec from "k6/execution";
+import { sleep } from "k6";
 
-Bước 3: Đó là throughput tối đa scenario sẽ đạt
-   total ≈ N × duration / W  (Công thức 3)
+const AVAILABLE_VUS = __ENV.VUS ? Number(__ENV.VUS) : 4;   // N: số VU có sẵn
+const ITER_TIME_SEC = 0.7;  // W: đo được từ chạy thử 1 VU
+
+const W = ITER_TIME_SEC;
+const N = AVAILABLE_VUS;
+const peak = N / W;                     // Công thức 1
+const totalEstimate = N * 10 / W;       // Công thức 3 (duration=10s)
+
+export const options = {
+  scenarios: {
+    reverse_sizing: {
+      executor: "constant-vus",
+      vus: AVAILABLE_VUS,
+      duration: "10s",
+      gracefulStop: "5s",
+    },
+  },
+};
+
+export default function () {
+  sleep(ITER_TIME_SEC);
+}
 ```
 
-**Ví dụ với demo có sẵn:**
+Chạy với mặc định N=4 VU, W=0.7s:
 
-```text
-Ví dụ A: Có 6 VU, code sleep(0.5)
-  peak_rate = 6 / 0.5 = 12 iter/s
-  Tổng iter trong 30s: 6 × 30 / 0.5 = 360 iter
-
-  Nếu chạy thật:
-    iteration_duration...: avg=0.5s
-    iterations...........: 360  12.0/s
-    vus.................. 6
-
-Ví dụ B: Có 2 VU, HTTP request thật ~0.25s + sleep(1) = iter_time ≈ 1.25s
-  peak_rate = 2 / 1.25 = 1.6 iter/s
-  Tổng iter trong 30s: 2 × 30 / 1.25 = 48 iter
-
-Ví dụ C: Cùng 2 VU, nhưng HTTP nhanh hơn ~0.05s + sleep(0.5) = 0.55s
-  peak_rate = 2 / 0.55 = 3.64 iter/s
-  Tổng iter trong 30s: 2 × 30 / 0.55 ≈ 109 iter
-
-  → Cùng 2 VU, iter_time giảm từ 1.25s xuống 0.55s
-    → throughput tăng từ 1.6 lên 3.64 iter/s
-    → Cho thấy: với constant-vus, throughput PHỤ THUỘC iter_time
+```bash
+k6 run examples/constant_vus_reverse_sizing_demo.js
 ```
 
-**Điểm cần dạy:**
+**── Bước 1: Đo iter_time (W) ──**
+
+```text
+iteration_duration...: avg=700.38ms     ← W thực tế ~0.7s, khớp code
+```
+
+**── Bước 2: Tính peak rate (Công thức 1) ──**
+
+  peak = N / W = 4 / 0.7 = 5.71 iter/s
+
+```text
+iterations...........: 60 5.711184/s    ← 5.71/s = peak ✓
+```
+
+Công thức 1 cho throughput TỐI ĐA. Với sleep cố định thì rate thực tế
+bằng đúng peak.
+
+Giải thích con số 5.71/s:
+  1 VU làm được 1/0.7 = 1.43 iter/s
+  4 VU làm được 4 × 1.43 = 5.71 iter/s
+
+**── Bước 3: Ước lượng tổng iter (Công thức 3) ──**
+
+  total ≈ N × duration / W = 4 × 10 / 0.7 = 57.1 iter → ~57 iter
+
+```text
+iterations...........: 60
+```
+
+  57 (dự đoán) vs 60 (thực tế) → lệch 3 iter. Đây là do summary_runtime_base
+  tính thêm phần gracefulStop, nên total hơi cao hơn dự đoán. Điều này bình
+  thường — CT3 là xấp xỉ, không phải tuyệt đối.
+
+  Quan trọng hơn: rate (5.71/s) khớp chính xác, vì rate = vus / W không
+  phụ thuộc duration.
+
+**── Thử với N=2 VU ──**
+
+```bash
+k6 run -e VUS=2 examples/constant_vus_reverse_sizing_demo.js
+```
+
+  peak = 2 / 0.7 = 2.86 iter/s
+
+```text
+  iteration_duration...: avg=700.41ms
+  iterations...........: 30 2.856/s     ← 2.86/s ✓
+  vus..................: 2
+```
+
+  → Một nửa số VU → một nửa throughput. Đúng lý thuyết.
+
+**── Điểm mấu chốt ──**
 
 ```text
 Với constant-vus, N VU CỐ ĐỊNH không có nghĩa throughput cố định.
 Throughput = N / iter_time — iter_time càng nhỏ (code càng nhanh)
-thì throughput càng cao. Ngược lại, server chậm → throughput tụt.
-```
+thì throughput càng cao.
+
+So sánh cùng 4 VU:
+  W = 0.7s → peak = 4/0.7 = 5.71 iter/s
+  W = 0.3s → peak = 4/0.3 = 13.3 iter/s  (code nhanh hơn)
+  W = 1.5s → peak = 4/1.5 = 2.67 iter/s  (server chậm)
+
+→ Cùng số VU, throughput có thể chênh 5 lần tùy iter_time.
+→ Đây cũng là lý do constant-vus KHÔNG phù hợp cho regression test
+  (count không cố định — xem case 01 per-vu-iterations).
 
 #### Tình huống 4: "Đã chạy xong, đọc summary"
 
 Sau khi run xong, summary là nơi duy nhất cần đọc để kết luận test
 có chạy đúng kế hoạch không.
 
-**4 con số chính trong summary:**
+Dùng output từ demo `constant_vus_sizing_demo.js` (TARGET_RATE=10) làm mẫu:
 
 ```text
-  iteration_duration...: avg=500.34ms    ← W thực tế
-  iterations...........: 100  9.99/s     ← N_done  và average rate
-  vus..................: 5   min=5 max=5 ← VU active (constant-vus: min=max)
-  vus_max..............: 5   min=5 max=5 ← VU đã init
-```
+  █ TOTAL RESULTS
 
-**Footer progress:**
-```text
+    EXECUTION
+    iteration_duration...: avg=500.34ms min=500.08ms med=500.4ms max=500.64ms
+                           p(90)=500.54ms p(95)=500.55ms
+    iterations...........: 100 9.993115/s
+    vus..................: 5   min=5      max=5
+    vus_max..............: 5   min=5      max=5
+
+    NETWORK
+    data_received........: 0 B 0 B/s
+    data_sent............: 0 B 0 B/s
+
   running (10.0s), 0/5 VUs, 100 complete and 0 interrupted iterations
-                         ↑           ↑              ↑
-                    VU active   N_done=100     N_int=0
 ```
 
-**5 câu hỏi kiểm tra (theo thứ tự):**
+**── 4 con số trong EXECUTION ──**
+
+| Dòng summary | Ký hiệu | Nghĩa | Giá trị mẫu | Đọc thế nào |
+|---|---|---|---|---|
+| `iteration_duration avg` | W | Thời gian 1 iter trung bình | 500.34ms | So với W dự kiến (0.5s) → khớp |
+| `iterations` | N_done | Số iter hoàn thành | 100 | So với CT3: 5×10/0.5=100 ✓ |
+| `iterations X/s` | rate | Tốc độ trung bình toàn test | 9.99/s | So với CT1: 5/0.5=10 ✓ |
+| `vus min / max` | VU active | Số VU bận | 5 / 5 | constant-vus: min=max, không tụt |
+
+**── Footer progress ──**
+
+```text
+running (10.0s), 0/5 VUs, 100 complete and 0 interrupted iterations
+           ↑       ↑        ↑              ↑
+      runtime  VU active  N_done         N_int
+```
+
+  Runtime = 10.0s → đúng duration config, không bị cắt sớm
+  VU active cuối = 0 → tất cả VU đã xong, không còn VU bận
+  N_done = 100 → khớp dự đoán
+  N_int = 0 → không iter nào bị cắt giữa chừng
+
+**── 5 câu hỏi kiểm tra (theo thứ tự) ──**
 
 ```text
 1. N_done có gần total ước lượng không?
-     total ≈ vus × duration / W = 5 × 10 / 0.5 = 100
-     N_done = 100 → khớp 100% ✓
+     CT3: total ≈ vus × duration / W = 5 × 10 / 0.5 = 100
+     Summary: iterations = 100 → khớp 100% ✓
+     (với HTTP thật, lệch <5% là OK)
 
 2. iteration_duration avg có gần W dự kiến không?
      W dự kiến = 0.5s, thực tế = 500.34ms → khớp ✓
+     Nếu lệch nhiều: code biến thiên, có thể do HTTP latency dao động
 
 3. vus min = vus max = config?
-     min=5, max=5, config=5 → constant-vus giữ đúng số VU ✓
+     min=5, max=5, config vus=5 → constant-vus giữ đúng ✓
+     Nếu min < max: có VU chết hoặc bị cắt giữa chừng (hiếm)
 
 4. Có interrupt cuối không?
-     interrupted = 0 → không iter nào bị cắt ở grace ✓
+     N_int = 0 → không iter nào bị cắt ✓
+     Nếu N_int > 0: hết duration khi iter đang chạy → tăng maxDuration
 
 5. iterations/s có gần peak_rate dự kiến không?
-     peak_rate = vus / W = 5 / 0.5 = 10 iter/s
-     thực tế = 9.99/s → gần đúng ✓
+     CT1: peak = vus / W = 5 / 0.5 = 10 iter/s
+     Summary: 9.99/s → gần đúng ✓
+     Nếu thấp hơn hẳn: W thực tế lớn hơn W dự kiến → tăng vus
 ```
 
-**Nếu có lệch thì đọc tiếp mục 9.3 "Hành động khi gặp vấn đề".**
+**── Với constant-vus, summary ĐƠN GIẢN hơn arrival-rate ──**
+
+```text
+constant-vus: KHÔNG có dropped_iterations (không có cơ chế drop slot)
+              vus min = max (VU không tụt)
+              Chỉ cần kiểm: N_done, W, N_int
+
+So sánh:
+  per-vu-iterations:   cần kiểm thêm interrupted, vus có tụt cuối
+  shared-iterations:   cần kiểm phân phối iter giữa các VU
+  constant-arrival-rate: cần kiểm thêm dropped_iterations
+  constant-vus:        chỉ 3 thứ trên → đơn giản nhất
+```
 
 ### 9.3. Hành động khi gặp vấn đề
 

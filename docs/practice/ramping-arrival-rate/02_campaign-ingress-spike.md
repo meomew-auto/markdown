@@ -1,7 +1,7 @@
 # Case 02: Login Burst Recovery
 
-> **Script:** `rar-02-login-burst-recovery.js`  
-> **Executor:** `ramping-arrival-rate` | **Open model** | **Peak:** 24 arrivals/s  
+> **Script:** `rar-02-login-burst-recovery.js`
+> **Executor:** `ramping-arrival-rate` | **Open model** | **Peak:** 24 arrivals/s
 > **Focus:** auth login/me/refresh wave sau notification hoặc app-open burst.
 
 ## 1. Tình huống thực tế

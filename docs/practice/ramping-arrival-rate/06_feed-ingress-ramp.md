@@ -1,7 +1,7 @@
 # Case 06: Cache/Feed Wave
 
-> **Script:** `rar-06-cache-feed-wave.js`  
-> **Executor:** `ramping-arrival-rate` | **Open model** | **Peak:** 36 arrivals/s  
+> **Script:** `rar-06-cache-feed-wave.js`
+> **Executor:** `ramping-arrival-rate` | **Open model** | **Peak:** 36 arrivals/s
 > **Focus:** personalized homefeed + recommendations read-heavy wave.
 
 ## 1. Tình huống thực tế

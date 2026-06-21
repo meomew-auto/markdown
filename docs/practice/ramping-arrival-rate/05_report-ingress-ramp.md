@@ -1,7 +1,7 @@
 # Case 05: Report Job Ingress Ramp
 
-> **Script:** `rar-05-report-job-ingress-ramp.js`  
-> **Executor:** `ramping-arrival-rate` | **Open model** | **Peak:** 8 arrivals/s  
+> **Script:** `rar-05-report-job-ingress-ramp.js`
+> **Executor:** `ramping-arrival-rate` | **Open model** | **Peak:** 8 arrivals/s
 > **Focus:** report dashboard reads + async job create/status, default target `http://localhost:8088`.
 
 ## 1. Tình huống thực tế

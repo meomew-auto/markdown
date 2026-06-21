@@ -5888,24 +5888,264 @@ hay không. Drop nhiều = sizing thiếu, interrupt nhiều = code chậm.
 
 #### Tình huống 1: "Sắp viết config, không biết đặt số bao nhiêu"
 
-```text
-Bước 1: Tính rate đỉnh                                    [Công thức 2]
-   λ_peak = max(startRate, mọi stage.target) / timeUnit
+Đây là tình huống đầu tiên ai cũng gặp: đã có script, muốn test với pattern
+ramp-up-hold-ramp-down ở tốc độ target, nhưng chưa biết đặt `preAllocatedVUs`
+bao nhiêu.
 
-Bước 2: Đo iter_time (chạy thử 1 VU, xem iteration_duration)
-   W = iteration_duration của code
+Demo dùng để phân tích: `examples/ramping_arrival_rate_sizing_demo.js`
 
-Bước 3: Tính số VU cần                                    [Công thức 1]
-   required_vus = ceil(λ_peak × W) × 1.2
+```js
+import exec from "k6/execution";
+import { sleep } from "k6";
 
-Bước 4: Đặt config
-   preAllocatedVUs = required_vus
-   maxVUs = required_vus  (hoặc lớn hơn nếu muốn cho phép spawn)
+const TARGET_RATE = __ENV.TARGET_RATE ? Number(__ENV.TARGET_RATE) : 4;
+const ITER_TIME_SEC = 0.5;  // sleep cố định giả lập request HTTP
 
-Bước 5 (verify): Tính N_sched dự kiến                     [Công thức 3]
-   N_sched = sum(d_i × (rate_đầu+rate_cuối)/2)
-   -> chạy thử 1 lần, kiểm tra iterations summary có gần N_sched không
+const W = ITER_TIME_SEC;
+const lambdaPeak = TARGET_RATE;
+const requiredVUs = Math.ceil(lambdaPeak * W * 1.2);
+
+const HOLD_DUR = 4;
+const RAMP_DUR = 2;
+
+export const options = {
+  scenarios: {
+    sizing_demo: {
+      executor: "ramping-arrival-rate",
+      startRate: 0,
+      timeUnit: "1s",
+      preAllocatedVUs: requiredVUs,
+      maxVUs: requiredVUs + 2,
+      gracefulStop: "10s",
+      stages: [
+        { duration: `${RAMP_DUR}s`, target: lambdaPeak },
+        { duration: `${HOLD_DUR}s`, target: lambdaPeak },
+        { duration: `${RAMP_DUR}s`, target: 0 },
+      ],
+    },
+  },
+};
+
+export default function () {
+  sleep(ITER_TIME_SEC);
+}
 ```
+
+Chạy:
+
+```bash
+k6 run examples/ramping_arrival_rate_sizing_demo.js               # λ_peak = 4
+k6 run -e TARGET_RATE=2 examples/ramping_arrival_rate_sizing_demo.js   # λ_peak = 2
+k6 run -e TARGET_RATE=8 examples/ramping_arrival_rate_sizing_demo.js   # λ_peak = 8
+k6 run -e DROP_MODE=1 examples/ramping_arrival_rate_sizing_demo.js     # thiếu VU
+```
+
+Giờ phân tích output theo đúng 5 bước, lấy lần chạy `TARGET_RATE=4` làm mẫu.
+
+**── Bước 1: Tính rate đỉnh (CT 2) ──**
+
+Lý thuyết: `λ_peak = max(startRate, mọi stage.target) / timeUnit`. Đây
+là rate cao nhất scenario phải fire ở bất kỳ thời điểm nào. Phải biết
+λ_peak trước thì mới sizing VU được.
+
+Từ config:
+  startRate = 0, timeUnit = "1s"
+  stages[0].target = 4, stages[1].target = 4, stages[2].target = 0
+  → λ_peak = max(0, 4, 4, 0) / 1 = 4 iter/s
+
+```text
+scenarios: ... * sizing_demo: Up to 4.00 iterations/s for 8s over 3 stages
+                            ↑                ↑
+                        λ_peak = 4/s    T = 2+4+2 = 8s
+```
+
+**Lưu ý quan trọng**: λ_peak LÀ RATE TARGET CỦA SCHEDULER, không phải
+rate iter hoàn thành. λ_peak = 4/s nghĩa là scheduler có nhiệm vụ fire
+4 slot/giây tại đỉnh. Số iter HOÀN THÀNH phụ thuộc VU có rảnh không.
+
+**── Bước 2: Đo iter_time (W) ──**
+
+Lý thuyết: chạy thử 1 VU, xem `iteration_duration avg` trong summary,
+lấy đó làm W.
+
+Trong demo: `const ITER_TIME_SEC = 0.5` → W = 0.5s. Đây là giả lập —
+sleep(0.5) mô phỏng 1 request HTTP mất 0.5s. Ngoài đời thì bạn chạy
+thử script với 1 VU rồi đọc số từ summary.
+
+```text
+iteration_duration...: avg=500.31ms     ← W thực tế ~0.5s, khớp code
+```
+
+**── Bước 3: Tính số VU cần (CT 1) ──**
+
+Lý thuyết: `required_vus = ceil(λ_peak × W) × 1.2`. Buffer 1.2 (20%)
+để dự phòng jitter, boundary effect, scheduler overhead.
+
+Trong demo:
+  `const requiredVUs = Math.ceil(4 × 0.5) × 1.2`
+  = ceil(2.0) × 1.2 = 2 × 1.2 = 2.4 → làm tròn lên = 3 VU
+  → config tự điền `preAllocatedVUs: 3, maxVUs: 5`
+
+```text
+vus_max..............: 3   min=3      max=3
+```
+
+  vus_max = 3 → đúng Bước 3. k6 chỉ spawn 3 VU vì rate đỉnh 4/s
+  với W=0.5s chỉ cần 2 VU concurrent, cộng buffer 20% là 3 VU.
+
+  KHÔNG cần spawn hết maxVUs=5 vì rate chưa đủ cao để cần.
+
+**── Bước 4: Tính N_sched dự kiến (CT 3) ──**
+
+Lý thuyết: `N_sched_i = duration_i × (rate_đầu_i + rate_cuối_i) / 2`.
+Đây là số slot scheduler DỰ TÍNH fire (mục tiêu), khác số iter HOÀN THÀNH.
+
+```text
+Stage 0: ramp 0 → 4/s trong 2s  → 2 × (0 + 4) / 2 = 4 slot
+Stage 1: hold 4/s trong 4s      → 4 × (4 + 4) / 2 = 16 slot
+Stage 2: ramp 4 → 0/s trong 2s  → 2 × (4 + 0) / 2 = 4 slot
+                                    -------------------
+                                    N_sched = 24 slot
+λ_avg = N_sched / T = 24 / 8 = 3.00 iter/s
+```
+
+**── Bước 5: Chạy, đọc summary, verify (CT 5) ──**
+
+Lý thuyết: `N_done + N_drop + N_int ≈ N_sched` (CT 5). Đây là đẳng thức
+quan trọng nhất để verify test có chạy đúng không.
+
+Output thực tế (TARGET_RATE=4, đủ VU):
+
+```text
+scenarios: (100.00%) 1 scenario, 5 max VUs, 18s max duration (incl. graceful stop):
+         * sizing_demo: Up to 4.00 iterations/s for 8s over 3 stages (maxVUs: 3-5, gracefulStop: 10s)
+
+running (08.0s), 0/3 VUs, 23 complete and 0 interrupted iterations
+
+  █ TOTAL RESULTS
+
+    EXECUTION
+    iteration_duration...: avg=500.31ms min=500ms med=500.35ms max=500.76ms p(90)=500.53ms p(95)=500.53ms
+    iterations...........: 23  2.874645/s
+    vus..................: 0   min=0      max=2
+    vus_max..............: 3   min=3      max=3
+```
+
+Verify CT 5:
+  N_done = 23, N_drop = 0, N_int = 0
+  N_done + N_drop + N_int = 23 + 0 + 0 = 23
+  N_sched = 24 → lệch 1 slot (23 vs 24)
+
+  Lệch 1 slot là BÌNH THƯỜNG. Nguyên nhân: caveat slot biên (xem 3.1
+  caveat 2: slot đầu không mặc định ở t=0). Với startRate=0, vài ms đầu
+  chưa tích lũy đủ 1 slot để fire. Kết quả: fire 23 slot thay vì 24.
+
+  Tỷ lệ N_done / N_sched = 23/24 = 95.8% → rơi vào nhóm "drop biên slot"
+  (95-99%), không đáng lo.
+
+Verify CT 1 đảo (capacity):
+  C = vus_max / W = 3 / 0.5 = 6 iter/s
+  λ_peak = 4 iter/s → capacity (6) > λ_peak (4) → không drop ✓
+
+  vus max trong summary = 2 (VU bận cao nhất), không phải 3. Vì tại
+  thời điểm bận nhất, chỉ cần 2 VU concurrent (2 × 0.5 = 1s, đủ phục
+  vụ rate 4/s). VU thứ 3 là buffer, có lúc dùng có lúc không.
+
+Footer:
+```text
+running (08.0s), 0/3 VUs, 23 complete and 0 interrupted iterations
+                         ↑               ↑
+                    N_done = 23     N_int = 0 → sạch
+```
+
+  Runtime = 8.0s → đúng tổng duration (2+4+2) ✓
+  N_int = 0 → không iter nào bị cắt giữa chừng ✓
+  N_drop không có dòng riêng trong output này = 0 ✓
+
+**── Thử target khác để thấy quy luật ──**
+
+```bash
+k6 run -e TARGET_RATE=2 examples/ramping_arrival_rate_sizing_demo.js
+```
+
+Bước 1: λ_peak = 2.  Bước 3: requiredVUs = ceil(2 × 0.5) × 1.2 = 2 VU.
+
+```text
+  iteration_duration...: avg=500.27ms    ← W ~0.5s
+  iterations...........: 12  1.411723/s  ← gần λ_avg = 1.5/s
+  vus_max..............: 2   min=2 max=2
+```
+
+N_sched = 2×(0+2)/2 + 4×(2+2)/2 + 2×(2+0)/2 = 2 + 8 + 2 = 12 slot.
+N_done = 12, khớp tuyệt đối. Tỷ lệ = 100%.
+
+```bash
+k6 run -e TARGET_RATE=8 examples/ramping_arrival_rate_sizing_demo.js
+```
+
+Bước 1: λ_peak = 8.  Bước 3: requiredVUs = ceil(8 × 0.5) × 1.2 = 5 VU.
+
+```text
+  iteration_duration...: avg=500.29ms    ← W ~0.5s
+  iterations...........: 47  5.874318/s  ← gần λ_avg = 6.0/s
+  vus_max..............: 5   min=5 max=5
+```
+
+N_sched = 2×(0+8)/2 + 4×(8+8)/2 + 2×(8+0)/2 = 8 + 32 + 8 = 48 slot.
+N_done = 47, lệch 1 slot (caveat slot biên). Tỷ lệ = 97.9%.
+
+Bảng tổng kết:
+
+| λ_peak | W | requiredVUs | N_sched | N_done | Tỷ lệ | Drop? |
+| ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 2 | 0.5s | 2 | 12 | 12 | 100% | Không |
+| 4 | 0.5s | 3 | 24 | 23 | 95.8% | Không (lệch slot biên) |
+| 8 | 0.5s | 5 | 48 | 47 | 97.9% | Không (lệch slot biên) |
+
+→ λ_peak gấp đôi → VU cần gấp đôi. Đúng lý thuyết: requiredVUs ∝ λ_peak.
+
+**── Demo thiếu VU (DROP_MODE=1) ──**
+
+```bash
+k6 run -e DROP_MODE=1 examples/ramping_arrival_rate_sizing_demo.js
+```
+
+Cố ý đặt preAllocatedVUs=1 (thiếu so với required=3) để thấy
+dropped_iterations.
+
+```text
+scenarios: ... * sizing_demo: Up to 4.00 iterations/s for 8s over 3 stages (maxVUs: 1)
+
+  █ TOTAL RESULTS
+
+    EXECUTION
+    dropped_iterations...: 13  1.624683/s
+    iteration_duration...: avg=500.38ms ...
+    iterations...........: 10  1.249756/s
+    vus_max..............: 1   min=1      max=1
+
+running (08.0s), 0/1 VUs, 10 complete and 0 interrupted iterations
+```
+
+Phân tích:
+  N_sched = 24 slot (scheduler vẫn fire 24 slot như cũ)
+  N_done = 10, N_drop = 13, N_int = 0
+  N_done + N_drop = 10 + 13 = 23 ≈ 24 ✓ (CT 5)
+
+  Tỷ lệ N_done / N_sched = 10/24 = 41.7% → RẤT THẤP.
+  13 slot bị drop vì chỉ có 1 VU, capacity = 1/0.5 = 2 iter/s,
+  trong khi λ_peak = 4 iter/s. Thiếu 2 iter/s → drop.
+
+  Warning trong log:
+  ```
+  level=warning msg="Insufficient VUs, reached 1 active VUs and cannot initialize more"
+  ```
+
+Bài học:
+  - preAllocatedVUs phải >= ceil(λ_peak × W) (chưa tính buffer)
+  - Nếu preAllocatedVUs = maxVUs (không cho spawn) mà thiếu → drop
+  - Nếu maxVUs > preAllocatedVUs: k6 spawn thêm, nhưng có window
+    vài ms đầu vẫn drop (xem 3.16)
 
 #### Tình huống 2: "Đã có sẵn N VU, hỏi chịu được rate cao nhất là bao nhiêu?"
 

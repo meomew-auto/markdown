@@ -1,7 +1,7 @@
 # Case 03: Payment Webhook Wave
 
-> **Script:** `rar-03-payment-webhook-wave.js`  
-> **Executor:** `ramping-arrival-rate` | **Open model** | **Peak:** 20 arrivals/s  
+> **Script:** `rar-03-payment-webhook-wave.js`
+> **Executor:** `ramping-arrival-rate` | **Open model** | **Peak:** 20 arrivals/s
 > **Focus:** payment-provider webhook wave vào order service.
 
 ## 1. Tình huống thực tế

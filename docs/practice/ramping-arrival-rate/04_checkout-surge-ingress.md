@@ -1,7 +1,7 @@
 # Case 04: Checkout Flash-Sale Wave
 
-> **Script:** `rar-04-checkout-flash-sale-wave.js`  
-> **Executor:** `ramping-arrival-rate` | **Open model** | **Peak:** 12 arrivals/s  
+> **Script:** `rar-04-checkout-flash-sale-wave.js`
+> **Executor:** `ramping-arrival-rate` | **Open model** | **Peak:** 12 arrivals/s
 > **Focus:** cart add -> checkout -> confirm multi-step flow trong flash sale.
 
 ## 1. Tình huống thực tế

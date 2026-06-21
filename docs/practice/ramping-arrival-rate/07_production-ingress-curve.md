@@ -1,7 +1,7 @@
 # Case 07: Production Spike Mix
 
-> **Script:** `rar-07-production-spike-mix.js`  
-> **Executor:** `ramping-arrival-rate` | **Open model** | **Peak:** 32 arrivals/s  
+> **Script:** `rar-07-production-spike-mix.js`
+> **Executor:** `ramping-arrival-rate` | **Open model** | **Peak:** 32 arrivals/s
 > **Focus:** mixed production API spike across products/cart/auth/order/report.
 
 ## 1. Tình huống thực tế
