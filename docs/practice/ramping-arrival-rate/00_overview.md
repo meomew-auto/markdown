@@ -317,6 +317,7 @@ Diễn giải quan trọng:
 ## Reference
 
 - Run guide: `./RUN_GUIDE.md`
+- **Validation + chart analysis với real run data:** `./08_validation-and-chart-analysis.md` ⭐
 - Quick index: `../../20260518_01_ramping-arrival-rate-quick-index.md`
 - Tham số/công thức: `../../20260518_02_ramping-arrival-rate-tham-so-cong-thuc.md`
 - Worked example: `../../20260518_03_ramping-arrival-rate-worked-example.md`
@@ -324,3 +325,21 @@ Diễn giải quan trọng:
 - Ramping-vus overview: `../ramping-vus/00_overview.md`
 - Constant-vus overview: `../constant-vus/00_overview.md`
 - Source pack: `E:\Projects\k6\k6-metrics-server\load-target\k6\ramping-arrival-rate\README.md`
+
+## Real validation run summary (2026-06-21)
+
+Chạy local với `BASE_URL=http://localhost:80`:
+
+| # | Case | Iter | Drop | HTTP Reqs | Event p95 | Active VU max | Result |
+|---|------|-----:|-----:|----------:|----------:|--------------:|--------|
+| 01 | Campaign warmup surge | 705 | 0 | 705 | 5ms | 1 | ✅ PASS |
+| 02 | Login burst recovery | 507 | 0 | 507 | 23ms | 1 | ✅ PASS |
+| 03 | Payment webhook wave | 545 | 0 | 545 | 6ms | 0 | ✅ PASS |
+| 04 | Checkout flash-sale wave | 317 | 0 | 951 | 112ms | 1 | ✅ PASS |
+| 05 | Report job ingress ramp | 199 | **20** | 278 | 9.01s | 45 | ❌ FAIL |
+| 06 | Cache feed wave | 949 | 0 | 949 | 4ms | 1 | ✅ PASS |
+| 07 | Production spike mix | 1035 | 0 | 1035 | 86ms | 6 | ✅ PASS |
+
+**6/7 pass.** rar-05 fail vì `dropped_iterations=20 > maxDropped=0` — đúng như thiết kế dạy open-model.
+
+Chi tiết: `08_validation-and-chart-analysis.md`.
