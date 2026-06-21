@@ -60,6 +60,94 @@ Tai peak 8/s voi 40% async:
     + preAllocatedVUs=25 -> khong du!
 ```
 
+### Phan tich sau hon: tai sao W_p95 dat 9.01s?
+
+Khi mot async_job event co W danh nghia = 144ms, tai sao p95 thuc te lai la 9.01s?
+Day la cau hoi then chot de hieu ban chat cua van de -- boi vi neu W that su chi la 144ms,
+preAllocatedVUs=25 se DU SUC (25 VUs x 55s / 0.144s = 9548 events >> 220).
+
+```text
+Ba yeu to lam W_p95 tang dot bien:
+
+1. Backend saturation:
+   - 3.2 async jobs/s den report service o peak
+   - Moi job can: CPU (cpu_ms=2), DB write (db_writes=1), external API (external_ms=20)
+   - Khi nhieu job cung luc -> CPU queue day, DB lock wait, external API timeout
+   - Thoi gian xu ly THAT cua server co the tu 2ms -> 500ms-2000ms
+   - POST request khong con 2ms nua, ma co the den 2000ms
+
+2. HTTP request queueing trong k6:
+   - k6 gui nhieu request den server cung luc
+   - Server chi xu ly duoc 1 so request dong thoi (connection limit, thread pool)
+   - Request moi xep hang cho den khi co slot xu ly
+   - http_req_duration p95 = 8.51s -- phan lon thoi gian la CHO, khong phai XU LY
+   - Day la ly do http_req_duration cao bat thuong du moi request nhe
+
+3. Sleep() nam NGOAI http_req_duration nhung NAM TRONG event_duration:
+   - wait(0.14s) co dinh, khong anh huong boi backend
+   - Nhung no giu VU -> it VU ranh -> dispatcher spawn them VU
+   - Them VU -> them request -> server cang qua tai -> VONG LAP
+   - Trong khi VU ngu 140ms, scheduler van tao slot moi -> can them VU nua
+
+Ket hop 3 yeu to:
+   event_duration = http_time + wait_time + processing_time
+   event_duration ~ 8.51s (http p95) + 0.14s (sleep) + 0.36s (overhead)
+                  = 9.01s  --> KHOP VOI DU LIEU THUC TE!
+```
+
+### Toan canh: 7 yeu to hoi tu trong cung 1 case
+
+RAR-05 la case HOAN HAO de giang day vi no HOI TU DAY DU moi yeu to gay drop
+trong open model, tao thanh mot "perfect storm":
+
+```text
+Yeu to 1: Bimodal event duration
+  - Dashboard: 2-5ms (rat nhanh)
+  - Async job: 144ms-9000ms+ (rat cham, tail distribution rong)
+  - Khoang cach giua 2 dinh: 30-3000x
+  - He qua: Head-of-line blocking -- async job giu VU, dashboard khong co VU
+
+Yeu to 2: sleep() giu VU idle
+  - 97.2% thoi gian VU ban la do wait (140ms/144ms)
+  - Trong open model, moi giay sleep la 1 VU bi "vo hieu hoa"
+  - Khac voi production: client that cho, khong phai server thread cho
+
+Yeu to 3: Tail latency khuyech dai
+  - p95 = 9.01s gap 62.5x so voi W danh nghia 144ms
+  - Little's Law voi W_avg du doan 0.48 VUs -- sai 150x so voi thuc te (72 VUs)
+  - Bai hoc: phai dung W_p95 de sizing, khong phai W_avg
+
+Yeu to 4: Self-limiting feedback loop
+  - Tang VU -> nhieu request -> backend cham hon -> event_duration tang -> can them VU
+  - Default (pre=25): p95=9.01s, active VU max=45
+  - Rerun (pre=60): p95=9.25s, active VU max=62
+  - Vong lap chi dung khi backend saturation hoac maxVUs dat toi han
+
+Yeu to 5: Zero-drop contract nghiem ngat
+  - maxDropped=0: chi can 1 drop -> FAIL
+  - Khong co "grace margin" nao
+  - Khac voi cac case khac (maxDropped=3 hoac 5)
+
+Yeu to 6: Checks=100% deceptive
+  - Tat ca request duoc TAO deu OK
+  - Nhung 20 arrivals KHONG BAO GIO duoc TAO
+  - Nguoi moi nhin checks: "Test pass!"
+  - Nguoi co kinh nghiem nhin dropped_iterations: "FAIL!"
+  - Day la BAY PHO BIEN NHAT trong open model testing
+
+Yeu to 7: Rate thap nhung drop cao
+  - rar-05: 8/s peak, drop=20
+  - rar-06: 36/s peak, drop=0
+  - So sanh truc tiep -> rar-06 "kho hon" 4.5x
+  - Thuc te rar-05 "kho hon" 400x (72 VU required vs 0.18 VU required)
+  - Bai hoc: Arrival rate khong phai yeu to duy nhat
+```
+
+Khong case nao khac trong series co du 7 yeu to nay cung luc.
+CAR-05 co 4-5 yeu to nhung thieu ramp-stage va self-limiting ro rang.
+RAR-06 co rate cao nhung thieu async complexity.
+-> RAR-05 la "perfect storm" cua open model testing -- case hoc tap ly tuong nhat.
+
 ### Cau hoi kinh doanh
 
 ```text
@@ -1318,6 +1406,58 @@ Response time trends:
   moi event lau hon, nen VU pool van khong du.
 ```
 
+### Cach doc 3 chart cung luc -- buc tranh toan canh
+
+De hieu day du tai sao case 05 fail, PHAI doc 3 chart CUNG LUC va noi ket chung:
+
+```text
+BUOC 1: Bat dau voi Execution Timeline.
+  - Xac dinh GAP giua scheduled va completed.
+  - Default: gap = 20 (ro rang)
+  - Neu gap > 0 -> tiep tuc buoc 2.
+  - Neu gap = 0 -> PASS, khong can doc them.
+
+BUOC 2: Chuyen sang Active VUs chart.
+  - Tai vung gap (giai doan peak), active VUs co DAT MAX khong?
+  - Default: active VU max = 45, maxVUs = 80 -> CHUA dat max!
+  - Vay tai sao lai drop? VU con 35 slots trong (80 - 45).
+  - Co 2 kha nang:
+    a) Dispatcher khong spawn kip VU moi -> preAllocated qua thap
+    b) VU bi giu boi async job, dispatcher "nghi" la du VU nhung thuc te khong
+
+BUOC 3: Chuyen sang Response Time chart de xac nhan.
+  - event_duration p95 = 9.01s -> RAT CAO
+  - http_req_duration p95 = 8.51s -> cung RAT CAO
+  - Ket luan: VU bi giu lau vi EVENT DURATION DAI,
+    KHONG PHAI vi dispatcher spawn cham.
+  - Day la truong hop (b): VU bi "ket" trong async job dai,
+    dispatcher thay VU "ton tai" nhung thuc te chung bi busy.
+
+BUOC 4: Tong hop.
+  - Gap = 20: 20 arrivals khong duoc phuc vu
+  - Active VUs = 45/80: con room nhung dispatcher khong dung duoc
+  - event_duration p95 = 9.01s: VU bi giu lau -> VU pool ao tuong
+  - Ket luan: KHONG PHAI THIEU VU, ma la VU BI GIU QUA LAU
+    boi async event dai. Giai phap goc: giam event duration.
+```
+
+### Y nghia cua vus_max vs active VU max
+
+```text
+vus_max trong summary = 45 (default)
+active VU max tren chart = 45
+
+Hai con so BANG NHAU -> tat ca VU duoc spawn deu duoc dung.
+Neu vus_max > active VU max (vi du: vus_max=80, active_max=45):
+  -> 35 VU duoc spawn nhung khong su dung -> lang phi tai nguyen
+  -> Co the do dispatcher spawn VU du phong nhung async event da xong
+
+Neu vus_max < maxVUs (45 < 80):
+  -> Dispatcher khong can spawn den maxVUs
+  -> Drop xay ra KHONG PHAI vi can maxVUs
+  -> Ma vi VU hien co bi giu lau -> can tang preAllocatedVUs HOAC giam event duration
+```
+
 ### Executor tab verification
 
 Tren dashboard, vao tab "Executor" de xac nhan:
@@ -1332,6 +1472,15 @@ preAllocatedVUs: 25 (hoac 60 neu rerun)
 maxVUs: 80 (hoac 120 neu rerun)
 Base URL: http://localhost:8088 (hoac http://localhost:80 neu rerun)
 ```
+
+### So sanh chart pattern giua default va rerun
+
+| Chart | Default pattern | Rerun pattern | Bai hoc |
+| --- | --- | --- | --- |
+| Active VUs | Tang 25->45 (+80%) | Tang 60->62 (+3.3%) | preAllocated du lon -> VU on dinh |
+| Execution | Gap = 20 | Gap = 3 | Tang VU giam drop 85% |
+| Response time | p95 = 9.01s | p95 = 9.25s | Tang VU -> backend cham -> p95 tang |
+| vus_max | 45 < 80 (con room) | 63 < 120 (con nhieu room) | Drop khong do can maxVUs |
 
 ---
 
@@ -2045,6 +2194,61 @@ Trong toan bo series ramping-arrival-rate, rar-05 la case co gia tri giang day c
 
 Sinh vien nao hieu duoc TAT CA cac bai hoc tren tu case nay
 thi da nam vung ban chat cua ramping-arrival-rate executor.
+```
+
+### Bridge voi CAR-05: hai mat cua cung mot van de
+
+RAR-05 va CAR-05 la hai case "song sinh" -- cung test report API voi async job pattern,
+cung co zero-drop contract, cung FAIL. Nhung moi case day mot khia canh khac nhau:
+
+| Khia canh | CAR-05 (constant-arrival-rate) | RAR-05 (ramping-arrival-rate) |
+| --- | --- | --- |
+| Rate shape | Co dinh 6/s trong 45s | Bien thien 1->3->8->2->0/s qua 55s |
+| Drop pattern | Drop deu suot run | Drop tap trung o peak stage |
+| Drop count | 22 | 20 |
+| Target slots | 270 | 220 |
+| Drop rate | 8.1% | 9.1% |
+| Cau hoi tra loi | "He thong co chiu duoc 6/s co dinh?" | "He thong co chiu duoc ramp len 8/s?" |
+| Giai doan kho nhat | Toan bo run (steady pressure) | Peak stage (15-35s, 8/s) |
+| VU requirement | Required 48 VU (p95) | Required 72 VU (p95) |
+| Rerun ket qua | Tang VU: drop 22->6, van FAIL | Tang VU: drop 20->3, van FAIL |
+
+### Cau noi giua hai case
+
+```text
+Ca CAR-05 va RAR-05 deu cung ket luan:
+  - sleep() trong open model LA NGUON GOC cua VU pressure
+  - Tang VU la giai phap tam thoi, khong phai vinh vien
+  - Goc cua van de la EVENT DURATION, khong phai VU COUNT
+  - Checks=100% khong bao gio DU de PASS trong open model
+  - dropped_iterations la PRIMARY SIGNAL
+
+Su khac biet:
+  - CAR-05: Test viec DUY TRI rate co dinh. Phu hop khi SLO la "handle 6/s lien tuc".
+  - RAR-05: Test viec CHIU DUNG ramp curve. Phu hop khi SLO la "handle peak 8/s trong gio cao diem".
+
+Chon executor nao?
+  - Neu SLO yeu cau rate co dinh (vi du: API Gateway rate limit) -> constant-arrival-rate
+  - Neu SLO yeu cau ramp curve (vi du: business-hour traffic pattern) -> ramping-arrival-rate
+  - Ca hai deu la open model -> ca hai deu cho tin hieu dropped_iterations
+  - Ca hai deu gap cung van de voi sleep() + async pattern
+```
+
+### 10 bai hoc rut ra cho sinh vien
+
+Sau khi hoc xong ca CAR-05 VA RAR-05, sinh vien nen nam duoc:
+
+```text
+1. Open model la gi, khac closed model o diem nao
+2. dropped_iterations la tin hieu CAPACITY, khong phai CORRECTNESS
+3. sleep() trong open model script CAN DUOC CAN NHAC KY LUONG
+4. event_duration (khong phai http_req_duration) quyet dinh VU sizing
+5. Dung W_p95 (khong phai W_avg) cho Little's Law khi co tail latency
+6. Bimodal event duration gay head-of-line blocking trong VU pool
+7. Self-limiting: tang VU co the khong giai quyet duoc van de ma con lam no te hon
+8. Co nhieu giai phap: tang VU, toi uu script, tach scenario, thay doi SLO
+9. Chon executor phu hop voi SLO: co dinh -> CAR, ramp -> RAR
+10. Luon doc dropped_iterations TRUOC KHI doc checks va http_req_failed
 ```
 
 ---

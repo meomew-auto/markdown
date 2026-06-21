@@ -310,6 +310,117 @@ RAR-07: mixed spike o rate thay doi
 → Khong hoc RAR-07 → khong biet phan tich noisy neighbor theo curve
 ```
 
+### 3.5. So sanh chi tiet CAR-07 vs RAR-07
+
+Hai case nay la **cap doi xung** trong bo tai lieu — cung 6 branch, 5 service,
+cung VU pool dung chung, cung mixed traffic. Chi khac executor va arrival shape.
+
+#### Bang so sanh tong quan
+
+| Dac diem | CAR-07 | RAR-07 |
+| --- | --- | --- |
+| Executor | constant-arrival-rate | ramping-arrival-rate |
+| Arrival shape | Co dinh 18/s × 60s | Bien doi: 3→12→32→10→0/s |
+| Total duration | 60s | 65s |
+| Total slots | 1080 | 1035 |
+| Peak rate | 18/s (xuyen suot) | 32/s (chi o stage 2) |
+| preAllocatedVUs | 25 | 30 |
+| maxVUs | 80 | 90 |
+| maxDropped | 5 | 8 |
+| userPool | 1000 | 1200 |
+| Branch weights | 30/25/15/10/10/10 | 35/20/18/12/10/5 |
+| External ms (checkout) | 30ms | 30ms |
+| finishEvent service | `mixed` | `mixed` |
+| p95 (run that) | 1617ms | 86ms |
+
+#### Diem khac biet cot loi
+
+**1. Drop pattern khac nhau hoan toan**:
+
+```text
+CAR-07: rate co dinh 18/s
+  → Neu VU pool khong du → drops DEU DAN trong suot 60s
+  → Drop rate ≈ 18 - capacity la hang so
+  → Khong co "giai doan nao nguy hiem hon"
+  → Drop la CHRONIC (man tinh)
+
+RAR-07: rate thay doi
+  → Neu VU pool khong du → drops TAP TRUNG vao stage 2 (peak)
+  → Drop rate thay doi theo current_stage_rate
+  → Stage 1 (3→12/s): it hoac khong drops
+  → Stage 2 (12→32/s): drops xuat hien
+  → Stage 3 (32→10/s): drops giam
+  → Stage 4 (0/s): khong drops
+  → Drop la ACUTE (cap tinh, tap trung)
+```
+
+**2. VU sizing logic khac nhau**:
+
+```text
+CAR-07: preAllocatedVUs = 25
+  → Tinh cho rate 18/s co dinh
+  → Little's Law: L = 18 × W
+  → Voi W_trung_binh ≈ 80-100ms: L = 18 × 0.08 = 1.44 VU
+  → Voi W_p95 ≈ 1600ms (checkout tail): L_tail = 18 × 1.6 = 28.8 VU
+  → pre=25, max=80 → du phong cho tail
+
+RAR-07: preAllocatedVUs = 30
+  → Tinh cho rate 32/s peak (cao hon 1.78× CAR)
+  → Little's Law tai peak: L = 32 × W
+  → Voi W_trung_binh ≈ 45ms (run that): L = 32 × 0.045 = 1.44 VU
+  → Voi W_p95 ≈ 86ms (run that): L = 32 × 0.086 = 2.75 VU
+  → pre=30, max=90 → du phong lon hon CAR
+```
+
+**3. Thong tin tu drop curve**:
+
+```text
+CAR-07: drop curve la duong thang (flat)
+  → "Co 5 drops trong 60s" — chi biet TONG, khong biet PHAN BO
+
+RAR-07: drop curve la duong cong (theo stage)
+  → "Co 8 drops: 7 o stage 2, 1 o stage 3"
+  → Biet duoc: drops tap trung o peak
+  → Gia su: "8 drops deu 4 stage" → khong phai peak-stage issue, co the la leak
+  → Day la THONG TIN CHAN DOAN ma CAR khong cung cap
+```
+
+**4. Cach doc dashboard khac nhau**:
+
+```text
+CAR-07:
+  - iterations chart: duong thang ~1080 (flat)
+  - http_reqs chart: duong thang (flat)
+  - VU chart: flat (neu backend on dinh)
+  - Drop chart: flat (neu co drop)
+  → Tat ca deu FLAT — de doc nhung it thong tin
+
+RAR-07:
+  - iterations chart: theo curve 3→12→32→10→0 (cong)
+  - http_reqs chart: theo curve (cong)
+  - VU chart: co the bien doi theo stage
+  - Drop chart: co the tap trung o stage 2
+  → Tat ca deu CONG — kho doc hon nhung NHIEU THONG TIN HON
+  → Co the so sanh stage 1 vs stage 2 vs stage 3 performance
+```
+
+**5. Thu tu hoc tap**:
+
+```text
+1. Hoc CAR-07 truoc → hieu noisy neighbor, drill by service, drop budget
+   o rate CO DINH (de hon)
+2. Hoc RAR-07 sau → ap dung toan bo kien thuc CAR-07
+   vao rate BIEN DOI (kho hon)
+3. Sau ca hai → hieu duoc:
+   - Drop o flat rate = chronic VU shortage
+   - Drop o spike curve = peak-stage VU crunch
+   - Cach doc ca hai loai drop pattern
+   - Khi nao dung CAR, khi nao dung RAR
+
+→ Day la cap doi xung DUY NHAT trong bo tai lieu co cung mixed services
+→ KHONG the hieu RAR-07 neu chua hoc CAR-07
+```
+
 ## 4. Config mapping
 
 ### 4.1. Bang tham so day du
@@ -1835,6 +1946,59 @@ k6 run "...rar-07-production-spike-mix.js"
 
 Expected: Voi VU pool lon, 0 drop.
 Day la cach run production SLO — chap nhan chi phi VU cao hon de dam bao 0 drop.
+
+### Variation F: Tang external_ms de mo phong backend degradation
+
+```powershell
+# Mo phong checkout service bi cham (external dependency tang)
+# external_ms = 30 → 200ms
+$env:RAR_07_SPIKE_RATE = "32"
+$env:RAR_07_PREALLOCATED_VUS = "30"
+$env:RAR_07_MAX_VUS = "90"
+$env:RAR_07_MAX_DROPPED = "20"
+k6 run "...rar-07-production-spike-mix.js"
+```
+
+Can chinh checkout branch trong script:
+
+```javascript
+// Variation F: Tang external_ms tu 30 → 200
+const checkout = requestJson('POST',
+  `${BASE_URL}/api/sim/checkout?cpu_ms=2&db_writes=1&external_ms=200&external_fail_rate=0`,
+  ...);
+```
+
+Expected:
+- Checkout event duration tang 50ms → ~220ms
+- avg_duration tang 11.75ms → 11.75 + 0.10×(220-50) = 28.75ms
+- required_VUs tai peak = 32 × 0.02875 = 0.92 VU (van thap)
+- Nhung: 3 checkout cung luc = 3 VU hold 220ms → 660ms VU time
+- Active VU co the tang, drops co the xuat hien
+- Browse/detail event duration co the tang do VU queueing
+
+Day la cach mo phong NOISY NEIGHBOR THAT SU xuat hien.
+
+### Bang tong ket cac variation
+
+| Variation | Muc tieu | Thay doi chinh | Expected signal | Bai hoc |
+| --- | --- | --- | --- | --- |
+| A: checkout 30% | Stress Noisy Neighbor | Tang checkout weight | Drops tang, browse p95 tang | Checkout weight cao = noisy neighbor risk |
+| B: 6 scenarios | Cach ly service | Tach scenario rieng | So sanh 1-pool vs 6-pool | Isolation cost vs safety |
+| C: peak 64/s | VU pool capacity | Gap doi peak rate | Drops, active VU cao | VU sizing cho peak |
+| D: smoke 10s | Verify script | Rut ngan duration | ~103 slots | Kiem tra nhanh truoc full run |
+| E: 0-drop SLO | Production strict | maxDropped=0, VU lon | 0 drops | Production can VU headroom lon |
+| F: ext 200ms | Backend degradation | Tang external_ms | Drops, browse p95 tang | Noisy neighbor that su xuat hien |
+
+### Thu tu chay variation khuyen nghi
+
+```text
+1. Default pass (baseline) → verify script + hieu duong cong
+2. Smoke test (V-D) → kiem tra nhanh moi thay doi
+3. Checkout stress (V-A hoac V-F) → kich hoat Noisy Neighbor
+4. Peak stress (V-C) → tim VU pool capacity limit
+5. Separate scenarios (V-B) → so sanh isolation approach
+6. Production SLO (V-E) → xac dinh VU pool can thiet cho production
+```
 
 ## 16. Anti-patterns
 
