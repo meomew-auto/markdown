@@ -1522,6 +1522,46 @@ Lý thuyết Little's Law nói cả hai chỉ cần 1 VU. Nhưng thực tế:
 
 ---
 
+### 14.5 NL5: "Tăng preAllocatedVUs quá cao thì test mất ý nghĩa"
+
+**Nghịch lý:** Nếu bạn set preAllocatedVUs=500, maxVUs=1000, test sẽ pass với 0 drops. Nhưng... liệu kết quả đó có ý nghĩa không?
+
+**Giải thích:**
+- preAllocatedVUs quá cao nghĩa là bạn đang "giải quyết" vấn đề bằng cách throw resource vào
+- Trong thực tế, load generator có giới hạn: một máy không thể chạy 1000 VU
+- Nếu bạn cần 500 VU để xử lý 14 req/s, có điều gì đó rất sai trong thiết kế test hoặc hệ thống
+- Test với VU pool khổng lồ không còn phản ánh capacity thực tế nữa
+
+**Ví dụ cực đoan:**
+```
+preAllocatedVUs=10000, maxVUs=20000
+→ Pass mọi test
+→ Nhưng: load generator sẽ OOM trước khi đạt 10000 VU
+→ Kết quả không có giá trị thực tế
+```
+
+**Nguyên tắc vàng:** VU pool nên được set ở mức **hợp lý** — phản ánh resource thực tế bạn sẵn sàng allocate. Nếu test pass với pool hợp lý, hệ thống thực sự OK. Nếu test fail, bạn có hai lựa chọn:
+1. Tăng resource (tăng VU pool, tăng server capacity)
+2. Tối ưu hệ thống (giảm event duration)
+
+**Công thức tham khảo cho "hợp lý":**
+```
+preAllocatedVUs ≈ expected_concurrent_VU × 2
+maxVUs ≈ expected_concurrent_VU × 3 đến 5
+
+Với case 05:
+expected_concurrent_VU (mean) = 14 × 0.0485 ≈ 1
+preAllocatedVUs hợp lý: 2-5
+maxVUs hợp lý: 10-20
+
+→ Với config này, test SẼ fail → đó là tín hiệu ĐÚNG
+→ Hệ thống cần optimization, không phải cần thêm VU
+```
+
+**NL5 dạy bạn rằng:** Đừng dùng VU pool khổng lồ để "mua" pass. Pass đạt được bằng cách đó không có giá trị. Mục tiêu của performance test không phải là pass, mà là hiểu được capacity và giới hạn thực sự của hệ thống.
+
+---
+
 ## 15. Checklist — Async-specific checks
 
 ### 15.1 Pre-run checklist
@@ -1841,6 +1881,69 @@ console.log('PASS');
 - Scenario dashboard: preAllocatedVUs thấp (5-10), maxVUs thấp (20)
 - Scenario async: preAllocatedVUs cao (30-50), maxVUs cao (100+)
 - Tổng VU = sum của từng pool — kiểm soát được
+
+---
+
+### 17.8 Anti-pattern 8: "Dùng sleep() để mô phỏng wait nhưng không tính đến variance"
+
+**Sai lầm:** Dùng `sleep(140)` (hằng số) để mô phỏng async processing time. Không có variance.
+
+**Tại sao sai:**
+- Trong thực tế, async processing time có variance: đôi khi 50ms, đôi khi 500ms
+- Sleep hằng số tạo ra event duration đồng nhất → dễ predict, dễ pass
+- Test với sleep hằng số không phản ánh được tail latency thực tế
+- Kết quả: test pass với sleep(140) nhưng production fail vì P99 thực tế là 500ms
+
+**Cách đúng:**
+```javascript
+// Thay vì sleep hằng số:
+sleep(140);
+
+// Dùng sleep với variance:
+const waitTime = Math.random() * 200 + 40;  // 40ms đến 240ms
+sleep(waitTime);
+
+// Hoặc dùng phân phối thực tế hơn:
+// 80% jobs complete trong 100-150ms
+// 15% jobs complete trong 150-300ms
+// 5% jobs complete trong 300-1000ms
+const rand = Math.random();
+let waitTime;
+if (rand < 0.80) waitTime = 100 + Math.random() * 50;
+else if (rand < 0.95) waitTime = 150 + Math.random() * 150;
+else waitTime = 300 + Math.random() * 700;
+sleep(waitTime);
+```
+
+**Bài học:** Variance của async processing time quan trọng không kém mean. Một hệ thống với mean=140ms nhưng P99=1000ms sẽ cần nhiều VU hơn rất nhiều so với hệ thống với mean=140ms và P99=160ms.
+
+---
+
+### 17.9 Anti-pattern 9: "Không kiểm tra iteration_duration của async branch riêng"
+
+**Sai lầm:** Chỉ nhìn vào iteration_duration tổng (avg=52.3ms), kết luận "iteration nhanh, không có vấn đề".
+
+**Tại sao sai:**
+- iteration_duration tổng là weighted average của cả hai branch
+- avg=52.3ms che giấu sự thật rằng async branch mất 150ms
+- 70% dashboard iterations (5ms) kéo mean xuống → tạo cảm giác an toàn giả
+- Khi rate tăng, async branch mới là bottleneck — và mean tổng không cảnh báo được
+
+**Cách đúng:** Luôn group iteration_duration theo branch tag:
+
+```javascript
+// Trong post-processing:
+// iteration_duration{ branch="dashboard" } → avg=5ms, p95=7ms
+// iteration_duration{ branch="async_job" }  → avg=150ms, p95=160ms
+```
+
+Hoặc dùng custom metric cho từng branch:
+```javascript
+const dashboardTrend = new Trend('dashboard_iteration_duration', true);
+const asyncJobTrend = new Trend('async_job_iteration_duration', true);
+```
+
+**Bài học:** Trong multi-branch scenarios, không dùng mean tổng. Luôn drill down vào từng branch. Bimodal distribution nguy hiểm ở chỗ mean có thể nằm giữa hai modes và không đại diện cho bất kỳ mode nào.
 
 ---
 
