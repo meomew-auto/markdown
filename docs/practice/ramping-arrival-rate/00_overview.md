@@ -42,48 +42,32 @@ docs/practice/ramping-arrival-rate/NN_<topic>.md
 Hãy tưởng tượng một lịch hẹn **biến thiên** theo thời gian:
 
 ```text
-startRate = 5
-stages: 15s -> 15,  25s -> 28,  15s -> 8
-timeUnit = 1s
+startRate = 5, timeUnit = 1s
+stages: 15s→15, 25s→28, 15s→8
 
 => 0-15s:  rate ramp tuyến tính từ 5/s lên 15/s
    15-40s: rate ramp tuyến tính từ 15/s lên 28/s
    40-55s: rate ramp tuyến tính từ 28/s xuống 8/s
 ```
 
-Mỗi slot đến giờ sẽ hỏi:
+Rate(t) = nội suy tuyến tính trong mỗi stage:
 
 ```text
-"Có worker/VU nào rảnh để chạy event này không?"
+rate(t) = rate_start + (rate_end - rate_start) × elapsed_in_stage / stage_duration
 ```
 
-- Có VU rảnh -> iteration bắt đầu.
-- Không có VU rảnh nhưng còn dưới `maxVUs` -> k6 spawn thêm VU (có spawn delay).
-- Không spawn kịp hoặc đã chạm trần `maxVUs` -> slot bị bỏ, `dropped_iterations += 1`.
+Ví dụ stage `15s → 28` (rate_start=15, rate_end=28): tại t=5s trong stage, rate = 15 + 13×5/15 = 19.33/s; tại t=15s, rate = 28/s.
 
-Rate không phẳng — nó ramp lên và xuống trong từng stage. K6 tính rate(t) theo công thức nội suy tuyến tính:
-
-```text
-rate(t) = rate_start_stage + (rate_end_stage - rate_start_stage) × (t - t_stage_start) / stage_duration
-```
-
-Ví dụ stage `duration: 15s, target: 28` bắt đầu từ rate=15/s:
-
-```text
-t=0s trong stage:  rate = 15/s
-t=5s trong stage:  rate = 15 + (28-15)×5/15 = 15 + 4.33 = 19.33/s
-t=10s trong stage: rate = 15 + (28-15)×10/15 = 15 + 8.67 = 23.67/s
-t=15s trong stage: rate = 28/s (target cuối stage)
-```
-
-Điều này có nghĩa **khoảng cách giữa các slot arrival co giãn theo rate hiện tại**.
-Khi rate thấp, slot thưa; khi rate cao, slot dày hơn.
+Mỗi slot đến giờ hỏi: "Có VU rảnh không?"
+- Có -> iteration bắt đầu.
+- Không, còn dưới `maxVUs` -> spawn thêm VU (có delay).
+- Không spawn kịp / chạm trần -> `dropped_iterations += 1`.
 
 Điểm mấu chốt:
 
 ```text
 VU trong ramping-arrival-rate KHÔNG phải business user.
-VU là năng lực scheduler để giữ arrival contract biến thiên.
+VU = năng lực scheduler để giữ arrival contract biến thiên.
 __VU = anonymous worker. exec.scenario.iterationInTest = global arrival slot index.
 User identity KHÔNG bound vào VU.
 ```
@@ -168,138 +152,56 @@ Cần mỗi VU chạy đúng N vòng           -> per-vu-iterations
 
 ### Stage math cho từng case
 
-**Case 01 — Daily ingress curve:**
-
+**Case 01 — Daily ingress curve** (startRate=5, stages: 15s→15, 25s→28, 15s→8):
 ```text
-startRate=5, timeUnit=1s
-Stage 1: duration=15s, rate: 5 -> 15/s
-  slots = 15 × (5+15)/2 = 15 × 10 = 150
-Stage 2: duration=25s, rate: 15 -> 28/s
-  slots = 25 × (15+28)/2 = 25 × 21.5 = 537.5
-Stage 3: duration=15s, rate: 28 -> 8/s
-  slots = 15 × (28+8)/2 = 15 × 18 = 270
-total_scheduled = 150 + 537.5 + 270 ≈ 957.5 slots
-lambda_peak = 28/s
-required_vus_min_peak ≈ ceil(28 × W_effective)
+S1: 15×(5+15)/2=150 | S2: 25×(15+28)/2=537.5 | S3: 15×(28+8)/2=270
+total≈957.5 | lambda_peak=28/s | VU_min≈ceil(28×W)
 ```
 
-**Case 02 — Campaign ingress spike:**
-
+**Case 02 — Campaign ingress spike** (startRate=3, stages: 5s→10, 10s→40, 10s→8, 5s→3):
 ```text
-startRate=3, timeUnit=1s
-Stage 1: duration=5s, rate: 3 -> 10/s
-  slots = 5 × (3+10)/2 = 32.5
-Stage 2: duration=10s, rate: 10 -> 40/s
-  slots = 10 × (10+40)/2 = 250
-Stage 3: duration=10s, rate: 40 -> 8/s
-  slots = 10 × (40+8)/2 = 240
-Stage 4: duration=5s, rate: 8 -> 3/s
-  slots = 5 × (8+3)/2 = 27.5
-total_scheduled ≈ 550 slots
-lambda_peak = 40/s  <-- ĐÂY LÀ CON SỐ QUYẾT ĐỊNH VU SIZING
-required_vus_min_peak ≈ ceil(40 × W_effective)
+S1: 5×(3+10)/2=32.5 | S2: 10×(10+40)/2=250 | S3: 10×(40+8)/2=240 | S4: 5×(8+3)/2=27.5
+total≈550 | lambda_peak=40/s ← ĐÂY LÀ CON SỐ QUYẾT ĐỊNH VU SIZING
+average=550/30≈18.3/s → nếu set VU theo average, drop hàng loạt ở S2
 ```
 
-Stage 2 chỉ kéo dài 10s nhưng rate lên tới 40/s — đây là stage quyết định toàn bộ
-`preAllocatedVUs` và `maxVUs`. Nếu chỉ nhìn average rate (550/30 ≈ 18.3/s) mà
-set VU, bạn sẽ bị drop hàng loạt ở stage 2.
-
-**Case 03 — Login wave ingress:**
-
+**Case 03 — Login wave ingress** (startRate=2, stages: 15s→15, 20s→28, 10s→5):
 ```text
-startRate=2, timeUnit=1s
-Stage 1: duration=15s, rate: 2 -> 15/s  => slots = 15 × (2+15)/2 = 127.5
-Stage 2: duration=20s, rate: 15 -> 28/s => slots = 20 × (15+28)/2 = 430
-Stage 3: duration=10s, rate: 28 -> 5/s  => slots = 10 × (28+5)/2 = 165
-total_scheduled ≈ 722.5 slots
-lambda_peak = 28/s
+S1: 15×(2+15)/2=127.5 | S2: 20×(15+28)/2=430 | S3: 10×(28+5)/2=165
+total≈722.5 | lambda_peak=28/s | auth latency thấp → W nhỏ → ít VU hơn case khác cùng peak
 ```
 
-Auth endpoint thường latency thấp (token validation đơn giản), nhưng stage 2 kéo dài
-20s ở rate cao — cần đảm bảo VU pool ổn định suốt phase này.
-
-**Case 04 — Checkout surge ingress:**
-
+**Case 04 — Checkout surge ingress** (startRate=1, stages: 15s→5, 15s→10, 10s→2):
 ```text
-startRate=1, timeUnit=1s
-Stage 1: duration=15s, rate: 1 -> 5/s   => slots = 15 × (1+5)/2 = 45
-Stage 2: duration=15s, rate: 5 -> 10/s  => slots = 15 × (5+10)/2 = 112.5
-Stage 3: duration=10s, rate: 10 -> 2/s  => slots = 10 × (10+2)/2 = 60
-total_scheduled ≈ 217.5 slots
-lambda_peak = 10/s  <-- nhìn qua tưởng nhẹ
+S1: 15×(1+5)/2=45 | S2: 15×(5+10)/2=112.5 | S3: 10×(10+2)/2=60
+total≈217.5 | lambda_peak=10/s ← nhìn qua tưởng nhẹ
+Nhưng W_effective=0.8s (payment gateway) → VU_min≈ceil(10×0.8)=8 VU
+Bài học: peak rate thấp ≠ cần ít VU. W_effective quyết định.
 ```
 
-Nhưng checkout endpoint có external latency cao (payment gateway, inventory check,
-order write) -> W_effective có thể 0.5-1.5s. Với W=0.8s:
-
+**Case 05 — Report ingress ramp** (startRate=2, stages: 10s→6, 15s→14, 10s→4):
 ```text
-required_vus_min_peak ≈ ceil(10 × 0.8) = 8 VUs
+S1: 10×(2+6)/2=40 | S2: 15×(6+14)/2=150 | S3: 10×(14+4)/2=90
+total=280 | lambda_peak=14/s
+Async job: backend trả 202, script poll job status → W_effective tăng.
+dropped_iterations là tín hiệu DUY NHẤT báo thiếu worker cho async path.
 ```
 
-8 VU cho rate 10/s — tỷ lệ VU/rate cao hơn hẳn case 06 (feed cache). Đây là bài học:
-**peak rate thấp không có nghĩa là cần ít VU**.
-
-**Case 05 — Report ingress ramp:**
-
+**Case 06 — Feed ingress ramp** (startRate=8, stages: 10s→20, 15s→35, 10s→10):
 ```text
-startRate=2, timeUnit=1s
-Stage 1: duration=10s, rate: 2 -> 6/s   => slots = 10 × (2+6)/2 = 40
-Stage 2: duration=15s, rate: 6 -> 14/s  => slots = 15 × (6+14)/2 = 150
-Stage 3: duration=10s, rate: 14 -> 4/s  => slots = 10 × (14+4)/2 = 90
-total_scheduled = 280 slots
-lambda_peak = 14/s
+S1: 10×(8+20)/2=140 | S2: 15×(20+35)/2=412.5 | S3: 10×(35+10)/2=225
+total≈777.5 | lambda_peak=35/s ← peak cao nhất 7 case
+Nhưng W_effective=0.07s (cacheable feed) → VU_min≈ceil(35×0.07)=3 VU
+Bài học: rate cao ≠ cần nhiều VU nếu event cực nhanh. Little's Law quyết định.
 ```
 
-Async job pattern: k6 gửi request, backend trả 202 Accepted, job chạy async.
-Event duration = HTTP round-trip + poll/wait nếu script có polling.
-`dropped_iterations` là tín hiệu duy nhất báo thiếu worker cho async path —
-vì HTTP latency của 202 thường thấp, nhưng nếu script poll job status thì
-W_effective tăng đáng kể.
-
-**Case 06 — Feed ingress ramp:**
-
+**Case 07 — Production ingress curve** (startRate=4, stages: 10s→14, 20s→28, 15s→18, 10s→6):
 ```text
-startRate=8, timeUnit=1s
-Stage 1: duration=10s, rate: 8 -> 20/s  => slots = 10 × (8+20)/2 = 140
-Stage 2: duration=15s, rate: 20 -> 35/s => slots = 15 × (20+35)/2 = 412.5
-Stage 3: duration=10s, rate: 35 -> 10/s => slots = 10 × (35+10)/2 = 225
-total_scheduled ≈ 777.5 slots
-lambda_peak = 35/s  <-- peak cao nhất trong 7 case
+S1: 10×(4+14)/2=90 | S2: 20×(14+28)/2=420 | S3: 15×(28+18)/2=345 | S4: 10×(18+6)/2=120
+total=975 | lambda_peak=28/s
+6 service types dùng chung VU pool. Noisy Neighbor: checkout (W cao) chiếm VU
+→ feed arrival slot bị drop dù feed endpoint vẫn nhanh.
 ```
-
-Nhưng feed endpoint cacheable, W_effective cỡ 0.05-0.1s. Với W=0.07s:
-
-```text
-required_vus_min_peak ≈ ceil(35 × 0.07) = 3 VUs
-```
-
-3 VU cho rate 35/s — tỷ lệ VU/rate cực thấp. Bài học: **rate cao không có nghĩa
-là cần nhiều VU nếu event cực nhanh**. Little's Law quyết định tất cả.
-
-**Case 07 — Production ingress curve:**
-
-```text
-startRate=4, timeUnit=1s
-Stage 1: duration=10s, rate: 4 -> 14/s  => slots = 10 × (4+14)/2 = 90
-Stage 2: duration=20s, rate: 14 -> 28/s => slots = 20 × (14+28)/2 = 420
-Stage 3: duration=15s, rate: 28 -> 18/s => slots = 15 × (28+18)/2 = 345
-Stage 4: duration=10s, rate: 18 -> 6/s  => slots = 10 × (18+6)/2 = 120
-total_scheduled = 975 slots
-lambda_peak = 28/s
-```
-
-6 service types trong cùng một scenario: browse, cart, auth, checkout, report, feed.
-Mỗi service có W_effective khác nhau. VU pool dùng chung cho tất cả arrival slots.
-
-Noisy Neighbor pattern:
-
-```text
-Nếu checkout (W cao) chiếm nhiều VU cùng lúc ở stage 2,
-các arrival slot cho feed (W thấp) có thể bị drop dù feed endpoint vẫn nhanh.
-```
-
-Đây là lý do case 07 là bài tổng hợp — nó dạy rằng **VU pool là tài nguyên chung**,
-và một service chậm có thể gây drop cho toàn bộ arrival stream.
 
 ## Công thức cần nhớ
 
@@ -473,171 +375,66 @@ ramping_arrival_event_duration_ms  = trend của event duration
 
 ### Bước 1: Xác nhận executor/config
 
-Output phải thể hiện scenario dùng:
+Output phải thể hiện đúng `executor: ramping-arrival-rate`, `startRate`, `timeUnit`, `stages[]`, `preAllocatedVUs`, `maxVUs`. Kiểm tra: `startRate` không nhầm với `rate` của constant-arrival-rate; `stages[].target` là absolute, không phải delta.
 
-```text
-executor: ramping-arrival-rate
-startRate: <case startRate>
-timeUnit: <case timeUnit>
-stages: [
-  { duration: "...", target: ... },
-  ...
-]
-preAllocatedVUs: <case preAllocatedVUs>
-maxVUs: <case maxVUs>
-```
-
-Nếu config sai, mọi kết luận phía sau vô nghĩa. Đặc biệt kiểm tra:
-- `startRate` có đúng không (dễ nhầm với `rate` của constant-arrival-rate).
-- `stages[].target` có phải là absolute rate target không (dễ nhầm thành delta).
-
-### Bước 2: Tính expected scheduled slots toàn scenario
+### Bước 2: Tính expected scheduled slots
 
 ```text
 Với mỗi stage i:
   rate_start_i = (i==0 ? startRate : stages[i-1].target)
   rate_end_i = stages[i].target
   slots_i = stages[i].duration_seconds × (rate_start_i + rate_end_i) / 2
-
 total_scheduled_slots = Σ slots_i
 ```
 
-Ví dụ case 01:
-
-```text
-stage 1: 15 × (5+15)/2 = 150
-stage 2: 25 × (15+28)/2 = 537.5
-stage 3: 15 × (28+8)/2 = 270
-total ≈ 957.5
-```
+Ví dụ case 01: 15×(5+15)/2=150 + 25×(15+28)/2=537.5 + 15×(28+8)/2=270 ≈ 957.5.
 
 ### Bước 3: So sánh với summary
 
-Đọc:
-
-```text
-iterations
-dropped_iterations
-interrupted iterations
-http_reqs
-ramping_arrival_events_total
-ramping_arrival_api_calls_total
-```
-
-Healthy happy path thường là:
-
-```text
-dropped_iterations = 0
-iterations ≈ total_scheduled_slots
-ramping_arrival_events_total ≈ iterations
-```
-
-Nếu `iterations` thấp hơn `total_scheduled_slots` nhưng `dropped_iterations = 0`,
-có thể do gracefulStop ngắt scenario khi còn slot chưa start. Đọc thêm `interrupted iterations`.
+Đọc `iterations`, `dropped_iterations`, `interrupted iterations`, `http_reqs`, `ramping_arrival_events_total`, `ramping_arrival_api_calls_total`. Healthy path: `dropped_iterations=0`, `iterations≈total_scheduled_slots`. Nếu iterations thấp hơn nhưng dropped=0, có thể do gracefulStop — đọc thêm interrupted iterations.
 
 ### Bước 4: Đọc failure/drop cùng VU pressure
 
-Nếu `dropped_iterations > 0`, không kết luận ngay "backend hỏng".
-Phải đọc cùng:
-
-```text
-vus / active VUs chart (theo thời gian)
-vus_max / maxVUs envelope
-ramping_arrival_event_duration_ms (p95, p99, max)
-http_req_duration (p95, p99 theo service/operation)
-```
-
-Diễn giải:
+Nếu `dropped_iterations > 0`, đọc cùng `vus` chart, `vus_max`, `ramping_arrival_event_duration_ms` (p95/p99), `http_req_duration` (p95/p99 theo service).
 
 | Dấu hiệu | Cách hiểu |
 | --- | --- |
-| Latency tăng, VUs tăng, dropped = 0 | Pool đang hấp thụ slow-down, còn headroom |
-| VUs sát maxVUs, dropped > 0 (chỉ ở vùng peak) | Peak rate vượt capacity; tăng maxVUs hoặc giảm target stage |
-| VUs sát maxVUs, dropped > 0 (toàn bộ timeline) | preAllocatedVUs/maxVUs thấp toàn cục; W_effective cao hơn dự đoán |
-| dropped > 0 nhưng VUs chưa chạm maxVUs | Spawn delay: rate tăng quá nhanh, k6 không spawn kịp VU; tăng preAllocatedVUs |
-| Latency thấp, VUs thấp, dropped > 0 | Có thể preAllocatedVUs thấp + spawn không kịp ở stage đầu |
+| Latency tăng, VUs tăng, dropped=0 | Pool hấp thụ slow-down, còn headroom |
+| VUs sát max, dropped>0 (chỉ vùng peak) | Peak vượt capacity; tăng maxVUs hoặc giảm target |
+| VUs sát max, dropped>0 (toàn timeline) | preAllocated/maxVUs thấp toàn cục; W cao hơn dự đoán |
+| dropped>0 nhưng VUs chưa chạm max | Spawn delay: rate tăng quá nhanh; tăng preAllocatedVUs |
+| Latency thấp, VUs thấp, dropped>0 | preAllocatedVUs thấp + spawn không kịp ở stage đầu |
 
 ### Bước 5: Kết luận theo arrival contract
 
-Một run pass khi:
-
-```text
-- dropped_iterations = 0 (HOẶC trong ngưỡng cho phép có giải thích rõ)
-- ramping_arrival_events_failed trong ngưỡng
-- checks/http_req_failed đạt threshold
-- VU pressure còn headroom ở vùng peak
-- iter/s theo bucket khớp rate(t) target ở từng stage
-```
-
-Không pass chỉ vì `http_req_duration` đẹp nếu `dropped_iterations` đã tăng ở vùng peak.
+Pass khi: `dropped_iterations=0` (hoặc trong ngưỡng có giải thích), `ramping_arrival_events_failed` trong ngưỡng, checks/http_req_failed đạt threshold, VU còn headroom ở peak, iter/s theo bucket khớp rate(t) target từng stage. Không pass chỉ vì latency đẹp nếu dropped đã tăng ở peak.
 
 ## Đọc dashboard real-time charts
 
 ### Overview chart 1: Response time
 
-Dùng để xem latency theo bucket thời gian:
-
-```text
-- cold start spike ở stage 1?
-- p95/p99 tăng dần khi rate ramp lên?
-- max spike đơn lẻ hay tail latency rộng?
-- endpoint nào/tag nào tạo spike?
-- latency có tăng đột biến ở transition giữa các stage không?
-```
-
-Nhưng response-time chart không thay thế summary-final. Final percentile nên lấy từ
-k6 summary hoặc summary-final do `run-with-summary.ps1` push.
+Dùng xem latency theo bucket: cold start spike? p95/p99 tăng khi rate ramp? max spike đơn lẻ hay tail rộng? endpoint/tag nào tạo spike? latency đột biến ở transition? Response-time chart không thay thế summary-final — final percentile lấy từ k6 summary hoặc summary-final.
 
 ### Overview chart 2: Execution timeline
 
-Dùng để xem theo thời gian:
+Dùng xem: http_reqs/bucket theo rate(t) curve? iterations/bucket khớp scheduled slots? dropped_iterations xuất hiện ở stage nào? active VUs tăng theo arrival rate? failures cluster ở stage cụ thể?
 
-```text
-- http_reqs per bucket — có theo đúng rate(t) curve không?
-- iterations per bucket — có khớp scheduled slots từng stage không?
-- dropped_iterations — xuất hiện ở stage nào? Có cluster ở peak không?
-- active VUs — có tăng theo nhu cầu arrival rate không?
-- ramping_arrival_events_failed — có cluster ở stage cụ thể không?
-```
-
-Với `ramping-arrival-rate`, timeline đẹp là:
-
-```text
-iterations/bucket đi theo đường rate(t) — tăng dần stage 1, giữ/tiếp tục tăng stage 2, giảm dần stage cuối
-dropped_iterations = 0 hoặc chỉ xuất hiện thoáng qua ở transition
-http_reqs/bucket theo đúng call pattern của từng operation
-```
+Timeline đẹp: iterations/bucket theo đường rate(t), dropped=0 (hoặc thoáng qua transition), http_reqs/bucket đúng call pattern.
 
 ### Overview chart 3: VUs vs iter/s
 
-Chart này trả lời:
+Trả lời: "k6 phải dùng bao nhiêu VU để giữ arrival rate curve?" Không đọc như số user.
 
 ```text
-"k6 phải dùng bao nhiêu VU để giữ arrival rate curve?"
-```
-
-Không đọc chart này như số user production.
-
-```text
-VUs tăng = event giữ worker lâu hơn (có thể do rate tăng hoặc latency tăng)
-VUs sát maxVUs + iter/s tụt so với rate(t) target = nguy cơ thiếu capacity
-VUs thấp + iter/s đạt rate(t) target = pool dư headroom
-VUs không tăng dù rate tăng = event cực nhanh, W_effective rất thấp
+VUs tăng = event giữ worker lâu hơn (rate tăng hoặc latency tăng)
+VUs sát max + iter/s tụt so với rate(t) = thiếu capacity
+VUs thấp + iter/s đạt rate(t) = dư headroom
+VUs không tăng dù rate tăng = event cực nhanh, W rất thấp
 ```
 
 ### Executor tab
 
-Executor tab nên xác nhận:
-
-```text
-executor = ramping-arrival-rate
-startRate/timeUnit đúng case
-stages (duration + target) đúng config
-preAllocatedVUs/maxVUs đúng config
-observed active VUs hợp lý với rate curve
-dropped_iterations khớp summary
-actual iter/s theo bucket gần rate(t) target nếu không drop
-```
+Xác nhận: executor, startRate/timeUnit, stages (duration+target), preAllocatedVUs/maxVUs, active VUs hợp lý với rate curve, dropped_iterations khớp summary, iter/s theo bucket gần rate(t) target.
 
 ## Chart caveats dễ hiểu nhầm
 
