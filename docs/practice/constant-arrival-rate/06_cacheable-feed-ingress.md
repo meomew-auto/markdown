@@ -219,6 +219,25 @@ preAllocatedVUs=12, maxVUs=30
 dropped_iterations khớp summary
 ```
 
+## Kết quả validation 2026-06-21
+
+Full run với default config:
+
+```text
+Run id: 94
+Target slots: 1080
+Iterations: 1081
+HTTP requests: 1081
+Dropped iterations: 0
+Checks: 100%
+HTTP failed: 0%
+constant_arrival_events_failed: 0
+constant_arrival_event_duration_ms p95: 4 ms
+Result: PASS
+```
+
+High rate nhưng event duration rất thấp, nên VU pressure thấp và không drop. Chart analysis chi tiết nằm ở `08_validation-and-chart-analysis.md`.
+
 ## Anti-patterns
 
 ```text

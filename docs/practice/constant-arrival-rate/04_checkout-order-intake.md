@@ -225,6 +225,25 @@ preAllocatedVUs=15, maxVUs=40
 dropped_iterations khớp summary
 ```
 
+## Kết quả validation 2026-06-21
+
+Full run với default config:
+
+```text
+Run id: 92
+Target slots: 225
+Iterations: 226
+HTTP requests: 452
+Dropped iterations: 0
+Checks: 100%
+HTTP failed: 0%
+constant_arrival_events_failed: 0
+constant_arrival_event_duration_ms p95: 115 ms
+Result: PASS
+```
+
+`http_reqs = iterations × 2`, đúng flow checkout create + confirm. Chart analysis chi tiết nằm ở `08_validation-and-chart-analysis.md`.
+
 ## Anti-patterns
 
 ```text

@@ -216,6 +216,25 @@ preAllocatedVUs=8, maxVUs=24
 dropped_iterations khớp summary
 ```
 
+## Kết quả validation 2026-06-21
+
+Full run với default config:
+
+```text
+Run id: 90
+Target slots: 675
+Iterations: 676
+HTTP requests: 676
+Dropped iterations: 0
+Checks: 100%
+HTTP failed: 0%
+constant_arrival_events_failed: 0
+constant_arrival_event_duration_ms p95: 23 ms
+Result: PASS
+```
+
+`iterations` cao hơn target slots 1 đơn vị do boundary scheduling; không có drop/interrupt nên contract vẫn pass. Chart analysis chi tiết nằm ở `08_validation-and-chart-analysis.md`.
+
 ## Anti-patterns
 
 ```text

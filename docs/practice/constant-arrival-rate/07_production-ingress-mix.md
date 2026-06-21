@@ -240,6 +240,26 @@ preAllocatedVUs=25, maxVUs=80
 dropped_iterations <= 5 và khớp summary
 ```
 
+## Kết quả validation 2026-06-21
+
+Full run với default config:
+
+```text
+Run id: 95
+Target slots: 1080
+Iterations: 1081
+HTTP requests: 1081
+Dropped iterations: 0
+Checks: 100%
+HTTP failed: 0%
+constant_arrival_events_failed: 0
+constant_arrival_event_duration_ms p95: 1617 ms
+Active VU max observed: 11
+Result: PASS
+```
+
+Mixed baseline đạt ingress contract với zero drops. p95 tổng cao hơn read-only cases vì checkout/report branches chậm hơn; cần drill theo `service`/`operation` nếu tối ưu. Chart analysis chi tiết nằm ở `08_validation-and-chart-analysis.md`.
+
 ## Anti-patterns
 
 ```text

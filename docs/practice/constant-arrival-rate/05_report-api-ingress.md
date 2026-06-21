@@ -243,6 +243,36 @@ preAllocatedVUs=20, maxVUs=50
 dropped_iterations khớp summary
 ```
 
+## Kết quả validation 2026-06-21
+
+Full run với default config:
+
+```text
+Run id: 93
+Target slots: 270
+Iterations: 249
+HTTP requests: 309
+Dropped iterations: 22
+Checks: 100%
+HTTP failed: 0%
+constant_arrival_events_failed: 0
+constant_arrival_event_duration_ms p95: 7950.6 ms
+Active VU max observed: 41
+Result: FAIL — dropped_iterations vượt threshold 0
+```
+
+Rerun tăng VU pool (`CAR_05_PREALLOCATED_VUS=60`, `CAR_05_MAX_VUS=100`) vẫn còn drop:
+
+```text
+Run id: 96
+Iterations: 265
+Dropped iterations: 6
+constant_arrival_event_duration_ms p95: 12785 ms
+Result: FAIL — giảm drop nhưng chưa đạt contract
+```
+
+Đây là case dạy rất rõ: `checks=100%` và `http_req_failed=0%` không đủ để pass open-model contract. Chart analysis chi tiết nằm ở `08_validation-and-chart-analysis.md`.
+
 ## Anti-patterns
 
 ```text

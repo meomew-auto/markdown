@@ -90,6 +90,12 @@ car-06-cacheable-feed-ingress.js
 car-07-production-ingress-mix.js
 ```
 
+Sau khi chạy full validation, đọc thêm:
+
+```text
+docs/practice/constant-arrival-rate/08_validation-and-chart-analysis.md
+```
+
 Docs trong repo này chỉ giải thích cách học/chạy/phân tích; không duplicate source scripts.
 
 ## Run pattern chung
