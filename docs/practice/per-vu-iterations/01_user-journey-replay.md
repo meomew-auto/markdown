@@ -66,10 +66,25 @@ Nếu count phụ thuộc latency:
 
 ```text
 Công thức count khi chạy:
-  count_journey = duration × throughput
-                = 300s × (vus / iter_time)
-                = 300s × (30 / iter_time)
-                = 9000 / iter_time
+
+  Bước 1 — throughput (tốc độ iteration của cả pool 30 VU trong 1 giây):
+    throughput = vus / iter_time
+
+    Đây KHÔNG phải "chia VU cho thời gian". Phân tích:
+      throughput = vus × (1 / iter_time)
+                 = 30  × (1 / iter_time)
+
+    1/iter_time = tốc độ 1 VU (iter/s)
+      Ví dụ iter_time = 2s -> 1 VU làm được 0.5 iter trong 1 giây.
+
+    vus/iter_time = 30 VU cộng lại làm được bao nhiêu iter trong 1 giây.
+      Ví dụ iter_time = 2s -> 30/2 = 15 iter/s toàn pool.
+
+  Bước 2 — count tổng:
+    count_journey = duration × throughput
+                  = 300s × (vus / iter_time)
+                  = 300s × (30 / iter_time)
+                  = 9000 / iter_time
 
 Phân tích kỹ con số 9000:
 
