@@ -2781,9 +2781,28 @@ Phân tích từng bước:
 
   Bước 1 — tốc độ 1 nhân viên:
     iter_time = 2 phút/khách
-    → đảo đơn vị: 1/iter_time = 1/2 = 0.5 khách/phút
-    Nghĩa: 1 nhân viên trong 1 phút làm được nửa khách
-           (2 phút mới xong 1 khách)
+
+    Vấn đề: iter_time có đơn vị "phút/khách" (thời gian để xong 1 khách),
+           nhưng muốn tính "khách/phút" (số khách trong 1 phút) thì phải ĐẢO.
+
+    Cách đảo — quy tắc toán lớp 5: 1 / (a/b) = b/a
+
+    Viết dưới dạng phân số:
+              2 phút
+    iter_time = ───────
+              1 khách
+
+                            1           1 khách
+    1/iter_time = ─────────────────── = ─────── = 0.5 khách/phút
+                        2 phút          2 phút
+                       ───────
+                       1 khách
+
+    Cùng một sự thật, hai đơn vị:
+      iter_time     = 2 phút/khách  → "1 khách mất 2 phút"
+      1/iter_time   = 0.5 khách/phút → "1 phút được 0.5 khách"
+
+    Hai con số 2 và 0.5 là NGHỊCH ĐẢO của nhau. Đơn vị cũng đảo theo.
 
   Bước 2 — tốc độ 4 nhân viên (cả quán):
     peak_rate = vus × (1/iter_time)
@@ -2799,8 +2818,10 @@ Phân tích từng bước:
     2 khách/phút = 2/60 = 0.033 khách/giây
     Hoặc: 60 giây × 0.033 = 2 khách (trong 1 phút)
 
-Đừng nhầm: 4/2 = 2 không phải "4 VU chia cho 2 phút ra 2 VU/phút".
-Mà là: 4 VU cùng làm, mỗi VU tốc độ 0.5 khách/phút → 2 khách/phút.
+Tóm lại vì sao là vus/iter_time mà không phải vus × iter_time:
+  iter_time = giây/iter   (đơn vị thời gian)
+  Muốn throughput = iter/giây (đơn vị tốc độ) → PHẢI ĐẢO iter_time
+  → throughput = vus × (1/iter_time) = vus / iter_time
 ```
 
 **Áp vào k6**:
