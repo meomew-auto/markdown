@@ -2867,6 +2867,26 @@ code có sleep(0.5), HTTP mất ~0.05s -> iter_time ≈ 0.55s
 per_vu_rate = 1 / 0.55 ≈ 1.82 iter/giây
 ```
 
+**Có trong summary không?**: KHÔNG có sẵn. Phải tự tính từ `iteration_duration`.
+
+```text
+Trong summary:
+  iteration_duration...: avg=0.55s    ← đây là iter_time
+  iterations...........: 240  8.0/s   ← đây là throughput TOÀN POOL
+
+Tự tính per_vu_rate:
+  per_vu_rate = 1 / iteration_duration.avg
+              = 1 / 0.55
+              = 1.82 iter/s           ← 1 VU làm được bấy nhiêu
+
+Liên hệ:
+  iterations/s ≈ vus × per_vu_rate
+      8.0/s   ≈  4  ×    1.82        ← khớp
+
+  iterations/s là throughput CẢ POOL (summary có)
+  per_vu_rate  là throughput 1 VU     (tự tính, summary KHÔNG có)
+```
+
 **Khi nào dùng**: debug khi VU chậm bất thường, hoặc muốn biết 1 VU
 chạy được bao nhiêu iter/giây để sizing.
 
