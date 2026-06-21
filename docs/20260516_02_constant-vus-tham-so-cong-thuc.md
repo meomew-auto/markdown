@@ -3021,81 +3021,126 @@ data), hoặc check log xem có VU nào tụt hậu so với expected.
 
 #### Tình huống 1: "Sắp viết config, không biết đặt số bao nhiêu"
 
-Demo: `examples/constant_vus_sizing_demo.js`
+Đây là tình huống đầu tiên ai cũng gặp: đã có script, muốn test chạy ở tốc
+độ target, nhưng chưa biết đặt `vus` bao nhiêu.
 
-Script này mô phỏng tình huống: bạn có code (sleep giả request HTTP), muốn test
-chạy ở tốc độ target X iter/s, nhưng chưa biết đặt vus bao nhiêu.
+**Quy trình 4 bước:**
 
-Chạy thử với target khác nhau:
+Bước 1: Đo iter_time (chạy thử 1 VU, xem iteration_duration)
+   W = iteration_duration của code
+
+Bước 2: Quyết định tốc độ iteration muốn đạt (X iter/s)
+   X là con số bạn TỰ CHỌN dựa trên mục tiêu test, KHÔNG phải đọc từ summary.
+   Đây là tốc độ sẽ hiện ở dòng `iterations...: N  X/s` trong summary
+   nếu config đúng.
+
+   Ví dụ chọn X:
+     "Tôi muốn test chạy với tốc độ 10 journey mỗi giây"
+     "Production đang 50 req/s, tôi muốn test ở mức đó"
+     "Tôi muốn CI chạy regression 30 iter/s cho nhanh"
+   → X = 10 (hoặc 50, 30, ...)
+
+Bước 3: Tính số VU cần (đảo Công thức 1)
+   vus = ceil(X × W)
+       = ceil(10 × 0.5) = 5 VU
+
+Bước 4: Đặt config hoàn chỉnh
+   vus      = 5
+   duration = "30s"  (thời gian muốn test kéo dài)
+
+   Kèm theo:
+   maxDuration = "30s" + thêm buffer vài giây (để tránh interrupt)
+   gracefulStop = "30s" (mặc định, cho iter cuối chạy nốt)
+
+   Kiểm tra tổng iter dự kiến (Công thức 3):
+     total ≈ vus × duration / W = 5 × 30 / 0.5 = 300 iter
+
+   → Summary dự kiến: iterations.........: 300  10.0/s
+                         iteration_duration: avg=0.5s
+                         vus................: 5
+
+   Nếu summary ra iterations/s gần 10/s → config đúng.
+   Nếu thấp hơn hẳn → iter_time thực tế > W đã đo → tăng vus.
+
+---
+**Demo và output thật:** `examples/constant_vus_sizing_demo.js`
+
+Script này mô phỏng đúng 4 bước trên, dùng `sleep()` giả lập request HTTP:
+
+```js
+import exec from "k6/execution";
+import { sleep } from "k6";
+
+// ─── Tham số ───────────────────────────────────────────────
+const TARGET_RATE = __ENV.TARGET_RATE ? Number(__ENV.TARGET_RATE) : 10;
+const ITER_TIME_SEC = 0.5;  // Bước 1: W = 0.5s
+
+// ─── Bước 2 & 3: tính toán trong init phase ────────────────
+const W = ITER_TIME_SEC;
+const X = TARGET_RATE;
+const calculatedVUs = Math.ceil(X * W); // Bước 3: ceil(X × W)
+
+export const options = {
+  scenarios: {
+    sizing_demo: {
+      executor: "constant-vus",
+      vus: calculatedVUs,   // Bước 4: tự điền từ Bước 3
+      duration: "10s",
+      gracefulStop: "5s",
+    },
+  },
+};
+
+if (__VU === 1) {
+  console.log(`B1: W=${W}s | B2: X=${X} iter/s | B3: vus=ceil(${X}×${W})=${calculatedVUs}`);
+}
+
+export default function () {
+  sleep(ITER_TIME_SEC); // giả lập request HTTP
+}
+```
+
+Chạy với target mặc định 10 iter/s:
 
 ```bash
-k6 run examples/constant_vus_sizing_demo.js              # TARGET_RATE=10
-k6 run -e TARGET_RATE=5  examples/constant_vus_sizing_demo.js
-k6 run -e TARGET_RATE=20 examples/constant_vus_sizing_demo.js
+k6 run examples/constant_vus_sizing_demo.js
 ```
 
-**Phân tích output với TARGET_RATE=10:**
+Output:
 
 ```text
-╔══════════════════════════════════════════════════════════╗
-║  Bước 1 — Đo iter_time:   W = sleep(0.5) = 0.5s        ║
-║  Bước 2 — Tốc độ muốn:    X = 10 iter/s                ║
-║  Bước 3 — Tính VU:        vus = ceil(10×0.5) = 5 VU    ║
-║  Bước 4 — Config:         vus=5, duration=10s           ║
-║             Dự kiến:      5×10/0.5 = 100 iter           ║
-║             Kỳ vọng:      iterations/s ≈ 10             ║
-╚══════════════════════════════════════════════════════════╝
-
   █ TOTAL RESULTS
+    iteration_duration...: avg=500.34ms     ← W thực tế ~0.5s, khớp Bước 1
+    iterations...........: 100 9.993115/s   ← 9.99/s ≈ 10/s, khớp Bước 2
+    vus..................: 5   min=5 max=5  ← 5 VU, khớp Bước 3
 
-    iteration_duration...: avg=500.34ms     ← W thực tế ~0.5s
-    iterations...........: 100 9.993115/s   ← gần 10 ✓
-    vus..................: 5   min=5 max=5  ← đúng config
-
-  running: 100 complete and 0 interrupted    ← sạch, không drop
-
-Kiểm tra:
-  iterations/s = 9.993 ≈ 10 ✓  (target đạt)
-  vus × duration / iter_time = 5 × 10 / 0.5 = 100 ✓
-
-Kiểm tra ngược Công thức 1:
-  vus = (iterations/s) × iteration_duration.avg
-      = 9.993 × 0.50034
-      ≈ 5.0 → khớp config vus=5 ✓
+  running (10.0s), 0/5 VUs, 100 complete and 0 interrupted iterations
 ```
 
-**Phân tích output với TARGET_RATE=20:**
+Đối chiếu với các công thức:
+  CT3: total ≈ vus × duration / W = 5 × 10 / 0.5 = 100 → summary = 100 ✓
+  CT1: peak  = vus / W = 5 / 0.5 = 10 iter/s → summary 9.99/s ≈ 10 ✓
+  CT1 đảo: vus = rate × W = 9.993 × 0.50034 ≈ 5.0 → đúng config ✓
 
-```text
-  Bước 3: vus = ceil(20 × 0.5) = ceil(10) = 10 VU
+Thử thay đổi target để thấy vus thay đổi:
 
-  █ TOTAL RESULTS
-    iteration_duration...: avg=500.42ms
-    iterations...........: 200 19.982147/s   ← gần 20 ✓
-    vus..................: 10  min=10 max=10
-
-Kiểm tra:
-  iterations/s = 19.98 ≈ 20 ✓
-  total = 10 × 10 / 0.5 = 200 ✓
+```bash
+k6 run -e TARGET_RATE=20 examples/constant_vus_sizing_demo.js   # vus=10, rate~20/s
+k6 run -e TARGET_RATE=5  examples/constant_vus_sizing_demo.js   # vus=3,  rate~5/s
+k6 run -e TARGET_RATE=30 examples/constant_vus_sizing_demo.js   # vus=15, rate~30/s
 ```
 
-**Điểm cần dạy học sinh khi đọc output này:**
+Bảng tổng kết:
 
-1. `iterations/s` trong summary gần bằng target X → Bước 1-3 tính đúng
-2. `iteration_duration avg` gần bằng W đã đo → code ổn định, không biến thiên
-3. `vus min=max=5` → constant-vus giữ đúng số VU suốt duration (không tụt)
-4. `interrupted = 0` → duration + gracefulStop đủ rộng, không cắt iter
-5. Nếu `iterations/s` thấp hơn hẳn X → W thực tế > W đã đo → tăng vus
-6. Nếu `interrupted > 0` → có iter bị cắt ở grace → tăng maxDuration
-
-**Bảng thử nhanh với các target khác nhau:**
-
-| TARGET_RATE | iter_time W | vus = ceil(X×W) | iterations/s thực tế | Đạt? |
+| X (target iter/s) | W (iter_time) | vus = ceil(X × W) | iterations/s thực | Đạt? |
 | ---: | ---: | ---: | ---: | --- |
 | 5 | 0.5s | 3 | ~5.0/s | ✓ |
 | 10 | 0.5s | 5 | ~10.0/s | ✓ |
 | 20 | 0.5s | 10 | ~20.0/s | ✓ |
 | 30 | 0.5s | 15 | ~30.0/s | ✓ |
+
+Tất cả khớp vì demo dùng `sleep()` cố định. Với HTTP thật, iter_time dao
+động → rate lệch vài % → dùng `p95` thay `avg` để an toàn (xem mục 9.3).
 
 #### Tình huống 2: "Đã có target throughput, cần bao nhiêu VU?"
 
