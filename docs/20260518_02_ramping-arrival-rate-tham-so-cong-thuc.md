@@ -6149,102 +6149,511 @@ Bài học:
 
 #### Tình huống 2: "Đã có sẵn N VU, hỏi chịu được rate cao nhất là bao nhiêu?"
 
+Ngược với Tình huống 1: đã biết số VU (vd do giới hạn tài khoản test,
+server giới hạn connection, hoặc sếp bảo "chỉ được dùng 4 VU"), muốn ước
+lượng rate cao nhất có thể chịu trước khi viết config.
+
+Dùng chung demo `examples/ramping_arrival_rate_sizing_demo.js` nhưng
+phân tích theo hướng ngược: từ N VU → capacity.
+
+**── Công thức ──**
+
 ```text
-Bước 1: Đo iter_time
-   W = thời gian 1 iter
+Công thức gốc: required_vus = ceil(λ_peak × W) × 1.2     (CT 1)
+Đảo lại:       capacity    = N / W                         (CT 1 đảo)
 
-Bước 2: Tính capacity                                     [Công thức 1 đảo]
-   capacity = N / W  iter/giây
+Trong đó:
+  N = preAllocatedVUs (số VU sẵn sàng)
+  W = iter_time (thời gian 1 iter)
+  capacity = rate tối đa pool N VU chịu được (iter/s)
 
-Bước 3: So với rate config
-   nếu λ_peak ≤ capacity -> không drop
-   nếu λ_peak > capacity -> drop, rate dư = λ_peak − capacity
-
-Bước 4 (chi tiết hơn): Tính N_sched theo capacity         [Công thức 3]
-   N_sched_max chịu được = sum(d_i × min(λ(t_i), capacity))
-   -> ước lượng tổng iter sẽ hoàn thành nếu không drop
+Nếu λ_peak ≤ capacity → không drop
+Nếu λ_peak > capacity → drop, số slot drop/giây ≈ λ_peak − capacity
 ```
 
-**Ví dụ**:
+**── Ví dụ A: có 2 VU, W = 0.5s ──**
+
+```bash
+k6 run -e TARGET_RATE=2 examples/ramping_arrival_rate_sizing_demo.js
+```
+
+Demo tự tính: preAllocatedVUs = ceil(2 × 0.5) × 1.2 = 2 VU.
+Đây là case ĐỦ VU — capacity = λ_peak.
 
 ```text
-Có 6 VU, code sleep(0.5)
-=> capacity = 6 / 0.5 = 12 iter/s
-=> chịu được scenario có λ_peak ≤ 12 iter/s
-=> nếu config rate = 15/s -> sẽ drop 3/s tại đỉnh
+  iteration_duration...: avg=500.27ms     ← W thực tế ~0.5s
+  iterations...........: 12  1.411723/s
+  dropped_iterations...: (không có dòng)  ← = 0
+  vus_max..............: 2   min=2 max=2
+```
+
+Kiểm tra:
+  CT 1 đảo: capacity = N / W = 2 / 0.5 = 4 iter/s
+  λ_peak = 2 iter/s → capacity (4) > λ_peak (2) → không drop ✓
+  Thực tế: N_drop = 0 ✓
+
+  pool 2 VU DƯ SỨC chịu rate 2/s. Có thể tăng λ_peak lên 4/s
+  mà vẫn không drop (với W=0.5s).
+
+**── Ví dụ B: có 3 VU, W = 0.5s ──**
+
+```bash
+k6 run -e TARGET_RATE=4 examples/ramping_arrival_rate_sizing_demo.js
+```
+
+  capacity = 3 / 0.5 = 6 iter/s
+  λ_peak = 4 iter/s → capacity (6) > λ_peak (4) → không drop ✓
+
+```text
+  iteration_duration...: avg=500.31ms
+  iterations...........: 23  2.874645/s
+  vus_max..............: 3   min=3 max=3
+```
+
+  N_drop = 0. Pool 3 VU chịu được rate 4/s thoải mái.
+
+**── Ví dụ C: có 1 VU, W = 0.5s (thiếu VU) ──**
+
+```bash
+k6 run -e DROP_MODE=1 examples/ramping_arrival_rate_sizing_demo.js
+```
+
+  capacity = 1 / 0.5 = 2 iter/s
+  λ_peak = 4 iter/s → capacity (2) < λ_peak (4) → SẼ DROP
+
+```text
+  dropped_iterations...: 13  1.624683/s
+  iteration_duration...: avg=500.38ms
+  iterations...........: 10  1.249756/s
+  vus_max..............: 1   min=1 max=1
+```
+
+  N_drop = 13 slot. Tại sao 13?
+  λ_peak − capacity = 4 − 2 = 2 slot drop/giây (ở đỉnh)
+  Nhưng drop không chỉ ở đỉnh — trong stage ramp lên và ramp xuống,
+  rate thấp hơn 4/s, có lúc chỉ 1-2/s, nên drop ít hơn.
+
+  Tổng quát: số drop ≈ N_sched − (capacity × T_effective)
+  Với T_effective là thời gian hệ thống bận (VU active).
+
+**── Ví dụ D: có 5 VU, W = 0.5s ──**
+
+```bash
+k6 run -e TARGET_RATE=8 examples/ramping_arrival_rate_sizing_demo.js
+```
+
+  capacity = 5 / 0.5 = 10 iter/s
+  λ_peak = 8 iter/s → capacity (10) > λ_peak (8) → không drop ✓
+
+```text
+  iteration_duration...: avg=500.29ms
+  iterations...........: 47  5.874318/s
+  vus_max..............: 5   min=5 max=5
+```
+
+**── Bảng tổng kết capacity ──**
+
+| N (VU) | W | capacity = N/W | λ_peak | Drop? | N_done | N_drop |
+| ---: | ---: | ---: | ---: | --- | ---: | ---: |
+| 1 | 0.5s | 2 iter/s | 4/s | CÓ | 10 | 13 |
+| 2 | 0.5s | 4 iter/s | 2/s | Không | 12 | 0 |
+| 3 | 0.5s | 6 iter/s | 4/s | Không | 23 | 0 |
+| 5 | 0.5s | 10 iter/s | 8/s | Không | 47 | 0 |
+
+**── Điểm mấu chốt ──**
+
+```text
+Với ramping-arrival-rate, N VU CÓ SẴN không đảm bảo chịu được
+mọi λ_peak. Phải kiểm tra: capacity = N / W ≥ λ_peak.
+
+Nếu capacity < λ_peak:
+  → dropped_iterations > 0
+  → Tăng preAllocatedVUs (ít nhất lên ceil(λ_peak × W))
+  → HOẶC tăng maxVUs để cho phép spawn unplanned VU
+
+Nếu capacity > λ_peak (dư VU):
+  → Có thể tăng λ_peak để stress test nặng hơn
+  → HOẶC giảm preAllocatedVUs để tiết kiệm RAM
+
+So sánh với constant-vus:
+  constant-vus:         rate = vus / W (rate phụ thuộc latency)
+  ramping-arrival-rate: rate do scheduler quyết định,
+                        VU chỉ là "công nhân" phục vụ rate đó
+                        → rate không phụ thuộc latency (trừ khi drop)
 ```
 
 #### Tình huống 3: "Muốn biết rate ở thời điểm cụ thể trong stage"
 
-Câu hỏi điển hình: "Tại t=4.5s (giữa stage 1) rate đang là bao nhiêu?"
+Câu hỏi điển hình: "Tại t=3.0s (giữa stage 1 hold) rate đang là bao nhiêu?"
+hoặc "Tại t=1.0s (giữa stage 0 ramp) đã fire được mấy slot rồi?"
+
+Dùng config demo `ramping_arrival_rate_sizing_demo.js` (TARGET_RATE=4):
 
 ```text
-Bước 1: Xác định stage chứa t=4.5s
-   Cộng dồn duration để tìm:
-     stage 0: t=0..2s
-     stage 1: t=2..7s    <- t=4.5s nằm ở đây
-     stage 2: t=7..9s
+startRate = 0, timeUnit = "1s"
+stages:
+  stage 0: { duration: "2s", target: 4 }   // ramp 0 → 4/s
+  stage 1: { duration: "4s", target: 4 }   // hold 4/s
+  stage 2: { duration: "2s", target: 0 }   // ramp 4 → 0/s
 
-Bước 2: Lấy rate_đầu, rate_cuối của stage đó             [Công thức 3]
-   stage 1: rate_đầu=10/s, rate_cuối=4/s, dur=5s
-
-Bước 3: Áp công thức nội suy đường thẳng                 [Công thức 4]
-   slope = (4 - 10) / 5 = -1.2
-   t_local = 4.5 - 2 = 2.5s (đã trôi 2.5s trong stage 1)
-   rate(4.5s) = 10 + (-1.2) × 2.5 = 7/s
-
-Bước 4 (nếu cần): Tính slot_interval tại đó
-   slot_interval(4.5s) ≈ 1 / 7 = 143ms
+Timeline: 0──2s──6s──8s
 ```
 
-**Khi nào dùng**: debug log, ước lượng burst tại 1 điểm, tính capacity
-local cho diagnosis.
+**── Bước 1: Xác định stage chứa thời điểm cần ──**
+
+Cộng dồn duration để tìm stage:
+
+```text
+stage 0: t = 0s .. 2s   (duration = 2s)
+stage 1: t = 2s .. 6s   (duration = 4s)
+stage 2: t = 6s .. 8s   (duration = 2s)
+```
+
+**── Bước 2: Lấy rate_đầu, rate_cuối của stage đó ──**
+
+Nhớ quy tắc: `rate_đầu của stage N = rate_cuối của stage (N-1)`.
+Riêng stage 0: `rate_đầu = startRate`.
+
+```text
+stage 0: rate_đầu = startRate = 0/s,  rate_cuối = 4/s
+stage 1: rate_đầu = 4/s (từ stage 0), rate_cuối = 4/s (hold)
+stage 2: rate_đầu = 4/s (từ stage 1), rate_cuối = 0/s
+```
+
+**── Bước 3: Áp công thức nội suy đường thẳng ──**
+
+Công thức: `slope = (rate_cuối − rate_đầu) / duration`
+           `rate(t) = rate_đầu + slope × (t − stageStart)`
+
+**Ví dụ 1: t = 1.0s (giữa stage 0 ramp lên)**:
+
+```text
+stage 0: rate_đầu=0, rate_cuối=4, dur=2s
+  slope = (4 − 0) / 2 = +2.0
+  t_local = 1.0 − 0 = 1.0s
+  rate(1.0s) = 0 + 2.0 × 1.0 = 2.0/s
+
+→ Tại t=1s, scheduler đang fire với rate 2/s
+→ slot_interval ≈ 1/2 = 500ms (cứ 500ms fire 1 slot)
+```
+
+**Ví dụ 2: t = 3.0s (giữa stage 1 hold)**:
+
+```text
+stage 1: rate_đầu=4, rate_cuối=4, dur=4s
+  slope = (4 − 4) / 4 = 0  (hold, không đổi)
+  t_local = 3.0 − 2 = 1.0s
+  rate(3.0s) = 4 + 0 × 1.0 = 4.0/s
+
+→ Tại t=3s, rate = 4/s (đang ở đỉnh hold)
+→ slot_interval ≈ 1/4 = 250ms (cứ 250ms fire 1 slot)
+```
+
+**Ví dụ 3: t = 7.0s (giữa stage 2 ramp xuống)**:
+
+```text
+stage 2: rate_đầu=4, rate_cuối=0, dur=2s
+  slope = (0 − 4) / 2 = −2.0
+  t_local = 7.0 − 6 = 1.0s
+  rate(7.0s) = 4 + (−2.0) × 1.0 = 2.0/s
+
+→ Tại t=7s, rate giảm còn 2/s
+→ slot_interval ≈ 1/2 = 500ms
+```
+
+**── Ví dụ 4: t = 0.5s (sát đầu stage 0) ──**
+
+```text
+stage 0: rate_đầu=0, rate_cuối=4, dur=2s
+  t_local = 0.5 − 0 = 0.5s
+  rate(0.5s) = 0 + 2.0 × 0.5 = 1.0/s
+
+→ slot_interval ≈ 1s. Slot đầu tiên chưa fire (chưa tích lũy đủ 1).
+  Đúng caveat 3.1: slot đầu không mặc định ở t=0.
+```
+
+**── Bảng rate tại các thời điểm ──**
+
+| t | Stage | rate_đầu | rate_cuối | slope | t_local | rate(t) | slot_interval |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0.5s | 0 (ramp) | 0/s | 4/s | +2.0 | 0.5s | 1.0/s | 1000ms |
+| 1.0s | 0 (ramp) | 0/s | 4/s | +2.0 | 1.0s | 2.0/s | 500ms |
+| 1.5s | 0 (ramp) | 0/s | 4/s | +2.0 | 1.5s | 3.0/s | 333ms |
+| 2.0s | 0→1 biên | 4/s | 4/s | 0 | 0.0s | 4.0/s | 250ms |
+| 3.0s | 1 (hold) | 4/s | 4/s | 0 | 1.0s | 4.0/s | 250ms |
+| 5.0s | 1 (hold) | 4/s | 4/s | 0 | 3.0s | 4.0/s | 250ms |
+| 6.0s | 1→2 biên | 4/s | 0/s | −2.0 | 0.0s | 4.0/s | 250ms |
+| 7.0s | 2 (ramp) | 4/s | 0/s | −2.0 | 1.0s | 2.0/s | 500ms |
+| 7.5s | 2 (ramp) | 4/s | 0/s | −2.0 | 1.5s | 1.0/s | 1000ms |
+
+**── Khi nào dùng ──**
+
+```text
+- Debug log: "sao slot fire dày ở giây 4 mà thưa ở giây 7?"
+  → rate(4s) = 4/s (hold), rate(7s) = 2/s (ramp xuống)
+
+- Ước lượng burst: "tại t=3s có bao nhiêu slot fire trong 200ms?"
+  → rate = 4/s → 4 × 0.2 = 0.8 slot → ~1 slot mỗi 250ms
+
+- Tính capacity local: "tại t=1s, cần mấy VU?"
+  → rate=2/s, W=0.5s → cần ceil(2 × 0.5) = 1 VU
+  → tại t=3s, rate=4/s → cần ceil(4 × 0.5) = 2 VU
+```
 
 #### Tình huống 4: "Thiết kế ngược từ số slot mong muốn"
 
 Câu hỏi: "Muốn có đúng 100 slot ở giai đoạn cao điểm, config thế nào?"
+hoặc "Cần N_sched = 50 slot, chọn stage ra sao?"
+
+Đây là bài toán ngược: biết output mong muốn (N_sched), tìm input (stages).
+
+**── Công thức gốc (CT 3) ──**
 
 ```text
-Bước 1: Quyết định pattern muốn dùng
-   Cách A: hold rate cố định
-   Cách B: ramp lên đỉnh rồi giảm
-   Cách C: spike ngắn
+N_sched_i = duration_i × (rate_đầu_i + rate_cuối_i) / 2
+         = duration_i × rate_trung_bình_i
 
-Bước 2: Áp công thức diện tích hình thang                 [Công thức 3]
-   N_sched = duration × (rate_đầu + rate_cuối) / 2
+→ Đảo lại: duration_i = N_sched_i / rate_trung_bình_i
+           = N_sched_i × 2 / (rate_đầu_i + rate_cuối_i)
+```
 
-   Cách A (hold rate=4/s): 25 × (4+4)/2 = 100 -> duration = 25s
-   Cách B (ramp 0→20/s):   10 × (0+20)/2 = 100 -> duration = 10s
-   Cách C (hold rate=20/s): 5 × (20+20)/2 = 100 -> duration = 5s
+**── Bước 1: Quyết định pattern muốn dùng ──**
 
-Bước 3: Chọn cách phù hợp với SLA
-   Cách A: tải đều, server có thời gian thở
-   Cách B: tăng dần, mô phỏng warm up
-   Cách C: spike ngắn, stress test
+3 pattern cơ bản, mỗi pattern có "hình dạng" slot khác nhau:
 
-Bước 4: Verify rate ở từng điểm                           [Công thức 4]
-   Đảm bảo λ_peak chọn không vượt năng lực server
+```text
+Pattern A: HOLD (rate cố định)
+  ┌─────────────────┐
+  │ rate = const    │  slot rải ĐỀU, dễ tính nhất
+  └─────────────────┘
+  Dùng cho: regression test, soak test, benchmark ổn định
+
+Pattern B: RAMP LÊN (0 → peak)
+       ╱
+      ╱               slot THƯA → DÀY dần
+     ╱
+  Dùng cho: warm up, ramp test, tìm điểm gãy
+
+Pattern C: SPIKE (ramp lên → hold → ramp xuống)
+       ╱‾‾‾‾‾‾‾╲
+      ╱           ╲    slot: thưa → dày → đều → thưa
+     ╱             ╲
+  Dùng cho: stress test có warm up + cool down
+```
+
+**── Bước 2: Áp công thức cho từng pattern ──**
+
+Ví dụ muốn có N_sched = 24 slot với W = 0.5s (để λ_peak = 4/s):
+
+**Pattern A: HOLD 4/s liên tục**
+
+```text
+N_sched = duration × (4 + 4) / 2 = duration × 4
+→ duration = 24 / 4 = 6s
+
+Config:
+  stages: [{ duration: "6s", target: 4 }]
+  preAllocatedVUs: ceil(4 × 0.5) × 1.2 = 3 VU
+  N_sched = 24 slot, λ_peak = 4/s, T = 6s
+```
+
+**Pattern B: RAMP 0 → 8/s**
+
+```text
+N_sched = duration × (0 + 8) / 2 = duration × 4
+→ duration = 24 / 4 = 6s
+
+Config:
+  stages: [{ duration: "6s", target: 8 }]
+  preAllocatedVUs: ceil(8 × 0.5) × 1.2 = 5 VU
+  N_sched = 24 slot, λ_peak = 8/s, T = 6s
+
+  → Cùng số slot, nhưng rate đỉnh gấp đôi → cần VU gấp đôi
+```
+
+**Pattern C: RAMP UP → HOLD → RAMP DOWN (giống demo)**
+
+```text
+Chọn λ_peak = 4/s, T_total = 8s
+
+Phân bổ:
+  stage 0 (ramp up):   2s × (0 + 4) / 2  = 4 slot
+  stage 1 (hold):      4s × (4 + 4) / 2  = 16 slot
+  stage 2 (ramp down): 2s × (4 + 0) / 2  = 4 slot
+  ─────────────────────────────────────────
+  N_sched = 24 slot, λ_peak = 4/s, T = 8s
+
+Config:
+  stages: [
+    { duration: "2s", target: 4 },
+    { duration: "4s", target: 4 },
+    { duration: "2s", target: 0 },
+  ]
+```
+
+**── Bước 3: So sánh 3 pattern ──**
+
+| Pattern | stages | T | λ_peak | N_sched | VU cần | Đặc điểm |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| A: Hold | 1 stage | 6s | 4/s | 24 | 3 | Đơn giản, slot đều, nhanh nhất |
+| B: Ramp | 1 stage | 6s | 8/s | 24 | 5 | Slot dày dần, cần VU gấp đôi |
+| C: Ramp+Hold+Ramp | 3 stages | 8s | 4/s | 24 | 3 | Mô phỏng thực tế, có warm up + cool down |
+
+Cùng 24 slot nhưng:
+  - Pattern A: nhanh (6s), VU ít (3), slot đều → dùng cho CI nhanh
+  - Pattern B: nhanh (6s), VU nhiều (5), slot dày cuối → stress VU pool
+  - Pattern C: chậm hơn (8s), VU vừa (3), có warm up → mô phỏng production
+
+**── Bước 4: Verify rate không vượt capacity ──**
+
+Sau khi chọn pattern, kiểm tra:
+
+```text
+capacity = preAllocatedVUs / W
+phải ≥ λ_peak
+
+Pattern A: capacity = 3/0.5 = 6/s ≥ 4/s ✓
+Pattern B: capacity = 5/0.5 = 10/s ≥ 8/s ✓
+Pattern C: capacity = 3/0.5 = 6/s ≥ 4/s ✓
+```
+
+**── Ví dụ thực tế: thiết kế test 100 slot ──**
+
+```text
+Yêu cầu: 100 slot, λ_peak không quá 10/s (giới hạn server), W=0.5s
+
+Pattern A (hold 10/s):
+  duration = 100 × 2 / (10+10) = 10s
+  preAllocatedVUs = ceil(10 × 0.5) × 1.2 = 6 VU
+  Config: 1 stage [{ duration: "10s", target: 10 }]
+
+Pattern C (ramp 0→10→0, 3 stage):
+  Giả sử ramp 2s mỗi bên, hold x giây:
+  ramp_up:   2 × (0+10)/2 = 10 slot
+  hold:      x × (10+10)/2 = 10x slot
+  ramp_down: 2 × (10+0)/2 = 10 slot
+  → 10 + 10x + 10 = 100 → x = 8s
+  Config: [
+    { duration: "2s", target: 10 },
+    { duration: "8s", target: 10 },
+    { duration: "2s", target: 0 },
+  ]
+  preAllocatedVUs = 6 VU, T = 12s
+
+→ Pattern C chậm hơn 2s nhưng mô phỏng realistic hơn.
 ```
 
 #### Tình huống 5: "Đã chạy xong, đọc summary"
 
+Sau khi run xong, summary là nơi duy nhất cần đọc để kết luận test
+có chạy đúng kế hoạch không.
+
+Dùng output từ demo `ramping_arrival_rate_sizing_demo.js` (TARGET_RATE=4, đủ VU)
+làm mẫu:
+
 ```text
-Bước 1: Đọc 3 con số từ summary + footer
-   iterations         = N_done   (số iter hoàn thành)
-   dropped_iterations = N_drop   (slot bị drop)
-   interrupted iter.  = N_int    (iter bị cancel ở cuối)
+  █ TOTAL RESULTS
 
-Bước 2: Tính N_sched dự kiến để đối chiếu                 [Công thức 3]
-   N_sched = sum(d_i × (rate_đầu+rate_cuối)/2)
+    EXECUTION
+    iteration_duration...: avg=500.31ms min=500ms med=500.35ms max=500.76ms
+                           p(90)=500.53ms p(95)=500.53ms
+    iterations...........: 23  2.874645/s
+    vus..................: 0   min=0      max=2
+    vus_max..............: 3   min=3      max=3
 
-Bước 3: Verify quan hệ                                    [Công thức 5]
-   N_done + N_drop + N_int ≈ N_sched (xấp xỉ ±1)
+    NETWORK
+    data_received........: 0 B 0 B/s
+    data_sent............: 0 B 0 B/s
 
-Bước 4: 3 câu hỏi diagnose
-   1) Có drop nhiều không?           N_drop / N_sched > 5% là đáng lo
-   2) Có interrupt cuối không?       N_int > 0 là chưa kịp xong
-   3) Rate thực có gần target không? actual_rate = N_done / T_run
-                                      so với λ_avg = N_sched / T
+running (08.0s), 0/3 VUs, 23 complete and 0 interrupted iterations
+```
+
+**── 6 con số trong EXECUTION ──**
+
+| Dòng summary | Ký hiệu | Nghĩa | Giá trị mẫu | Đọc thế nào |
+|---|---|---|---|---|
+| `iteration_duration avg` | W | Thời gian 1 iter trung bình | 500.31ms | So với W dự kiến (0.5s) → khớp |
+| `iterations` (count) | N_done | Số iter hoàn thành | 23 | So với N_sched (24) → 95.8%, lệch slot biên |
+| `iterations X/s` | actual_rate | Tốc độ trung bình toàn test | 2.87/s | So với λ_avg (3.00/s) → gần đúng |
+| `vus max` | M_peak | Số VU bận cao nhất | 2 | Cần 2 VU concurrent cho rate 4/s |
+| `vus_max` | preAllocated | Số VU trong pool | 3 | Đúng config preAllocatedVUs=3 |
+| `dropped_iterations` | N_drop | Slot bị drop | (không có dòng) = 0 | Không drop → đủ VU ✓ |
+
+**── So sánh với output thiếu VU (DROP_MODE=1) ──**
+
+```text
+    EXECUTION
+    dropped_iterations...: 13  1.624683/s       ← N_drop = 13 (!)
+    iteration_duration...: avg=500.38ms ...
+    iterations...........: 10  1.249756/s        ← N_done = 10
+    vus..................: 0   min=0      max=1
+    vus_max..............: 1   min=1      max=1
+
+running (08.0s), 0/1 VUs, 10 complete and 0 interrupted iterations
+```
+
+So sánh 2 output:
+
+| Chỉ số | Đủ VU (preAlloc=3) | Thiếu VU (preAlloc=1) | Giải thích |
+| --- | ---: | ---: | --- |
+| N_done | 23 | 10 | Thiếu VU → ít iter hoàn thành hơn |
+| N_drop | 0 | 13 | Thiếu VU → 13 slot không có VU nhận |
+| N_done + N_drop | 23 | 23 | Cả 2 ≈ N_sched=24 (±1 slot biên) |
+| vus_max | 3 | 1 | Pool nhỏ hơn |
+| actual_rate | 2.87/s | 1.25/s | Rate thực tế thấp vì drop |
+
+**── Footer progress ──**
+
+```text
+running (08.0s), 0/3 VUs, 23 complete and 0 interrupted iterations
+           ↑       ↑        ↑              ↑
+       T_run   VU active  N_done         N_int
+```
+
+  T_run = 8.0s → đúng tổng stage duration (2+4+2=8s), không bị grace kéo dài
+  VU active cuối = 0 → tất cả VU đã xong, không còn VU bận
+  N_done = 23 → gần N_sched (24), lệch 1 slot biên
+  N_int = 0 → không iter nào bị cắt giữa chừng
+
+**── 5 câu hỏi kiểm tra (theo thứ tự) ──**
+
+```text
+1. N_done có gần N_sched không?
+     CT 3: N_sched = 2×(0+4)/2 + 4×(4+4)/2 + 2×(4+0)/2 = 24 slot
+     Summary: N_done = 23 → 95.8%, lệch 1 slot biên → BÌNH THƯỜNG
+     (lệch <5% hay ±1 slot là OK với ramping-arrival-rate)
+
+2. Có dropped_iterations không?
+     N_drop = 0 → đủ VU, không slot nào bị drop ✓
+     Nếu N_drop > 0: đọc mục "Drop nhiều quá!" ở 6.3
+
+3. Có interrupted iterations không?
+     N_int = 0 → không iter nào bị cắt ✓
+     Nếu N_int > 0: tăng gracefulStop hoặc giảm iter_time
+
+4. iteration_duration avg có gần W dự kiến không?
+     W dự kiến = 0.5s, thực tế = 500.31ms → khớp ✓
+     Nếu lệch nhiều: code biến thiên, có thể do HTTP latency dao động
+
+5. actual_rate có gần λ_avg không?
+     λ_avg = N_sched / T = 24/8 = 3.00/s
+     actual_rate = 23 / 8.0 = 2.875/s → gần 3.0 ✓
+     Nếu thấp hơn hẳn: có N_drop hoặc N_int che khuất
+```
+
+**── Với ramping-arrival-rate, summary PHỨC TẠP hơn constant-vus ──**
+
+```text
+ramping-arrival-rate: CÓ dropped_iterations (cơ chế drop slot)
+                      vus min có thể = 0, max thay đổi theo rate
+                      Cần kiểm: N_done, N_drop, N_int, M_peak, λ_avg
+                      → 5 chỉ số, không chỉ 3 như constant-vus
+
+So sánh:
+  constant-vus:          chỉ kiểm N_done, W, N_int (3 thứ)
+  constant-arrival-rate: kiểm thêm dropped_iterations (4 thứ)
+  ramping-arrival-rate:  kiểm thêm N_sched từng stage (5 thứ)
+                         → phức tạp nhất vì rate thay đổi theo stage
 ```
 
 ### 6.3. Hành động khi gặp vấn đề

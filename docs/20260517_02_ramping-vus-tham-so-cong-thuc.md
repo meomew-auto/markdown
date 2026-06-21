@@ -3573,6 +3573,14 @@ plan lịch chạy.
 
 ### 9.2. Bảng tra nhanh: gặp tình huống nào, dùng công thức nào
 
+3 tình huống hay gặp, mỗi tình huống dùng công thức nào:
+
+| Tình huống | Công thức chính | Phụ trợ | Demo file |
+| --- | --- | --- | --- |
+| 1. Sắp viết config, sizing stages | CT3 (peak_rate), tích phân | CT1, CT2, CT5 | `ramping_vus_sizing_demo.js` |
+| 2. Có bao nhiêu iter sẽ hoàn thành? | Tích phân từng stage | CT2, CT3 | `ramping_vus_sizing_demo.js` |
+| 3. Đã chạy xong, đọc summary | CT3, CT5 | Tích phân, so sánh | `ramping_vus_sizing_demo.js` |
+
 #### Tình huống 1: "Sắp viết config, không biết đặt số bao nhiêu"
 
 ```text
@@ -3612,6 +3620,208 @@ max_duration = 9 + 30 = 39s
 Code sleep(0.5) -> W ≈ 0.505s
 peak_rate ≈ 4 / 0.505 ≈ 7.92 iter/s
 ```
+
+**── Demo: `examples/ramping_vus_sizing_demo.js` ──**
+
+File demo đầy đủ dùng cho cả 3 tình huống. Code tính toán mọi thứ trong
+init phase, in ra console bảng kế hoạch trước khi chạy:
+
+```js
+// Demo: Tình huống 1 — "Sắp viết config, không biết đặt số bao nhiêu"
+import exec from "k6/execution";
+import { sleep } from "k6";
+
+const MAX_VUS = __ENV.MAX_VUS ? Number(__ENV.MAX_VUS) : 4;
+const RAMP_UP_SEC = __ENV.RAMP_UP ? Number(__ENV.RAMP_UP) : 3;
+const HOLD_SEC = __ENV.HOLD ? Number(__ENV.HOLD) : 5;
+const RAMP_DOWN_SEC = __ENV.RAMP_DOWN ? Number(__ENV.RAMP_DOWN) : 3;
+const ITER_TIME_SEC = 0.5; // giả lập HTTP request
+
+const W = ITER_TIME_SEC;
+const T = RAMP_UP_SEC + HOLD_SEC + RAMP_DOWN_SEC;
+const peakRate = MAX_VUS / W;
+
+// Ước lượng iter từng stage bằng tích phân
+const iterStage1 = (1 + MAX_VUS) / 2 * RAMP_UP_SEC / W;
+const iterStage2 = MAX_VUS * HOLD_SEC / W;
+const iterStage3 = (MAX_VUS + 0) / 2 * RAMP_DOWN_SEC / W;
+const totalIter = iterStage1 + iterStage2 + iterStage3;
+
+export const options = {
+  scenarios: {
+    sizing_demo: {
+      executor: "ramping-vus",
+      startVUs: 1,
+      stages: [
+        { duration: `${RAMP_UP_SEC}s`, target: MAX_VUS },
+        { duration: `${HOLD_SEC}s`, target: MAX_VUS },
+        { duration: `${RAMP_DOWN_SEC}s`, target: 0 },
+      ],
+      gracefulRampDown: "30s",
+      gracefulStop: "30s",
+    },
+  },
+};
+
+if (__VU === 1) {
+  console.log(/* bảng kế hoạch 5 bước + tích phân */);
+}
+
+export default function () {
+  sleep(ITER_TIME_SEC);
+}
+```
+
+**── Chạy demo (MAX_VUS=4, mặc định) ──**
+
+```bash
+k6 run examples/ramping_vus_sizing_demo.js
+```
+
+Output header:
+
+```text
+scenarios: (100.00%) 1 scenario, 4 max VUs, 41s max duration (incl. graceful stop):
+         * sizing_demo: Up to 4 looping VUs for 11s over 3 stages
+           (gracefulRampDown: 30s, gracefulStop: 30s)
+```
+
+Bảng kế hoạch console (init phase):
+
+```text
+╔══════════════════════════════════════════════════════════════╗
+║    TÌNH HUỐNG 1: Sắp viết config, không biết đặt số nào    ║
+╠══════════════════════════════════════════════════════════════╣
+║  Bước 1 — Tính tổng thời gian T:                          ║
+║    T = sum(stage.duration) = 3 + 5 + 3 = 11s               ║
+║                                                            ║
+║  Bước 2 — Tìm max VU:                                     ║
+║    max_vu = max(startVUs=1, stage.targets=4,4,0)           ║
+║           = max(1,4,4,0) = 4 VU                            ║
+║    → Header sẽ in: "Up to 4 looping VUs"                   ║
+║                                                            ║
+║  Bước 3 — Tính max duration:                              ║
+║    max_duration = T + gracefulStop = 11 + 30 = 41s         ║
+║                                                            ║
+║  Bước 4 — Đo iter_time (W):                               ║
+║    W = sleep(0.5) = 0.5s (giả lập request HTTP 0.5s)      ║
+║                                                            ║
+║  Bước 5 — Ước lượng peak_rate:                            ║
+║    peak_rate ≈ max_vu / W = 4 / 0.5 = 8 iter/s             ║
+║    → Chỉ đạt được trong stage 2 (hold 4 VU)                ║
+║                                                            ║
+║  ─── Ước lượng iter từng stage (tích phân) ─────────────  ║
+║    Stage 1 (1→4): avgVU=2.5  → 15 iter                     ║
+║    Stage 2 (4→4): avgVU=4    → 40 iter                     ║
+║    Stage 3 (4→0): avgVU=2.0  → 12 iter                     ║
+║                            Tổng ước lượng ≈ 67 iter         ║
+║                                                            ║
+║  ─── Công thức kiểm tra ────────────────────────────────  ║
+║    CT1  (step_interval) = 3/(4-1) = 1.0s giữa 2 VU        ║
+║    CT2  (per_vu_rate)   = 1/0.5 = 2.0 iter/s               ║
+║    CT3  (peak_rate)     = 4/0.5 = 8 iter/s                 ║
+╚══════════════════════════════════════════════════════════════╝
+```
+
+**── Phân tích từng bước với output thật ──**
+
+**Bước 1: Tính tổng thời gian T**
+
+```text
+T = sum(stage.duration) = 3 + 5 + 3 = 9s  (config gốc trong lý thuyết)
+T = sum(stage.duration) = 3 + 5 + 3 = 11s (demo với ramp 3s)
+```
+
+Header in: `"for 11s"` → T = 11s, khớp config ✓
+
+**Bước 2: Tìm max VU**
+
+```text
+max_vu = max(startVUs=1, stage.targets=4,4,0) = 4 VU
+```
+
+Header in: `"4 max VUs"` và `"Up to 4 looping VUs"` → max_vu = 4 ✓
+Summary: `vus_max..............: 4   min=4      max=4` → init đúng 4 VU ✓
+
+**Bước 3: Tính max duration**
+
+```text
+max_duration = T + gracefulStop = 11 + 30 = 41s
+```
+
+Header in: `"41s max duration (incl. graceful stop)"` → khớp 41s ✓
+
+**Bước 4: Đo iter_time (W)**
+
+```text
+Lý thuyết: chạy thử 1 VU, đọc `iteration_duration avg` trong summary.
+Trong demo: const ITER_TIME_SEC = 0.5 → W = 0.5s (giả lập).
+```
+
+iteration_duration...: avg=500.34ms     ← W thực tế ~0.5s, khớp code ✓
+
+**Bước 5: Ước lượng peak_rate**
+
+```text
+CT3: peak_rate ≈ max_vu / W = 4 / 0.5 = 8 iter/s
+```
+
+Đây là CẬN TRÊN — chỉ đạt được trong stage 2 (hold 4 VU). Rate trung bình
+cả test thấp hơn vì có stage ramp lên và ramp xuống:
+
+```text
+iterations...........: 68  6.177773/s    ← 6.18/s < 8/s, đúng lý thuyết
+```
+
+**── Thử MAX_VUS khác để thấy quy luật ──**
+
+```bash
+k6 run -e MAX_VUS=8 examples/ramping_vus_sizing_demo.js
+```
+
+Bảng kế hoạch (MAX_VUS=8):
+
+```text
+Bước 1: T = 11s (không đổi)
+Bước 2: max_vu = 8 VU
+Bước 3: max_duration = 11 + 30 = 41s
+Bước 4: W = 0.5s
+Bước 5: peak_rate = 8 / 0.5 = 16 iter/s
+
+Stage 1 (1→8): avgVU=4.5  → 27 iter
+Stage 2 (8→8): avgVU=8    → 80 iter
+Stage 3 (8→0): avgVU=4.0  → 24 iter
+                        Tổng ≈ 131 iter
+```
+
+Output thật:
+
+```text
+iteration_duration...: avg=500.36ms
+iterations...........: 134 12.172545/s    ← 12.17/s < 16/s ✓
+vus..................: 1   min=1       max=8
+vus_max..............: 8   min=8       max=8
+```
+
+Bảng tổng kết 2 lần chạy:
+
+| MAX_VUS | T | W | peak_rate | total (dự đoán) | total (thực) | rate thực | lệch |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 4 | 11s | 0.5s | 8 iter/s | 67 | 68 | 6.18/s | 1.5% |
+| 8 | 11s | 0.5s | 16 iter/s | 131 | 134 | 12.17/s | 2.3% |
+
+Lệch < 5% → tích phân ước lượng chính xác. Rate thực tế luôn < peak_rate
+vì có stage ramp lên/xuống không đè hết VU.
+
+**── Tổng kết Tình huống 1 ──**
+
+| Bước | Công việc | Công thức dùng | Output mong đợi |
+| --- | --- | --- | --- |
+| 1 | Tính T = sum(stages) | Cộng số học | Header "for Xs" |
+| 2 | max_vu = max(startVUs, targets) | max() | Header "Up to N looping VUs" |
+| 3 | max_duration = T + gracefulStop | CT5 (max wall-clock) | Header "Xs max duration" |
+| 4 | Đo W = iteration_duration avg | Chạy thử 1 VU | Summary ~500ms |
+| 5 | peak_rate ≈ max_vu / W | CT3 | Biết trần throughput |
 
 #### Tình huống 2: "Có bao nhiêu iter sẽ hoàn thành?"
 
@@ -3658,6 +3868,139 @@ So với cách "peak × T = 71", cách tích phân ra 58 iter sát thực tế h
 **Khi nào dùng**: muốn biết trước test sẽ có khoảng bao nhiêu iter
 (để đặt threshold, hoặc plan dữ liệu test).
 
+**── Demo: cùng file `examples/ramping_vus_sizing_demo.js` ──**
+
+Dùng chung demo với Tình huống 1. Code đã tính sẵn iter từng stage
+trong init phase bằng công thức tích phân:
+
+```js
+const iterStage1 = (1 + MAX_VUS) / 2 * RAMP_UP_SEC / W;
+const iterStage2 = MAX_VUS * HOLD_SEC / W;
+const iterStage3 = (MAX_VUS + 0) / 2 * RAMP_DOWN_SEC / W;
+const totalIter = iterStage1 + iterStage2 + iterStage3;
+```
+
+**── Ví dụ A: MAX_VUS=4, W=0.5s, T=11s ──**
+
+```bash
+k6 run examples/ramping_vus_sizing_demo.js
+```
+
+Console kế hoạch in ra:
+
+```text
+Stage 1 (1→4): avgVU=2.5  → 15 iter
+Stage 2 (4→4): avgVU=4    → 40 iter
+Stage 3 (4→0): avgVU=2.0  → 12 iter
+                        Tổng ước lượng ≈ 67 iter
+```
+
+Chi tiết phép tính:
+
+```text
+W = 0.5s
+
+Stage 1: ramp 1→4 VU trong 3s
+  active_vus_avg = (1 + 4) / 2 = 2.5
+  iter ≈ 2.5 × 3 / 0.5 = 15
+
+Stage 2: hold 4→4 VU trong 5s
+  active_vus_avg = 4
+  iter ≈ 4 × 5 / 0.5 = 40
+
+Stage 3: ramp 4→0 VU trong 3s
+  active_vus_avg = (4 + 0) / 2 = 2
+  iter ≈ 2 × 3 / 0.5 = 12
+                        ----
+                        ≈ 67 iter
+```
+
+Output thật từ summary:
+
+```text
+iteration_duration...: avg=500.34ms
+iterations...........: 68  6.177773/s
+```
+
+Kiểm tra:
+- CT tích phân dự đoán: 67 iter
+- Summary cho:          68 iter
+- Lệch:                 1/67 ≈ 1.5% ✓
+
+So với cách cận trên `peak_rate × T = 8 × 11 = 88`, cách tích phân ra
+67 iter sát thực tế hơn nhiều (lệch 1.5% vs lệch 29%).
+
+**── Ví dụ B: MAX_VUS=8, W=0.5s, T=11s ──**
+
+```bash
+k6 run -e MAX_VUS=8 examples/ramping_vus_sizing_demo.js
+```
+
+Console kế hoạch:
+
+```text
+Stage 1 (1→8): avgVU=4.5  → 27 iter
+Stage 2 (8→8): avgVU=8    → 80 iter
+Stage 3 (8→0): avgVU=4.0  → 24 iter
+                        Tổng ước lượng ≈ 131 iter
+```
+
+Chi tiết:
+
+```text
+Stage 1: 1→8 VU trong 3s → avg = 4.5 → 4.5 × 3 / 0.5 = 27
+Stage 2: 8→8 VU trong 5s → avg = 8   → 8 × 5 / 0.5 = 80
+Stage 3: 8→0 VU trong 3s → avg = 4   → 4 × 3 / 0.5 = 24
+                                                     ----
+                                                     = 131
+```
+
+Output thật:
+
+```text
+iteration_duration...: avg=500.36ms
+iterations...........: 134 12.172545/s
+```
+
+Lệch: (134-131)/131 ≈ 2.3% ✓
+
+Bảng so sánh 2 cách ước lượng:
+
+| MAX_VUS | peak×T | Tích phân | Thực tế | Lệch tích phân | Lệch peak×T |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 4 | 88 | 67 | 68 | 1.5% | 29% |
+| 8 | 176 | 131 | 134 | 2.3% | 31% |
+
+→ Tích phân LUÔN CHÍNH XÁC HƠN peak×T. Càng nhiều stage ramp
+(ramp dài, VU thay đổi nhiều) thì peak×T càng lệch.
+
+**── Công thức tổng quát ──**
+
+```text
+Với mỗi stage i:
+  fromVUs_i = target của stage (i-1), hoặc startVUs nếu i=0
+  toVUs_i   = target_i
+  avgVUs_i  = (fromVUs_i + toVUs_i) / 2
+  iter_i    ≈ avgVUs_i × duration_i / W
+
+Tổng iter ≈ sum(iter_i) qua tất cả stage
+```
+
+Đây là TÍCH PHÂN hình thang: diện tích dưới đường VU-theo-thời-gian
+chia cho W = số iter. Với ramp tuyến tính (target tuyến tính), avgVUs
+= trung bình cộng của 2 đầu.
+
+**── Khi nào dùng ──**
+
+- Trước test: ước lượng tổng iter để plan dữ liệu test (vd: cần 1000
+  dòng CSV, test sẽ chạy ~67 iter → dư sức)
+- Đặt `--iterations` hoặc threshold: biết test hoàn thành ~N iter
+- So sánh phương án: thay HOLD_SEC=10 thay vì 5 → iter tăng bao nhiêu?
+
+Ví dụ: giữ nguyên MAX_VUS=4, tăng HOLD_SEC=10:
+  Stage 2: 4 × 10 / 0.5 = 80 iter
+  Tổng: 15 + 80 + 12 = 107 iter (tăng từ 67)
+
 #### Tình huống 3: "Đã chạy xong, đọc summary"
 
 ```text
@@ -3676,6 +4019,163 @@ LƯU Ý: ramping-vus KHÔNG có metric `dropped_iterations`
                                      hoặc stage hold quá ngắn
    3) Rate thực tế là bao nhiêu?     iterations rate trong summary
                                      so với peak_rate đã tính
+```
+
+**── Demo: cùng file `examples/ramping_vus_sizing_demo.js` ──**
+
+Sau khi chạy xong, ta có output đầy đủ từ lần chạy MAX_VUS=4. Dưới đây
+là phân tích từng phần của output, áp đúng các công thức từ 9.1.
+
+**── Output đầy đủ ──**
+
+```text
+scenarios: (100.00%) 1 scenario, 4 max VUs, 41s max duration (incl. graceful stop):
+         * sizing_demo: Up to 4 looping VUs for 11s over 3 stages
+           (gracefulRampDown: 30s, gracefulStop: 30s)
+
+running (11.0s), 0/4 VUs, 68 complete and 0 interrupted iterations
+
+  █ TOTAL RESULTS
+
+    EXECUTION
+    iteration_duration...: avg=500.34ms min=500.01ms med=500.32ms max=500.9ms
+                           p(90)=500.54ms p(95)=500.59ms
+    iterations...........: 68  6.177773/s
+    vus..................: 1   min=1      max=4
+    vus_max..............: 4   min=4      max=4
+
+    NETWORK
+    data_received........: 0 B 0 B/s
+    data_sent............: 0 B 0 B/s
+```
+
+**── Nhóm 1: Header (verify config parse đúng) ──**
+
+```text
+"4 max VUs"                     → M_max = max(1, 4, 4, 0) = 4 ✓
+"41s max duration"              → T + gracefulStop = 11 + 30 = 41 ✓
+"Up to 4 looping VUs"           → M_max = 4 ✓
+"for 11s"                       → T = 3 + 5 + 3 = 11 ✓
+"3 stages"                      → 3 phần tử trong stages ✓
+"gracefulRampDown: 30s"         → khớp config ✓
+```
+
+→ Config parse đúng, sang phân tích summary.
+
+**── Nhóm 2: Summary EXECUTION (4 con số) ──**
+
+| Dòng summary | Ký hiệu | Nghĩa | Giá trị mẫu | Đọc thế nào |
+|---|---|---|---|---|
+| `iteration_duration avg` | W | Thời gian 1 iter TB | 500.34ms | So với W dự kiến 0.5s → khớp |
+| `iterations (count)` | N_done | Số iter hoàn thành | 68 | So với tích phân dự kiến 67 → lệch 1.5% ✓ |
+| `iterations (rate)` | rate | Tốc độ TB toàn test | 6.18/s | So với CT3 peak 8/s → thấp hơn vì có ramp |
+| `vus (max)` | M_peak | Số VU bận cao nhất | 4 | Khớp max stage.target = 4 ✓ |
+| `vus_max (max)` | M_max | Số VU đã init | 4 | Cố định = 4, không đổi |
+
+**── Nhóm 3: Footer progress ──**
+
+```text
+running (11.0s), 0/4 VUs, 68 complete and 0 interrupted iterations
+           ↑       ↑        ↑              ↑
+      T_run=11s  VU active  N_done=68    N_int=0
+```
+
+- T_run = 11.0s → khớp T = 11s, không bị cắt sớm ✓
+- VU active cuối = 0 → tất cả VU đã xong ✓
+- N_done = 68 → khớp dự đoán tích phân (67, lệch 1.5%) ✓
+- N_int = 0 → không iter nào bị cắt giữa chừng ✓
+
+**── 5 câu hỏi kiểm tra (theo thứ tự) ──**
+
+**1. N_done có gần dự đoán tích phân không?**
+
+```text
+Tích phân từng stage:
+  Stage 1: avgVU=2.5 → 2.5 × 3 / 0.5 = 15
+  Stage 2: avgVU=4   → 4   × 5 / 0.5 = 40
+  Stage 3: avgVU=2   → 2   × 3 / 0.5 = 12
+                                       ---
+                                       = 67 iter dự đoán
+
+Summary: iterations = 68
+Lệch: (68-67)/67 = 1.5% → OK (< 5%)
+```
+
+**2. iteration_duration avg có gần W dự kiến không?**
+
+```text
+W dự kiến = 0.5s (sleep cố định)
+W thực tế = 500.34ms → khớp trong 1ms ✓
+
+Nếu W thực tế >> 0.5s: có thể code chạy chậm hơn dự kiến
+(server bottleneck, network latency)
+```
+
+**3. M_peak (vus max) có khớp max stage.target không?**
+
+```text
+M_peak từ summary = 4
+max(stage.targets) = max(4, 4, 0) = 4 → khớp ✓
+
+Nếu M_peak < max target: ramp quá nhanh, k6 chưa kịp spawn
+đủ VU → tăng duration stage ramp hoặc giảm step_interval.
+```
+
+**4. Có interrupt cuối không?**
+
+```text
+N_int = 0 → không iter nào bị cắt giữa chừng ✓
+
+Nếu N_int > 0: hết gracefulStop khi iter đang chạy
+→ tăng gracefulStop hoặc kéo dài stage ramp-down cuối.
+```
+
+**5. Rate trung bình có hợp lý không?**
+
+```text
+Rate thực tế = 6.18 iter/s
+Peak lý thuyết (CT3) = max_vu / W = 4 / 0.5 = 8 iter/s
+
+Ratio = 6.18 / 8 ≈ 77%
+
+→ Test chỉ tận dụng 77% capacity vì có 2 stage ramp.
+→ Stage 2 (hold 4 VU) đè peak, các stage khác thấp hơn.
+
+Thời gian đè peak = HOLD_SEC = 5s
+Tổng T = 11s
+Tỉ lệ đè peak = 5/11 ≈ 45%
+
+→ 55% thời gian test chạy dưới peak → rate trung bình = 77% peak
+   là bình thường.
+```
+
+**── Bảng mapping: số ở đâu → áp công thức nào ──**
+
+| Bước | Đọc số từ | Giá trị | Áp công thức | Kết quả |
+|---|---|---|---|---|
+| 1 | Header | T=11s, M_max=4 | Cộng + max() | Verify config ✓ |
+| 2 | Summary | W=500.34ms, M_peak=4 | CT3: peak = 4/0.5 = 8/s | Cận trên throughput |
+| 3 | Summary | N_done=68 | Tích phân stage | Dự đoán 67 → lệch 1.5% |
+| 4 | Footer | N_int=0 | — | Không interrupt ✓ |
+| 5 | Summary | rate=6.18/s | So với peak 8/s | Ratio 77%, bình thường |
+
+**── Với ramping-vus, summary đặc thù ──**
+
+```text
+ramping-vus KHÔNG có:
+  - dropped_iterations  (closed model không drop slot)
+  - λ (lambda) rate     (không có rate config, rate là hệ quả)
+
+ramping-vus CHỈ có:
+  - iterations          (N_done: số iter hoàn thành)
+  - vus / vus_max       (gauge VU active + đã init)
+  - interrupted (footer)
+
+So với các executor khác:
+  constant-vus:        đơn giản nhất (vus cố định, rate ổn định)
+  ramping-vus:         cần phân tích thêm stage (vus thay đổi)
+  constant-arrival-rate: cần kiểm thêm dropped_iterations
+  shared-iterations:   cần kiểm phân phối iter giữa VU
 ```
 
 ### 9.3. Hành động khi gặp vấn đề

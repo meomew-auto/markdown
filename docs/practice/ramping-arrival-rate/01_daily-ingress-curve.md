@@ -103,7 +103,7 @@ $env:BASE_URL = "http://localhost:80"
 Smoke nhanh:
 
 ```powershell
-$env:RAR_01_DURATION_SCALE = "0.25"
+$env:RAR_01_DURATION_SCALE = "0"  # envInt + scaleSeconds() clamps stages to 1s each
 $env:RAR_01_PEAK_RATE = "8"
 $env:RAR_01_PREALLOCATED_VUS = "4"
 $env:RAR_01_MAX_VUS = "12"

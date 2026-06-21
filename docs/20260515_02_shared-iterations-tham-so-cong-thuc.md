@@ -2224,95 +2224,558 @@ thì dùng Công thức 1 (ratio).
 
 #### Tình huống 1: "Sắp viết config, không biết đặt số bao nhiêu"
 
-```text
-Bước 1: Quyết tổng iter cần (iterations)
-   -> Ví dụ: muốn test 200 lượt request
+Đây là tình huống đầu tiên ai cũng gặp: đã có script, muốn test tổng N
+lượt request, nhưng chưa biết đặt `maxDuration` bao nhiêu cho đủ, và muốn
+ước lượng trước thời gian chạy.
 
-Bước 2: Quyết số VU song song (vus)
-   -> Ví dụ: 4 VU (vừa phải, không quá tải máy local)
-   -> Ràng buộc: vus <= iterations
+Khác với `constant-vus` (chạy theo duration), `shared-iterations` chạy đến
+khi **cạn kho iteration**. Vì thế bạn phải ước lượng `T_est` để đặt
+`maxDuration` đủ rộng, nếu không scenario sẽ bị cắt giữa chừng.
 
-Bước 3: Đo iter_time (chạy thử 1 VU, xem iteration_duration)
-   -> Ví dụ: 0.5s
-
-Bước 4: Tính T_est (Công thức 3)
-   T_est = iterations × iter_time / vus
-        = 200 × 0.5 / 4 = 25s
-
-Bước 5: Đặt maxDuration > T_est ít nhất 50%
-   -> maxDuration = "1m" cho an toàn
-   (default 10m thừa, nhưng không sao)
-```
-
-**Config xong**:
+Demo dùng để phân tích: `examples/shared_iterations_sizing_demo.js`
 
 ```js
-{
-  executor: "shared-iterations",
-  vus: 4,
-  iterations: 200,
-  maxDuration: "1m",
+import exec from "k6/execution";
+import { sleep } from "k6";
+
+// ─── Tham số ───────────────────────────────────────────────
+const TOTAL_ITERATIONS = __ENV.ITERATIONS ? Number(__ENV.ITERATIONS) : 40;
+const VUS = __ENV.VUS ? Number(__ENV.VUS) : 4;
+const ITER_TIME_SEC = 0.5;  // W: sleep cố định giả lập request HTTP
+
+// ─── Bước 1-4: tính toán (init phase) ──────────────────────
+const N = TOTAL_ITERATIONS;
+const W = ITER_TIME_SEC;
+const vusCount = VUS;
+
+// Công thức 3: T_est ≈ iterations × iter_time / vus
+const T_est = N * W / vusCount;
+
+// Công thức 2: peak_rate ≈ vus / iter_time
+const peak_rate = vusCount / W;
+
+// Công thức 5: iter_per_vu ≈ iterations / vus
+const iter_per_vu_avg = N / vusCount;
+
+export const options = {
+  scenarios: {
+    sizing_demo: {
+      executor: "shared-iterations",
+      vus: vusCount,
+      iterations: N,
+      maxDuration: "2m",
+      gracefulStop: "10s",
+    },
+  },
+};
+
+export default function () {
+  sleep(ITER_TIME_SEC); // giả lập request HTTP
 }
+```
+
+Chạy:
+
+```bash
+k6 run examples/shared_iterations_sizing_demo.js                   # N=40, vus=4
+k6 run -e ITERATIONS=100 -e VUS=10 examples/shared_iterations_sizing_demo.js
+k6 run -e ITERATIONS=200 -e VUS=10 examples/shared_iterations_sizing_demo.js
+```
+
+Giờ phân tích output theo đúng 5 bước, lấy lần chạy N=40, vus=4 làm mẫu.
+
+**── Bước 1: Quyết tổng iter cần (iterations = N) ──**
+
+Lý thuyết: đây là con số bạn TỰ CHỌN dựa trên mục tiêu test. Không đọc
+từ summary, không có trong config cũ. Đây là tổng số iter toàn scenario,
+KHÔNG phải per-VU.
+
+Ví dụ chọn N:
+  "Tôi muốn test tổng 200 lượt request" → N = 200
+  "Smoke test nhanh, 40 iter là đủ" → N = 40
+  "Regression cần 1000 iter" → N = 1000
+
+Trong demo: `const TOTAL_ITERATIONS = 40` → N = 40 iter.
+
+```text
+sizing_demo: 40 iterations shared among 4 VUs   ← Header xác nhận config đúng
+```
+
+**── Bước 2: Quyết số VU song song (vus) ──**
+
+Lý thuyết: chọn VU vừa phải, không quá tải máy local. Ràng buộc quan trọng:
+`vus <= iterations` — mỗi VU phải có ít nhất 1 iter để làm. Nếu vi phạm,
+k6 sẽ báo lỗi validate ngay.
+
+Trong demo: `const VUS = 4` → vus = 4.
+
+```text
+Ràng buộc: vus (4) <= iterations (40) ✓
+Header: "40 iterations shared among 4 VUs"   ← vus=4 khớp config
+```
+
+**── Bước 3: Đo iter_time (W) ──**
+
+Lý thuyết: chạy thử 1 VU, xem `iteration_duration avg` trong summary,
+lấy đó làm W.
+
+Trong demo: `const ITER_TIME_SEC = 0.5` → W = 0.5s. Đây là giả lập —
+sleep(0.5) mô phỏng 1 request HTTP mất 0.5s. Ngoài đời thì bạn chạy
+thử script với 1 VU rồi đọc số từ summary.
+
+```text
+iteration_duration...: avg=500.37ms     ← W thực tế ~0.5s, khớp code
+per_vu_rate = 1 / W = 1 / 0.5 = 2.0 iter/s/VU
+```
+
+Mỗi VU làm được 2 iter mỗi giây. 4 VU cùng làm → throughput đỉnh = 4 / 0.5
+= 8 iter/s (sẽ kiểm tra ở Bước 5).
+
+**── Bước 4: Tính T_est (Công thức 3) → chọn maxDuration ──**
+
+Lý thuyết: `T_est = iterations × iter_time / vus`. Công thức 3 trong
+cheat sheet — chia tổng việc cho số VU song song.
+
+Trong demo:
+  T_est = 40 × 0.5 / 4 = 5.0s
+
+→ Đặt `maxDuration` > T_est ít nhất 50-100%. Demo dùng `maxDuration: "2m"`
+(rộng thênh thang, an toàn tuyệt đối).
+
+```text
+Bước 4 — Tính T_est (Công thức 3):
+  T_est = N × W / vus
+        = 40 × 0.5 / 4
+        = 5.0s
+  → Đặt maxDuration > T_est (dùng "2m" cho an toàn)
+```
+
+**── Bước 5: Đặt config hoàn chỉnh, chạy, đọc summary kiểm tra ──**
+
+Lý thuyết: sau khi có vus, iterations, maxDuration, chạy và kiểm tra chéo
+bằng các công thức.
+
+Trong demo:
+  executor = "shared-iterations"
+  vus = 4
+  iterations = 40
+  maxDuration = "2m"
+  gracefulStop = "10s"
+
+Chạy lần đầu (N=40, vus=4):
+
+```text
+  █ TOTAL RESULTS
+
+    EXECUTION
+    iteration_duration...: avg=500.37ms min=500.17ms med=500.32ms max=500.88ms
+                           p(90)=500.55ms p(95)=500.88ms
+    iterations...........: 40  7.994025/s
+    vus..................: 4   min=4      max=4
+    vus_max..............: 4   min=4      max=4
+
+    NETWORK
+    data_received........: 0 B 0 B/s
+    data_sent............: 0 B 0 B/s
+
+  running (0m05.0s), 0/4 VUs, 40 complete and 0 interrupted iterations
+```
+
+T_est dự kiến (Công thức 3):
+  T_est = 40 × 0.5 / 4 = 5.0s
+  Footer: `running (0m05.0s)` → T_run = 5.0s ✓
+  → Khớp tuyệt đối vì sleep cố định.
+
+Peak rate dự kiến (Công thức 2):
+  peak = vus / W = 4 / 0.5 = 8.0 iter/s
+  Summary: `iterations/s = 7.994` ≈ 8.0 ✓
+
+Số iter trung bình mỗi VU (Công thức 5):
+  iter_per_vu ≈ 40 / 4 = 10 iter/VU
+
+Kiểm tra không drop:
+  N_done = 40 = iterations (config) ✓
+  N_drop = 0 (không có dòng `dropped_iterations`) ✓
+  N_int = 0 (footer: "0 interrupted") ✓
+
+Footer:
+```text
+running (0m05.0s), 0/4 VUs, 40 complete and 0 interrupted iterations
+           ↑          ↑        ↑              ↑
+       T_run=5.0s  VU về 0  N_done=40     N_int=0
+```
+
+  T_run = 5.0s → khớp T_est. VU active cuối = 0/4 → tất cả VU đã xong.
+  N_int = 0 → grace đủ, không iter nào bị cắt.
+
+**── Thử N khác để thấy quy luật ──**
+
+```bash
+k6 run -e ITERATIONS=100 -e VUS=10 examples/shared_iterations_sizing_demo.js
+```
+
+Bước 1: N = 100.  Bước 2: vus = 10.
+Bước 4: T_est = 100 × 0.5 / 10 = 5.0s.
+
+```text
+  iteration_duration...: avg=500.46ms
+  iterations...........: 100 19.979574/s   ← peak = 10/0.5 = 20/s ✓
+  vus..................: 10  min=10  max=10
+  running (0m05.0s), 00/10 VUs, 100 complete and 0 interrupted iterations
+```
+
+→ Gấp đôi N và gấp đôi vus → T_est vẫn 5s, nhưng throughput gấp đôi (20/s
+so với 8/s). Đúng lý thuyết: T_est ∝ N/vus, peak ∝ vus.
+
+```bash
+k6 run -e ITERATIONS=20 -e VUS=2 examples/shared_iterations_sizing_demo.js
+```
+
+Bước 4: T_est = 20 × 0.5 / 2 = 5.0s. (T_est không đổi vì N/vus = 10)
+
+→ Với shared-iterations, T_est chỉ phụ thuộc tỉ số N/vus, không phụ
+thuộc giá trị tuyệt đối của N hay vus riêng lẻ. Đây là điểm khác biệt
+với constant-vus (T_est = duration, cố định).
+
+**Bảng tổng kết**:
+
+| N | vus | W | T_est = N×W/vus | peak = vus/W | T_run | rate thực | N_done | Đạt? |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 40 | 4 | 0.5s | 5.0s | 8.0/s | 5.0s | ~7.99/s | 40 | ✓ |
+| 100 | 10 | 0.5s | 5.0s | 20.0/s | 5.0s | ~19.98/s | 100 | ✓ |
+| 20 | 2 | 0.5s | 5.0s | 4.0/s | 5.0s | ~4.0/s | 20 | ✓ |
+| 200 | 10 | 0.5s | 10.0s | 20.0/s | ~10s | ~20.0/s | 200 | ✓ |
+
+Tất cả khớp vì demo dùng sleep cố định. Với HTTP thật, iter_time dao
+động → T_est lệch vài % → dùng p95 thay avg để an toàn (mục 8.3).
+
+**Lưu ý quan trọng cho shared-iterations**:
+
+```text
+Khác với constant-vus:
+  - constant-vus: bạn đặt DURATION, số iter là HỆ QUẢ (N ≈ vus × duration / W)
+  - shared-iterations: bạn đặt ITERATIONS, thời gian là HỆ QUẢ (T ≈ N × W / vus)
+
+→ Với shared-iterations, maxDuration PHẢI > T_est, nếu không sẽ có
+  dropped_iterations (kho chưa cạn mà hết giờ).
+→ Luôn tính T_est trước khi đặt maxDuration.
 ```
 
 #### Tình huống 2: "Đã có target tổng iter, cần bao nhiêu VU?"
 
-```text
-Câu hỏi: muốn xong 100 iter trong 10s, mỗi iter 0.5s, cần mấy VU?
+Đây là dạng phổ biến: biết tổng iter muốn test (N) và thời gian tối đa cho
+phép (T_target), cần tính số VU để xong kịp. Thực chất là đảo Công thức 3
+để tìm `vus`.
 
-Bước 1: Đảo ngược Công thức 3
-   T_est = iterations × iter_time / vus
-   <=> vus = iterations × iter_time / T_est
+Demo dùng để phân tích: `examples/shared_iterations_reverse_sizing_demo.js`
 
-Bước 2: Áp số
-   vus = 100 × 0.5 / 10 = 5 VU
+```js
+import exec from "k6/execution";
+import { sleep } from "k6";
 
-Bước 3: Làm tròn LÊN (ceil) cho an toàn
-   vus = ceil(5) = 5 (đã là số nguyên)
-   -> nếu ra 4.7, lấy 5
+// ─── Tham số ───────────────────────────────────────────────
+const TOTAL_ITERATIONS = __ENV.ITERATIONS ? Number(__ENV.ITERATIONS) : 80;
+const TARGET_DURATION_SEC = __ENV.TARGET_DURATION ? Number(__ENV.TARGET_DURATION) : 10;
+const ITER_TIME_SEC = 0.5;  // W: sleep cố định giả lập request HTTP
 
-Bước 4: Verify lại
-   T_est = 100 × 0.5 / 5 = 10s ✓
+// ─── Bước 1-3: tính toán (init phase) ──────────────────────
+const N = TOTAL_ITERATIONS;
+const W = ITER_TIME_SEC;
+const T_target = TARGET_DURATION_SEC;
+
+// Đảo Công thức 3: vus = ceil(iterations × iter_time / target_duration)
+const calculatedVUs = Math.ceil(N * W / T_target);
+
+// Verify lại: T_est với số VU đã tính
+const T_est = N * W / calculatedVUs;
+
+// Công thức 2: peak_rate ≈ vus / iter_time
+const peak_rate = calculatedVUs / W;
+
+export const options = {
+  scenarios: {
+    reverse_sizing: {
+      executor: "shared-iterations",
+      vus: calculatedVUs,
+      iterations: N,
+      maxDuration: "2m",
+      gracefulStop: "10s",
+    },
+  },
+};
+
+export default function () {
+  sleep(ITER_TIME_SEC); // giả lập request HTTP
+}
 ```
 
-**Công thức rút gọn**:
+**── Công thức ──**
 
 ```text
-vus = ceil(iterations × iter_time / target_duration)
+Công thức gốc: T_est = iterations × iter_time / vus     (Công thức 3)
+Đảo lại:        vus   = iterations × iter_time / T_est
+
+Thực tế phải làm tròn LÊN:
+  vus = ceil(iterations × iter_time / target_duration)
 ```
+
+Vì VU là số nguyên. Thiếu VU → T_run > target. Thừa 1 VU → T_run < target
+(an toàn hơn là thiếu).
+
+**── Ví dụ A: N=80 iter, target 10s, W=0.5s ──**
+
+```bash
+k6 run examples/shared_iterations_reverse_sizing_demo.js
+```
+
+Code làm gì:
+  `const calculatedVUs = Math.ceil(80 × 0.5 / 10) = Math.ceil(4.0) = 4`
+  → config có `vus: 4`
+
+**── Bước 1: Đảo Công thức 3 ──**
+
+  vus = N × W / T_target = 80 × 0.5 / 10 = 4.0
+
+**── Bước 2: Làm tròn LÊN (ceil) ──**
+
+  vus = ceil(4.0) = 4 VU
+  Ràng buộc: vus (4) <= iterations (80) ✓
+
+**── Bước 3: Verify lại T_est ──**
+
+  T_est = 80 × 0.5 / 4 = 10.0s ≤ target 10s ✓
+
+**── Bước 4: Chạy, đọc summary ──**
+
+Output:
+
+```text
+  █ TOTAL RESULTS
+
+    EXECUTION
+    iteration_duration...: avg=500.27ms min=500.04ms med=500.26ms max=500.75ms
+                           p(90)=500.5ms p(95)=500.52ms
+    iterations...........: 80  7.994489/s
+    vus..................: 4   min=4      max=4
+    vus_max..............: 4   min=4      max=4
+
+  running (0m10.0s), 0/4 VUs, 80 complete and 0 interrupted iterations
+```
+
+Kiểm tra:
+  Đảo CT3: vus_calc = ceil(80 × 0.5 / 10) = 4 → config vus=4 ✓
+  CT3 verify: T_est = 80 × 0.5 / 4 = 10.0s → T_run = 10.0s ✓
+  CT2: peak = 4 / 0.5 = 8.0 iter/s → summary 7.994 ≈ 8.0 ✓
+  CT5: iter_per_vu ≈ 80 / 4 = 20 iter/VU
+  N_done = 80 = iterations config, N_drop = 0, N_int = 0 → clean run ✓
+
+**── Ví dụ B: N=100 iter, target 8s, W=0.5s (ceil ra số lẻ) ──**
+
+```bash
+k6 run -e ITERATIONS=100 -e TARGET_DURATION=8 examples/shared_iterations_reverse_sizing_demo.js
+```
+
+Bước 1: vus = 100 × 0.5 / 8 = 6.25
+Bước 2: ceil(6.25) = 7 VU
+Bước 3: T_est = 100 × 0.5 / 7 = 7.14s ≤ target 8s ✓
+
+Output:
+
+```text
+  iteration_duration...: avg=500.29ms
+  iterations...........: 100 13.324333/s
+  vus..................: 7   min=7       max=7
+
+  running (0m07.5s), 0/7 VUs, 100 complete and 0 interrupted iterations
+```
+
+Kiểm tra:
+  vus_calc = ceil(100 × 0.5 / 8) = ceil(6.25) = 7 ✓
+  CT3: T_est = 100 × 0.5 / 7 = 7.14s → T_run = 7.5s (lệch 0.36s, ~5%)
+  CT2: peak = 7 / 0.5 = 14.0 iter/s → summary 13.32 ≈ 14.0 ✓
+
+  T_run = 7.5s ≤ target 8s → XONG SỚM HƠN TARGET. Đây là hệ quả của
+  ceil() — làm tròn lên cho thừa VU, nên chạy nhanh hơn dự kiến.
+
+**── Ví dụ C: N=50 iter, target 20s, W=0.5s (cần rất ít VU) ──**
+
+  vus = ceil(50 × 0.5 / 20) = ceil(1.25) = 2 VU
+  T_est = 50 × 0.5 / 2 = 12.5s ≤ target 20s ✓
+  peak = 2 / 0.5 = 4.0 iter/s
+
+  → Chỉ cần 2 VU cũng xong 50 iter trong 12.5s, sớm hơn target 20s nhiều.
+
+**── Lưu ý quan trọng ──**
+
+```text
+ceil() làm vus nhảy bậc (1, 2, 3, ...), T_est nhảy bậc theo:
+  vus=6 (ceil 6.25) → T_est = 100×0.5/6 = 8.33s > target 8s  ← THIẾU!
+  vus=7 (ceil 6.25) → T_est = 100×0.5/7 = 7.14s ≤ target 8s  ← OK
+
+→ Luôn dùng ceil(), không dùng floor(). Floor dễ gây thiếu VU → T_run
+  vượt target.
+→ Khi ceil() làm T_est << target: bạn có thời gian dư. Có thể GIẢM vus
+  nếu muốn tiết kiệm tài nguyên (nhưng phải verify T_est vẫn <= target).
+```
+
+**Bảng tổng kết**:
+
+| N | T_target | W | vus_raw | vus=ceil | T_est verify | T_run | Đạt target? |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 80 | 10s | 0.5s | 4.00 | 4 | 10.0s | 10.0s | ✓ (khớp) |
+| 100 | 8s | 0.5s | 6.25 | 7 | 7.14s | 7.5s | ✓ (sớm) |
+| 50 | 20s | 0.5s | 1.25 | 2 | 12.5s | ~12.5s | ✓ (sớm) |
+| 200 | 15s | 0.5s | 6.67 | 7 | 14.3s | ~14.3s | ✓ (sớm) |
+
+Tất cả đều T_run <= T_target vì dùng ceil() và sleep cố định.
 
 #### Tình huống 3: "Đã chạy xong, đọc summary"
 
-```text
-3 con số quan trọng:
-   iterations          = N_done   (số iter hoàn thành)
-   dropped_iterations  = N_drop   (slot trong kho chưa lấy được)
-   vus                 = M_peak   (số VU bận, thường = vus config)
+Sau khi run xong, summary là nơi duy nhất cần đọc để kết luận test có chạy
+đúng kế hoạch không.
 
-3 câu hỏi cần trả lời:
-   1) Có drop không?         N_drop > 0 = hit maxDuration giữa chừng
-   2) iterations đủ không?    N_done có khớp config?
-                              N_done + N_drop = iterations (config) ✓
-   3) Thời gian chạy thực?    đọc footer "running (X.Xs)"
-                              -> so với T_est xem khớp không
+Dùng output từ demo `shared_iterations_sizing_demo.js` (N=40, vus=4) làm mẫu:
+
+```text
+  █ TOTAL RESULTS
+
+    EXECUTION
+    iteration_duration...: avg=500.37ms min=500.17ms med=500.32ms max=500.88ms
+                           p(90)=500.55ms p(95)=500.88ms
+    iterations...........: 40  7.994025/s
+    vus..................: 4   min=4      max=4
+    vus_max..............: 4   min=4      max=4
+
+    NETWORK
+    data_received........: 0 B 0 B/s
+    data_sent............: 0 B 0 B/s
+
+  running (0m05.0s), 0/4 VUs, 40 complete and 0 interrupted iterations
 ```
 
-**Trường hợp clean run** (không drop):
+**── 4 dòng quan trọng trong EXECUTION ──**
+
+| Dòng summary | Ký hiệu | Nghĩa | Giá trị mẫu | Đọc thế nào |
+|---|---|---|---|---|
+| `iteration_duration avg` | W | Thời gian 1 iter trung bình | 500.37ms | So với W dự kiến (0.5s) → khớp |
+| `iterations` (count) | N_done | Số iter hoàn thành | 40 | So với config iterations=40 ✓ |
+| `iterations X/s` | rate | Tốc độ trung bình toàn test | 7.99/s | So với CT2: peak=4/0.5=8.0 ≈ 7.99 ✓ |
+| `vus min / max` | VU active | Số VU bận | 4 / 4 | shared-iterations: min=max, không tụt |
+
+**── Footer progress ──**
 
 ```text
-N_done = iterations (config)
-N_drop = 0
-T_run < maxDuration
-=> hệ thống chịu được, scenario hoàn thành
+running (0m05.0s), 0/4 VUs, 40 complete and 0 interrupted iterations
+         ↑          ↑        ↑              ↑
+     T_run=5.0s  VU về 0  N_done=40     N_int=0
 ```
 
-**Trường hợp hit maxDuration**:
+  T_run = 5.0s → khớp T_est (CT3: 40 × 0.5 / 4 = 5.0s)
+  VU active cuối = 0/4 → tất cả VU đã xong, không còn VU bận
+  N_done = 40 → khớp iterations config
+  N_int = 0 → không iter nào bị cắt giữa chừng
+
+**── 5 câu hỏi kiểm tra (theo thứ tự) ──**
 
 ```text
-N_done < iterations (config)
-N_drop > 0
-T_run = maxDuration (gần đúng)
-=> kho chưa cạn nhưng hết giờ -> tăng maxDuration hoặc tăng vus
+1. N_done có bằng iterations config không?
+     N_done = 40, config iterations = 40 → khớp 100% ✓
+     N_done + N_drop + N_int = 40 + 0 + 0 = 40 = config ✓
+     (clean run — kho cạn đúng giờ)
+
+2. iteration_duration avg có gần W dự kiến không?
+     W dự kiến = 0.5s, thực tế = 500.37ms → khớp ✓
+     Nếu lệch nhiều: code biến thiên, có thể do HTTP latency dao động
+
+3. vus min = vus max = config?
+     min=4, max=4, config vus=4 → shared-iterations giữ đúng ✓
+     Nếu min < max: có VU chết hoặc init lỗi (hiếm)
+
+4. Có dropped_iterations không?
+     Không có dòng dropped_iterations trong summary → N_drop = 0 ✓
+     Nếu có dropped_iterations: hit maxDuration giữa chừng (kho chưa cạn)
+     → Tăng maxDuration hoặc tăng vus (Công thức 3)
+
+5. iterations/s (rate) có gần peak_rate dự kiến không?
+     CT2: peak = vus / W = 4 / 0.5 = 8.0 iter/s
+     Summary: 7.99/s → gần đúng ✓
+     Rate trong summary là AVERAGE rate (N_done / T_run), không phải peak
+     tức thời. Với sleep cố định, hai con số xấp xỉ bằng nhau.
+```
+
+**── Với shared-iterations, summary có thêm dropped_iterations ──**
+
+```text
+Khác với constant-vus (KHÔNG có dropped_iterations), shared-iterations
+CÓ THỂ có dropped_iterations nếu maxDuration quá ngắn.
+
+Khi drop xảy ra, summary sẽ thêm dòng:
+  dropped_iterations...: 8     0.266/s
+
+Kiểm tra:
+  N_done + N_drop = iterations (config)
+  12 + 8 = 20 ✓   (xem demo shared_iterations_dropped_demo.js)
+```
+
+**── Trường hợp clean run (không drop) ──**
+
+Dùng lại output mẫu trên:
+
+```text
+N_done = 40 = iterations (config) ✓
+N_drop = 0                        ✓
+N_int  = 0                        ✓
+T_run  = 5.0s < maxDuration (2m) ✓
+=> Hệ thống chịu được, scenario hoàn thành đúng kế hoạch
+```
+
+**── Trường hợp hit maxDuration ──**
+
+Dùng output từ `shared_iterations_dropped_demo.js` (vus=2, iterations=5,
+maxDuration=3s, sleep=2s):
+
+```text
+  EXECUTION
+  iteration_duration...: avg=2001.2ms
+  iterations...........: 4     0.666/s
+  dropped_iterations...: 1     0.166/s
+  vus..................: 2     min=2  max=2
+
+  running (0m03.0s), 0/2 VUs, 4 complete and 0 interrupted iterations
+```
+
+Đọc:
+  N_done = 4 < iterations config (5) → có hao hụt
+  N_drop = 1 → đúng 1 iter trong kho chưa kịp lấy
+  T_run = 3.0s = maxDuration → hit trần
+  N_int = 0 → grace đủ, iter đang chạy không bị cắt
+
+Verify cộng số:
+  N_done + N_drop + N_int = 4 + 1 + 0 = 5 = iterations (config) ✓
+
+→ Kết luận: maxDuration quá ngắn, kho chưa cạn. Cần tăng maxDuration
+  hoặc tăng vus (đảo Công thức 3).
+
+**── So sánh 3 executor qua summary ──**
+
+```text
+shared-iterations:  CÓ dropped_iterations (nếu hit maxDuration)
+                    vus min = max (VU không tụt)
+                    iterations là TỔNG, không per-VU
+                    Cần kiểm: N_done, N_drop, W, T_run
+
+constant-vus:       KHÔNG có dropped_iterations
+                    vus min = max
+                    Chỉ cần kiểm: N_done, W, N_int → đơn giản nhất
+
+per-vu-iterations:  KHÔNG có dropped_iterations
+                    vus tụt dần về 0 (min < max)
+                    iterations là PER-VU
+                    Cần kiểm: interrupted, vus tụt
+
+constant-arrival-rate: CÓ dropped_iterations (do thiếu VU hoặc arrival rate)
+                       vus có thể tụt
+                       Cần kiểm: dropped_iterations, arrival rate
 ```
 
 ### 8.3. Hành động khi gặp vấn đề
