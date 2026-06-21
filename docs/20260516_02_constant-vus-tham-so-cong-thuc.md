@@ -3025,16 +3025,38 @@ data), hoặc check log xem có VU nào tụt hậu so với expected.
 Bước 1: Đo iter_time (chạy thử 1 VU, xem iteration_duration)
    W = iteration_duration của code
 
-Bước 2: Quyết định throughput muốn (X iter/s)
-   Vd muốn 10 iter/s
+Bước 2: Quyết định tốc độ iteration muốn đạt (X iter/s)
+   X là con số bạn TỰ CHỌN dựa trên mục tiêu test, KHÔNG phải đọc từ summary.
+   Đây là tốc độ sẽ hiện ở dòng `iterations...: N  X/s` trong summary
+   nếu config đúng.
+
+   Ví dụ chọn X:
+     "Tôi muốn test chạy với tốc độ 10 journey mỗi giây"
+     "Production đang 50 req/s, tôi muốn test ở mức đó"
+     "Tôi muốn CI chạy regression 30 iter/s cho nhanh"
+   → X = 10 (hoặc 50, 30, ...)
 
 Bước 3: Tính số VU cần (đảo Công thức 1)
    vus = ceil(X × W)
        = ceil(10 × 0.5) = 5 VU
 
-Bước 4: Đặt config
+Bước 4: Đặt config hoàn chỉnh
    vus      = 5
-   duration = "30s"  (hoặc thời lượng test mong muốn)
+   duration = "30s"  (thời gian muốn test kéo dài)
+
+   Kèm theo:
+   maxDuration = "30s" + thêm buffer vài giây (để tránh interrupt)
+   gracefulStop = "30s" (mặc định, cho iter cuối chạy nốt)
+
+   Kiểm tra tổng iter dự kiến (Công thức 3):
+     total ≈ vus × duration / W = 5 × 30 / 0.5 = 300 iter
+
+   → Summary dự kiến: iterations.........: 300  10.0/s
+                         iteration_duration: avg=0.5s
+                         vus................: 5
+
+   Nếu summary ra iterations/s gần 10/s → config đúng.
+   Nếu thấp hơn hẳn → iter_time thực tế > W đã đo → tăng vus.
 ```
 
 #### Tình huống 2: "Đã có target throughput, cần bao nhiêu VU?"
