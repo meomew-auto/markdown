@@ -229,6 +229,99 @@ Chart read:
 Conclusion: mixed production ingress met the 18/s baseline in this run, but p95 should be drilled down
 by `service`/`operation` before deciding which service owns the tail.
 
+## Dashboard UI check tại `http://localhost:13001`
+
+Sau khi user nhắc kiểm tra trực tiếp trên UI, đã mở dashboard bằng Chrome headless và capture
+Overview + Executor tab cho các run CAR:
+
+```text
+E:\Khoa hoc\k6\.claude-car-dashboard-screenshots\car-01-storefront-run89-overview.png
+E:\Khoa hoc\k6\.claude-car-dashboard-screenshots\car-01-storefront-run89-executor.png
+E:\Khoa hoc\k6\.claude-car-dashboard-screenshots\car-02-auth-run90-overview.png
+E:\Khoa hoc\k6\.claude-car-dashboard-screenshots\car-02-auth-run90-executor.png
+E:\Khoa hoc\k6\.claude-car-dashboard-screenshots\car-03-cart-run91-overview.png
+E:\Khoa hoc\k6\.claude-car-dashboard-screenshots\car-03-cart-run91-executor.png
+E:\Khoa hoc\k6\.claude-car-dashboard-screenshots\car-04-checkout-run92-overview.png
+E:\Khoa hoc\k6\.claude-car-dashboard-screenshots\car-04-checkout-run92-executor.png
+E:\Khoa hoc\k6\.claude-car-dashboard-screenshots\car-05-report-fail-run93-overview.png
+E:\Khoa hoc\k6\.claude-car-dashboard-screenshots\car-05-report-fail-run93-executor.png
+E:\Khoa hoc\k6\.claude-car-dashboard-screenshots\car-06-feed-run94-overview.png
+E:\Khoa hoc\k6\.claude-car-dashboard-screenshots\car-06-feed-run94-executor.png
+E:\Khoa hoc\k6\.claude-car-dashboard-screenshots\car-07-mix-run95-overview.png
+E:\Khoa hoc\k6\.claude-car-dashboard-screenshots\car-07-mix-run95-executor.png
+E:\Khoa hoc\k6\.claude-car-dashboard-screenshots\car-05-report-capacity-rerun-run96-overview.png
+E:\Khoa hoc\k6\.claude-car-dashboard-screenshots\car-05-report-capacity-rerun-run96-executor.png
+```
+
+Capture report:
+
+```text
+E:\Khoa hoc\k6\.claude-car-dashboard-screenshots\dashboard-capture-report.json
+```
+
+### Overview tab
+
+Overview tab render đủ các khu vực cần phân tích giống các executor pack trước:
+
+```text
+- KPI tiles: Requests, Failures, Observed RPS, Avg response
+- Active VUs / HTTP failed rate
+- Execution summary block
+- Requests & sleep aggregate debug
+- Response time chart
+- Execution timeline chart
+- VUs vs iter/s chart
+- Run catalog
+```
+
+Các số hiển thị trên UI khớp với summary-final cho các KPI chính:
+
+| Run | UI Requests | UI Observed RPS | UI Avg response / p95 | Nhận xét |
+| --- | ---: | ---: | --- | --- |
+| 89 car-01 | 900 | 19.999/s | avg 2.99 ms, p95 3.8 ms | storefront pass, chart đủ |
+| 90 car-02 | 676 | 15.021/s | avg 4.57 ms, p95 22.82 ms | auth pass, chart đủ |
+| 91 car-03 | 541 | 12.021/s | avg 4.21 ms, p95 5.55 ms | cart pass, chart đủ |
+| 92 car-04 | 452 reqs | 10.022 req/s | avg 49.32 ms, p95 71.24 ms | đúng vì 1 iteration = 2 reqs |
+| 93 car-05 | 309 reqs | 6.324 req/s | avg 3.1 s, p95 7.83 s | fail do drop; chart thể hiện latency/VU pressure |
+| 94 car-06 | 1081 | 24.020/s | avg 3.16 ms, p95 4.15 ms | feed pass, chart đủ |
+| 95 car-07 | 1081 | 17.956/s | avg 148.25 ms, p95 1.61 s | mixed pass, tail do branch chậm |
+| 96 car-05 rerun | 325 reqs | 6.102 req/s | avg 6.12 s, p95 12.65 s | tăng VU vẫn còn drop |
+
+### Executor tab issue found
+
+Có một vấn đề UI/FE rõ ràng: Executor tab auto-detect sai với các CAR run **không có drop**.
+
+Observed trên capture:
+
+| Run | Expected | UI Executor tab observed |
+| --- | --- | --- |
+| 89/90/91/92/94/95 | `constant-arrival-rate`, open-model | `per-vu-iterations`, `closed-model`, source `fallback` |
+| 93/96 | `constant-arrival-rate`, open-model | family `open-model` vì summary có `dropped_iterations > 0`, nhưng Executor label vẫn fallback `per-vu-iterations` |
+
+Nguyên nhân khả dĩ từ FE logic:
+
+```text
+- inferExecutorFromName() chưa nhận diện file prefix car-01/car-02/... là constant-arrival-rate.
+- detectFamilyFromSummary() chỉ auto-open khi dropped_iterations > 0 hoặc metric open-model riêng có value > 0.
+- Với happy-path CAR drop = 0, summary không đủ signal để UI tự chuyển sang open-model.
+```
+
+Impact:
+
+```text
+- Overview charts vẫn phân tích được và KPI summary đúng.
+- Executor tab/lens có thể dạy sai mental model cho các CAR run pass vì hiển thị closed-model.
+```
+
+Fix nên làm ở FE/dashboard, không phải BE core:
+
+```text
+1. Nhận diện tên script `car-` hoặc `constant-arrival-rate` pack path là `constant-arrival-rate`.
+2. Hoặc backend lưu executor metadata khi ingest k6 scenario options để FE không phải đoán theo filename.
+3. detectFamilyFromSummary nên coi presence của `dropped_iterations` metric / constant_arrival_* metrics là open-model signal,
+   không chỉ khi dropped_iterations > 0.
+```
+
 ## Chart reconciliation notes
 
 ### What reconciled cleanly
