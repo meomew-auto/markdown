@@ -158,7 +158,7 @@ Remove-Item Env:RAR_01_START_RATE, Env:RAR_01_DURATION_SCALE, Env:RAR_01_PREALLO
 Khi chỉ kiểm tra stack nhanh, giảm duration scale và peak rate:
 
 ```powershell
-$env:RAR_01_DURATION_SCALE = "0.25"
+$env:RAR_01_DURATION_SCALE = "0"  # envInt + scaleSeconds() clamps stages to 1s each
 $env:RAR_01_PEAK_RATE = "8"
 $env:RAR_01_PREALLOCATED_VUS = "4"
 $env:RAR_01_MAX_VUS = "12"

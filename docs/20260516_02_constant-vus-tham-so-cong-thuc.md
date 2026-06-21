@@ -3024,123 +3024,161 @@ data), hoặc check log xem có VU nào tụt hậu so với expected.
 Đây là tình huống đầu tiên ai cũng gặp: đã có script, muốn test chạy ở tốc
 độ target, nhưng chưa biết đặt `vus` bao nhiêu.
 
-**Quy trình 4 bước:**
-
-Bước 1: Đo iter_time (chạy thử 1 VU, xem iteration_duration)
-   W = iteration_duration của code
-
-Bước 2: Quyết định tốc độ iteration muốn đạt (X iter/s)
-   X là con số bạn TỰ CHỌN dựa trên mục tiêu test, KHÔNG phải đọc từ summary.
-   Đây là tốc độ sẽ hiện ở dòng `iterations...: N  X/s` trong summary
-   nếu config đúng.
-
-   Ví dụ chọn X:
-     "Tôi muốn test chạy với tốc độ 10 journey mỗi giây"
-     "Production đang 50 req/s, tôi muốn test ở mức đó"
-     "Tôi muốn CI chạy regression 30 iter/s cho nhanh"
-   → X = 10 (hoặc 50, 30, ...)
-
-Bước 3: Tính số VU cần (đảo Công thức 1)
-   vus = ceil(X × W)
-       = ceil(10 × 0.5) = 5 VU
-
-Bước 4: Đặt config hoàn chỉnh
-   vus      = 5
-   duration = "30s"  (thời gian muốn test kéo dài)
-
-   Kèm theo:
-   maxDuration = "30s" + thêm buffer vài giây (để tránh interrupt)
-   gracefulStop = "30s" (mặc định, cho iter cuối chạy nốt)
-
-   Kiểm tra tổng iter dự kiến (Công thức 3):
-     total ≈ vus × duration / W = 5 × 30 / 0.5 = 300 iter
-
-   → Summary dự kiến: iterations.........: 300  10.0/s
-                         iteration_duration: avg=0.5s
-                         vus................: 5
-
-   Nếu summary ra iterations/s gần 10/s → config đúng.
-   Nếu thấp hơn hẳn → iter_time thực tế > W đã đo → tăng vus.
-
----
-**Demo và output thật:** `examples/constant_vus_sizing_demo.js`
-
-Script này mô phỏng đúng 4 bước trên, dùng `sleep()` giả lập request HTTP:
+Demo dùng để phân tích: `examples/constant_vus_sizing_demo.js`
 
 ```js
 import exec from "k6/execution";
 import { sleep } from "k6";
 
-// ─── Tham số ───────────────────────────────────────────────
 const TARGET_RATE = __ENV.TARGET_RATE ? Number(__ENV.TARGET_RATE) : 10;
-const ITER_TIME_SEC = 0.5;  // Bước 1: W = 0.5s
+const ITER_TIME_SEC = 0.5;  // sleep cố định giả lập request HTTP
 
-// ─── Bước 2 & 3: tính toán trong init phase ────────────────
 const W = ITER_TIME_SEC;
 const X = TARGET_RATE;
-const calculatedVUs = Math.ceil(X * W); // Bước 3: ceil(X × W)
+const calculatedVUs = Math.ceil(X * W);
 
 export const options = {
   scenarios: {
     sizing_demo: {
       executor: "constant-vus",
-      vus: calculatedVUs,   // Bước 4: tự điền từ Bước 3
+      vus: calculatedVUs,
       duration: "10s",
       gracefulStop: "5s",
     },
   },
 };
 
-if (__VU === 1) {
-  console.log(`B1: W=${W}s | B2: X=${X} iter/s | B3: vus=ceil(${X}×${W})=${calculatedVUs}`);
-}
-
 export default function () {
-  sleep(ITER_TIME_SEC); // giả lập request HTTP
+  sleep(ITER_TIME_SEC);
 }
 ```
 
-Chạy với target mặc định 10 iter/s:
+Chạy:
 
 ```bash
-k6 run examples/constant_vus_sizing_demo.js
+k6 run examples/constant_vus_sizing_demo.js              # X = 10
+k6 run -e TARGET_RATE=20 examples/constant_vus_sizing_demo.js  # X = 20
 ```
 
-Output:
+Giờ phân tích output theo đúng 4 bước, lấy lần chạy TARGET_RATE=10 làm mẫu.
+
+**── Bước 1: Đo iter_time (W) ──**
+
+Lý thuyết: chạy thử 1 VU, xem `iteration_duration avg` trong summary,
+lấy đó làm W.
+
+Trong demo: `const ITER_TIME_SEC = 0.5` → W = 0.5s. Đây là giả lập —
+sleep(0.5) mô phỏng 1 request HTTP mất 0.5s. Ngoài đời thì bạn chạy
+thử script với 1 VU rồi đọc số từ summary.
 
 ```text
-  █ TOTAL RESULTS
-    iteration_duration...: avg=500.34ms     ← W thực tế ~0.5s, khớp Bước 1
-    iterations...........: 100 9.993115/s   ← 9.99/s ≈ 10/s, khớp Bước 2
-    vus..................: 5   min=5 max=5  ← 5 VU, khớp Bước 3
-
-  running (10.0s), 0/5 VUs, 100 complete and 0 interrupted iterations
+iteration_duration...: avg=500.34ms     ← W thực tế ~0.5s, khớp code
 ```
 
-Đối chiếu với các công thức:
-  CT3: total ≈ vus × duration / W = 5 × 10 / 0.5 = 100 → summary = 100 ✓
-  CT1: peak  = vus / W = 5 / 0.5 = 10 iter/s → summary 9.99/s ≈ 10 ✓
-  CT1 đảo: vus = rate × W = 9.993 × 0.50034 ≈ 5.0 → đúng config ✓
+**── Bước 2: Chọn tốc độ muốn đạt (X iter/s) ──**
 
-Thử thay đổi target để thấy vus thay đổi:
+Lý thuyết: X là con số bạn TỰ CHỌN dựa trên mục tiêu test. Không đọc
+từ summary, không có trong config cũ. Đây là tốc độ sẽ hiện ở dòng
+`iterations...: N  X/s` nếu config đúng.
+
+Ví dụ chọn X:
+  "Tôi muốn test chạy 10 journey mỗi giây" → X = 10
+  "Production 50 req/s, tôi muốn test ở mức đó" → X = 50
+  "CI regression cần 30 iter/s cho nhanh" → X = 30
+
+Trong demo: `const TARGET_RATE = 10` → X = 10 iter/s. Có thể đổi qua
+env var `-e TARGET_RATE=...`.
+
+```text
+iterations...........: 100 9.993115/s   ← 9.99/s ≈ 10/s, khớp X đã chọn
+```
+
+**── Bước 3: Tính số VU cần ──**
+
+Lý thuyết: đảo Công thức 1 → `vus = ceil(X × W)`. Làm tròn LÊN vì
+VU là số nguyên, thiếu VU thì rate thực tế sẽ thấp hơn target.
+
+Trong demo:
+  `const calculatedVUs = Math.ceil(X * W)`
+  = ceil(10 × 0.5) = ceil(5) = 5 VU
+  → config tự điền `vus: 5`
+
+```text
+vus..................: 5   min=5 max=5  ← 5 VU, đúng Bước 3
+```
+
+  vus min = max = 5 → constant-vus giữ đúng số VU suốt duration,
+  không tụt (khác với per-vu-iterations hay shared-iterations).
+
+**── Bước 4: Đặt config hoàn chỉnh, chạy, đọc summary kiểm tra ──**
+
+Lý thuyết: sau khi có vus từ Bước 3, điền nốt duration, maxDuration,
+gracefulStop. Rồi chạy và kiểm tra chéo bằng các công thức.
+
+Trong demo:
+  vus: calculatedVUs (= 5)     ← từ Bước 3
+  duration: "10s"              ← thời gian muốn test kéo dài
+  gracefulStop: "5s"           ← để iter cuối không bị cắt
+  maxDuration: (mặc định "10m", dư rộng)
+
+Tổng iter dự kiến (Công thức 3):
+  total ≈ vus × duration / W = 5 × 10 / 0.5 = 100 iter
+  Summary: iterations = 100 ✓
+
+Peak rate dự kiến (Công thức 1):
+  peak = vus / W = 5 / 0.5 = 10 iter/s
+  Summary: iterations/s = 9.993 ≈ 10 ✓
+
+Kiểm tra ngược (đảo Công thức 1):
+  vus = rate × W = 9.993 × 0.50034 ≈ 5.0 → đúng config ✓
+
+Footer:
+```text
+running (10.0s), 0/5 VUs, 100 complete and 0 interrupted iterations
+                         ↑               ↑
+                    N_done = 100    N_int = 0 → sạch
+```
+
+  interrupted = 0 → duration + gracefulStop đủ rộng, không iter nào
+  bị cắt giữa chừng.
+
+**── Thử target khác để thấy quy luật ──**
 
 ```bash
-k6 run -e TARGET_RATE=20 examples/constant_vus_sizing_demo.js   # vus=10, rate~20/s
-k6 run -e TARGET_RATE=5  examples/constant_vus_sizing_demo.js   # vus=3,  rate~5/s
-k6 run -e TARGET_RATE=30 examples/constant_vus_sizing_demo.js   # vus=15, rate~30/s
+k6 run -e TARGET_RATE=20 examples/constant_vus_sizing_demo.js
+```
+
+Bước 2: X = 20.  Bước 3: vus = ceil(20 × 0.5) = 10 VU.
+
+```text
+  iterations...........: 200 19.98/s   ← gần 20 ✓
+  vus..................: 10
+```
+
+→ Muốn rate gấp đôi → VU gấp đôi. Đúng lý thuyết: rate ∝ vus.
+
+```bash
+k6 run -e TARGET_RATE=5 examples/constant_vus_sizing_demo.js
+```
+
+Bước 3: vus = ceil(5 × 0.5) = ceil(2.5) = 3 VU.
+
+```text
+  iterations...........: 50 5.0/s   ← gần 5 ✓
+  vus..................: 3
 ```
 
 Bảng tổng kết:
 
-| X (target iter/s) | W (iter_time) | vus = ceil(X × W) | iterations/s thực | Đạt? |
-| ---: | ---: | ---: | ---: | --- |
-| 5 | 0.5s | 3 | ~5.0/s | ✓ |
-| 10 | 0.5s | 5 | ~10.0/s | ✓ |
-| 20 | 0.5s | 10 | ~20.0/s | ✓ |
-| 30 | 0.5s | 15 | ~30.0/s | ✓ |
+| X (target) | W | vus = ceil(X × W) | rate thực | total (10s) | Đạt? |
+| ---: | ---: | ---: | ---: | ---: | --- |
+| 5 | 0.5s | 3 | ~5.0/s | 50 | ✓ |
+| 10 | 0.5s | 5 | ~10.0/s | 100 | ✓ |
+| 20 | 0.5s | 10 | ~20.0/s | 200 | ✓ |
+| 30 | 0.5s | 15 | ~30.0/s | 300 | ✓ |
 
-Tất cả khớp vì demo dùng `sleep()` cố định. Với HTTP thật, iter_time dao
-động → rate lệch vài % → dùng `p95` thay `avg` để an toàn (xem mục 9.3).
+Tất cả khớp vì demo dùng sleep cố định. Với HTTP thật, iter_time dao
+động → rate thực tế lệch vài % → dùng p95 thay avg để an toàn (mục 9.3).
 
 #### Tình huống 2: "Đã có target throughput, cần bao nhiêu VU?"
 
