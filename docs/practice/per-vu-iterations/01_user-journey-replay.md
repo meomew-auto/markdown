@@ -163,17 +163,39 @@ Nhưng KHÔNG đảm bảo đạt 9000 vì có thể DROP slot:
   - Khi server chậm bất thường ở 1 đoạn (database lock, GC)
   - Khi spawn VU không kịp lúc đầu
 
-Công thức thực tế:
-  N_done = N_sched - N_drop - N_int
-         = 9000 - N_drop - N_int
+Phân biệt 4 loại số liệu (chi tiết trong lý thuyết
+`docs/20260517_02_constant-arrival-rate-tham-so-cong-thuc.md` mục 3.2):
+
+  scheduled slot (N_sched)   = mốc start iteration theo lịch rate/timeUnit
+  completed iteration        = iteration đã chạy xong đầy đủ
+  dropped iteration (N_drop) = mốc start đến hạn nhưng không có VU rảnh
+  interrupted iteration (N_int) = iteration đã start nhưng bị cancel
+
+Công thức quan sát output:
+  N_sched ≈ N_done + N_drop + N_int
+
+  → N_done = N_sched - N_drop - N_int
+
+Trong đó:
+  - N_sched: sinh ra từ lịch rate/timeUnit, KHÔNG cố định tuyệt đối
+    vì mốc đầu/sát boundary phụ thuộc timing thực tế
+  - N_drop: mỗi mốc đến mà không có VU rảnh → dropped_iterations += 1
+    k6 KHÔNG chờ VU rảnh rồi chạy bù mốc cũ
+  - N_int: iteration đã start nhưng bị cancel (thường do hết duration)
+
+Điểm khác biệt cốt lõi với constant-vus:
+  - constant-vus: count phụ thuộc iter_time (càng chậm càng ít)
+  - constant-arrival-rate: count phụ thuộc N_drop (thiếu VU rảnh thì drop slot)
+  - Cả 2 đều KHÔNG đảm bảo count tuyệt đối
 
 Ví dụ thực tế:
   Lần 1: pool vừa khít, không drop
-    N_drop = 0, N_done = 9000  (perfect)
+    N_drop = 0, N_int = 0, N_done ≈ 9000  (gần perfect)
   Lần 2: server có 30s chậm ở giữa (database backup)
-    N_drop = 500, N_done = 8500
-  Lần 3: cache cold ở 60s đầu
-    N_drop = 250, N_int = 50, N_done = 8700
+    VU bận lâu hơn → thiếu VU rảnh → drop ≈ 500 slot
+    N_done ≈ 9000 - 500 = 8500
+  Lần 3: cache cold ở 60s đầu, lại trúng right boundary
+    N_drop = 250, N_int = 50, N_done ≈ 9000 - 300 = 8700
 
   Range: 8500 - 9000 (chênh 5.5%)
   -> Vẫn không thể compare baseline fair
