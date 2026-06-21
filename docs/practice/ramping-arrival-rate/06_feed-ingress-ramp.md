@@ -116,7 +116,59 @@ $env:BASE_URL = "http://localhost:80"
 | dropped ở peak với latency thấp | Có thể preAllocated/spawn issue |
 | dropped + latency tăng | Backend/cache miss tạo VU pressure |
 
-## 10. Reference
+## 10. Real run — dashboard verification
+
+Run verify qua local cloud/dashboard với default env:
+
+```text
+Run ID: #105
+Script: rar-06-cache-feed-wave.js
+Exit code: 0
+summary_pushed: true
+finish_status: 200
+Target base: http://localhost:80
+```
+
+### Summary chính
+
+| Metric | Value |
+| --- | ---: |
+| `checks_rate` | `1` |
+| `checks_passes/checks_fails` | `949 / 0` |
+| `http_req_failed_rate` | `0` |
+| `dropped_iterations` | `0` |
+| `ramping_arrival_events_failed_rate` | `0` |
+| `iterations` | `949` |
+| `iterations_rate` | `17.61/s` |
+| `http_reqs` | `949` |
+| `http_reqs_rate` | `17.61/s` |
+| `vus_max` | `1` |
+| `ramping_arrival_event_duration_ms avg/med/p95/p99/max` | `3.28 / 3 / 5 / 5 / 8 ms` |
+| `http_req_duration avg/med/p95/p99/max` | `3.16 / 3.09 / 4.35 / 5.29 / 8.20 ms` |
+
+Request breakdown:
+
+```text
+feed_wave_homefeed GET 200 count=679
+feed_wave_recommendations GET 200 count=270
+```
+
+### Dashboard series check
+
+```text
+iterations: points=54, sum=949, min=2, max=36, truncated=false
+http_reqs: points=949, sum=949, min=1, max=1, truncated=false
+dropped_iterations: points=0, truncated=false
+vus: points=53, min=0, max=1, truncated=false
+```
+
+### Verdict
+
+```text
+PASS — default ramping-arrival-rate case giữ được arrival curve: checks sạch, HTTP failed 0%, dropped_iterations=0.
+```
+
+## 11. Reference
 
 - Run guide: `./RUN_GUIDE.md`
 - Overview: `./00_overview.md`

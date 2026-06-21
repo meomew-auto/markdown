@@ -261,6 +261,45 @@ Xác nhận executor family, workload shape, case ID, business case, stage curve
 | `http_reqs` không bằng `iterations` | Có multi-step event | Reconcile với case call pattern và `ramping_arrival_api_calls_total` |
 | Filter event metric theo `endpoint` không ra data | Event metrics không có endpoint tag | Filter event metric theo `operation`; dùng request metrics cho endpoint |
 
+## Real run summary — default ramping-arrival-rate suite
+
+Bộ 7 case đã chạy qua local cloud/dashboard:
+
+```text
+K6_CLOUD_HOST=http://localhost:18080
+Dashboard/read API=http://localhost:13001
+BASE_URL=http://localhost:80
+RAR_05_BASE_URL=http://localhost:8088
+summary_pushed=true cho cả 7 run
+finish_status=200 cho cả 7 run
+```
+
+| Case | Run | Verdict | iterations | http_reqs | dropped | event p95 | HTTP p95 | BE note |
+| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| 01 | #100 | PASS | 705 | 705 | 0 | 5 ms | 4.19 ms | không thấy BE issue từ run này |
+| 02 | #101 | PASS | 507 | 507 | 0 | 23 ms | 23.10 ms | không thấy BE issue từ run này |
+| 03 | #102 | PASS | 545 | 545 | 0 | 6 ms | 5.73 ms | không thấy BE issue từ run này |
+| 04 | #103 | PASS | 317 | 951 | 0 | 108 ms | 54.92 ms | không thấy BE issue từ run này |
+| 05 | #104 | PASS | 219 | 299 | 0 | 166.10 ms | 23.20 ms | không thấy BE issue từ run này |
+| 06 | #105 | PASS | 949 | 949 | 0 | 5 ms | 4.35 ms | không thấy BE issue từ run này |
+| 07 | #106 | PASS | 1,034 | 1,034 | 0 | 80.60 ms | 80.34 ms | không thấy BE issue từ run này |
+
+Kết luận cross-case:
+
+```text
+PASS: cả 7 case ramping-arrival-rate default.
+checks_rate=1, http_req_failed_rate=0, dropped_iterations=0 cho từng case.
+Không thấy BE issue bắt buộc phải báo từ các run #100-#106.
+```
+
+Diễn giải quan trọng:
+
+```text
+- Với open model, VUs tăng/giảm là scheduler capacity demand, không phải số user.
+- Tín hiệu pass/fail chính là dropped_iterations + checks/status + operation latency.
+- Multi-step cases có http_reqs > iterations là expected: case 04 = 3 calls/event, case 05 mix 1/2 calls/event.
+```
+
 ## Thứ tự đề xuất học
 
 ```text

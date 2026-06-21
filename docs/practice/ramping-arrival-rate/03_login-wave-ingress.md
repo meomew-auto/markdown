@@ -117,7 +117,58 @@ $env:BASE_URL = "http://localhost:80"
 | duplicate/idempotency issue | Kiểm idempotency/claim TTL behavior |
 | dropped ở wave peak | Tăng capacity hoặc giảm provider peak |
 
-## 10. Reference
+## 10. Real run — dashboard verification
+
+Run verify qua local cloud/dashboard với default env:
+
+```text
+Run ID: #102
+Script: rar-03-payment-webhook-wave.js
+Exit code: 0
+summary_pushed: true
+finish_status: 200
+Target base: http://localhost:80
+```
+
+### Summary chính
+
+| Metric | Value |
+| --- | ---: |
+| `checks_rate` | `1` |
+| `checks_passes/checks_fails` | `545 / 0` |
+| `http_req_failed_rate` | `0` |
+| `dropped_iterations` | `0` |
+| `ramping_arrival_events_failed_rate` | `0` |
+| `iterations` | `545` |
+| `iterations_rate` | `9.91/s` |
+| `http_reqs` | `545` |
+| `http_reqs_rate` | `9.91/s` |
+| `vus_max` | `0` |
+| `ramping_arrival_event_duration_ms avg/med/p95/p99/max` | `5.19 / 5 / 6 / 21 / 39 ms` |
+| `http_req_duration avg/med/p95/p99/max` | `5.05 / 4.40 / 5.73 / 19.94 / 38.33 ms` |
+
+Request breakdown:
+
+```text
+payment_webhook_wave_receive POST 200 count=545
+```
+
+### Dashboard series check
+
+```text
+iterations: points=55, sum=545, min=1, max=20, truncated=false
+http_reqs: points=545, sum=545, min=1, max=1, truncated=false
+dropped_iterations: points=0, truncated=false
+vus: points=55, min=0, max=0, truncated=false
+```
+
+### Verdict
+
+```text
+PASS — default ramping-arrival-rate case giữ được arrival curve: checks sạch, HTTP failed 0%, dropped_iterations=0.
+```
+
+## 11. Reference
 
 - Run guide: `./RUN_GUIDE.md`
 - Overview: `./00_overview.md`

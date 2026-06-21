@@ -117,7 +117,60 @@ $env:BASE_URL = "http://localhost:80"
 | refresh p95/p99 dominate | Điều tra session/refresh write path |
 | dropped ở burst only | Burst capacity/preAllocated cần tăng |
 
-## 10. Reference
+## 10. Real run — dashboard verification
+
+Run verify qua local cloud/dashboard với default env:
+
+```text
+Run ID: #101
+Script: rar-02-login-burst-recovery.js
+Exit code: 0
+summary_pushed: true
+finish_status: 200
+Target base: http://localhost:80
+```
+
+### Summary chính
+
+| Metric | Value |
+| --- | ---: |
+| `checks_rate` | `1` |
+| `checks_passes/checks_fails` | `507 / 0` |
+| `http_req_failed_rate` | `0` |
+| `dropped_iterations` | `0` |
+| `ramping_arrival_events_failed_rate` | `0` |
+| `iterations` | `507` |
+| `iterations_rate` | `10.35/s` |
+| `http_reqs` | `507` |
+| `http_reqs_rate` | `10.35/s` |
+| `vus_max` | `1` |
+| `ramping_arrival_event_duration_ms avg/med/p95/p99/max` | `6.18 / 3 / 23 / 24 / 101 ms` |
+| `http_req_duration avg/med/p95/p99/max` | `6.07 / 2.76 / 23.10 / 23.73 / 101.03 ms` |
+
+Request breakdown:
+
+```text
+login_burst_login POST 200 count=307
+login_burst_me GET 200 count=125
+login_burst_refresh POST 200 count=75
+```
+
+### Dashboard series check
+
+```text
+iterations: points=49, sum=507, min=1, max=23, truncated=false
+http_reqs: points=507, sum=507, min=1, max=1, truncated=false
+dropped_iterations: points=0, truncated=false
+vus: points=49, min=0, max=1, truncated=false
+```
+
+### Verdict
+
+```text
+PASS — default ramping-arrival-rate case giữ được arrival curve: checks sạch, HTTP failed 0%, dropped_iterations=0.
+```
+
+## 11. Reference
 
 - Run guide: `./RUN_GUIDE.md`
 - Overview: `./00_overview.md`

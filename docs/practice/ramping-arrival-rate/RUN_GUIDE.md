@@ -261,6 +261,27 @@ Default validation reported for this suite, local k6 against Docker target, no d
 
 Dùng snapshot này để biết default scripts sạch. Khi cần chart evidence, rerun với dashboard/cloud mode.
 
+## Dashboard verification snapshot
+
+Default suite đã chạy qua cloud/dashboard với summary-final pushed:
+
+| Case | Run | Iterations | HTTP reqs | Checks rate | HTTP failed | Dropped | Event p95 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| rar-01-campaign-warmup-surge | #100 | 705 | 705 | 1 | 0 | 0 | 5 ms |
+| rar-02-login-burst-recovery | #101 | 507 | 507 | 1 | 0 | 0 | 23 ms |
+| rar-03-payment-webhook-wave | #102 | 545 | 545 | 1 | 0 | 0 | 6 ms |
+| rar-04-checkout-flash-sale-wave | #103 | 317 | 951 | 1 | 0 | 0 | 108 ms |
+| rar-05-report-job-ingress-ramp | #104 | 219 | 299 | 1 | 0 | 0 | 166.10 ms |
+| rar-06-cache-feed-wave | #105 | 949 | 949 | 1 | 0 | 0 | 5 ms |
+| rar-07-production-spike-mix | #106 | 1,034 | 1,034 | 1 | 0 | 0 | 80.60 ms |
+
+Kết luận:
+
+```text
+PASS: cả 7 dashboard runs #100-#106.
+Không có dropped_iterations, HTTP failures, hoặc failed checks trong default run.
+```
+
 ## Troubleshooting
 
 | Symptom | Likely cause | What to do |

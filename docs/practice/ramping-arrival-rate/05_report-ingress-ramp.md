@@ -129,7 +129,60 @@ Nhưng default của case này là report target `8088`.
 | status 200 fail | Report job status path issue |
 | connection refused | Sai target/stack cho `RAR_05_BASE_URL` |
 
-## 10. Reference
+## 10. Real run — dashboard verification
+
+Run verify qua local cloud/dashboard với default env:
+
+```text
+Run ID: #104
+Script: rar-05-report-job-ingress-ramp.js
+Exit code: 0
+summary_pushed: true
+finish_status: 200
+Target base: http://localhost:8088
+```
+
+### Summary chính
+
+| Metric | Value |
+| --- | ---: |
+| `checks_rate` | `1` |
+| `checks_passes/checks_fails` | `299 / 0` |
+| `http_req_failed_rate` | `0` |
+| `dropped_iterations` | `0` |
+| `ramping_arrival_events_failed_rate` | `0` |
+| `iterations` | `219` |
+| `iterations_rate` | `4.15/s` |
+| `http_reqs` | `299` |
+| `http_reqs_rate` | `5.67/s` |
+| `vus_max` | `1` |
+| `ramping_arrival_event_duration_ms avg/med/p95/p99/max` | `62.02 / 3 / 166.10 / 167 / 179 ms` |
+| `http_req_duration avg/med/p95/p99/max` | `7.61 / 2.17 / 23.20 / 23.91 / 36.66 ms` |
+
+Request breakdown:
+
+```text
+report_job_ramp_dashboard GET 200 count=139
+report_job_ramp_create POST 202 count=80
+report_job_ramp_status GET 200 count=80
+```
+
+### Dashboard series check
+
+```text
+iterations: points=52, sum=219, min=1, max=8, truncated=false
+http_reqs: points=299, sum=299, min=1, max=1, truncated=false
+dropped_iterations: points=0, truncated=false
+vus: points=52, min=0, max=1, truncated=false
+```
+
+### Verdict
+
+```text
+PASS — default ramping-arrival-rate case giữ được arrival curve: checks sạch, HTTP failed 0%, dropped_iterations=0.
+```
+
+## 11. Reference
 
 - Run guide: `./RUN_GUIDE.md`
 - Overview: `./00_overview.md`

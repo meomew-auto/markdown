@@ -130,7 +130,60 @@ Xóa override sau smoke trước khi chạy default.
 | cart_add p95/p99 cao nhưng dropped=0 | Backend còn giữ được ingress, nhưng cart latency cần theo dõi |
 | checks fail theo products/cart | Báo đúng service/operation, không kết luận chung chung |
 
-## 10. Reference
+## 10. Real run — dashboard verification
+
+Run verify qua local cloud/dashboard với default env:
+
+```text
+Run ID: #100
+Script: rar-01-campaign-warmup-surge.js
+Exit code: 0
+summary_pushed: true
+finish_status: 200
+Target base: http://localhost:80
+```
+
+### Summary chính
+
+| Metric | Value |
+| --- | ---: |
+| `checks_rate` | `1` |
+| `checks_passes/checks_fails` | `705 / 0` |
+| `http_req_failed_rate` | `0` |
+| `dropped_iterations` | `0` |
+| `ramping_arrival_events_failed_rate` | `0` |
+| `iterations` | `705` |
+| `iterations_rate` | `12.82/s` |
+| `http_reqs` | `705` |
+| `http_reqs_rate` | `12.82/s` |
+| `vus_max` | `1` |
+| `ramping_arrival_event_duration_ms avg/med/p95/p99/max` | `3.64 / 3 / 5 / 6 / 18 ms` |
+| `http_req_duration avg/med/p95/p99/max` | `3.49 / 3.32 / 4.19 / 5.32 / 18.34 ms` |
+
+Request breakdown:
+
+```text
+campaign_surge_landing GET 200 count=390
+campaign_surge_detail GET 200 count=210
+campaign_surge_cart_add POST 200 count=105
+```
+
+### Dashboard series check
+
+```text
+iterations: points=55, sum=705, min=1, max=27, truncated=false
+http_reqs: points=705, sum=705, min=1, max=1, truncated=false
+dropped_iterations: points=0, truncated=false
+vus: points=55, min=0, max=1, truncated=false
+```
+
+### Verdict
+
+```text
+PASS — default ramping-arrival-rate case giữ được arrival curve: checks sạch, HTTP failed 0%, dropped_iterations=0.
+```
+
+## 11. Reference
 
 - Run guide: `./RUN_GUIDE.md`
 - Overview: `./00_overview.md`

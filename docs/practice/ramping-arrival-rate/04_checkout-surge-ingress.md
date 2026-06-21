@@ -119,7 +119,60 @@ $env:BASE_URL = "http://localhost:80"
 | dropped ở peak | Multi-step duration vượt VU capacity |
 | cart add fail | Cart write path issue, không blame order chung |
 
-## 10. Reference
+## 10. Real run — dashboard verification
+
+Run verify qua local cloud/dashboard với default env:
+
+```text
+Run ID: #103
+Script: rar-04-checkout-flash-sale-wave.js
+Exit code: 0
+summary_pushed: true
+finish_status: 200
+Target base: http://localhost:80
+```
+
+### Summary chính
+
+| Metric | Value |
+| --- | ---: |
+| `checks_rate` | `1` |
+| `checks_passes/checks_fails` | `951 / 0` |
+| `http_req_failed_rate` | `0` |
+| `dropped_iterations` | `0` |
+| `ramping_arrival_events_failed_rate` | `0` |
+| `iterations` | `317` |
+| `iterations_rate` | `5.89/s` |
+| `http_reqs` | `951` |
+| `http_reqs_rate` | `17.67/s` |
+| `vus_max` | `1` |
+| `ramping_arrival_event_duration_ms avg/med/p95/p99/max` | `87.71 / 87 / 108 / 117.84 / 127 ms` |
+| `http_req_duration avg/med/p95/p99/max` | `29.02 / 34.14 / 54.92 / 57.81 / 85.13 ms` |
+
+Request breakdown:
+
+```text
+checkout_wave_cart_add POST 200 count=317
+checkout_wave_create POST 200 count=317
+checkout_wave_confirm POST 200 count=317
+```
+
+### Dashboard series check
+
+```text
+iterations: points=54, sum=317, min=1, max=12, truncated=false
+http_reqs: points=951, sum=951, min=1, max=1, truncated=false
+dropped_iterations: points=0, truncated=false
+vus: points=53, min=0, max=1, truncated=false
+```
+
+### Verdict
+
+```text
+PASS — default ramping-arrival-rate case giữ được arrival curve: checks sạch, HTTP failed 0%, dropped_iterations=0.
+```
+
+## 11. Reference
 
 - Run guide: `./RUN_GUIDE.md`
 - Overview: `./00_overview.md`
