@@ -88,28 +88,47 @@ Important observations:
 To check whether the failure was only low `preAllocatedVUs/maxVUs`, reran rar-05 with:
 
 ```powershell
+$env:BASE_URL = "http://localhost:80"
 $env:RAR_05_PREALLOCATED_VUS = "60"
 $env:RAR_05_MAX_VUS = "120"
+$env:RAR_05_BASE_URL = "http://localhost:80"
 ```
 
 Result:
 
 | Iterations | Dropped | HTTP reqs | Event p95 | HTTP p95 | Active VU max | vus_max | Result |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| 219 | 0 | 306 | 168 ms | 23.12 ms | 1 | 60 | PASS |
+| 216 | **3** | 296 | 9.25 s | 8.89 s | 62 | 63 | **STILL FAIL** |
 
 Interpretation:
 
 ```text
-Increasing VU pool from pre=25/max=80 to pre=60/max=120 eliminated all drops.
-Event p95 dropped from 9.01s to 168ms because VUs were always available —
-the async wait (sleep 0.14s) no longer caused queueing pressure.
-This confirms the failure was a VU capacity issue, not a backend or script problem.
+Increasing VU pool from pre=25/max=80 to pre=60/max=120 reduced drops from 20 -> 3.
+This is a significant improvement (85% reduction in dropped_iterations), but did not
+reach zero. Event p95 remained very high at 9.25s.
+
+Root cause analysis:
+1. The async_job branch sleeps 0.14s between create and status poll.
+   At 8/s peak with 40% async mix, ~3.2 async_job events start per second.
+2. Each async event holds a VU for at least 0.14s (sleep) + HTTP time.
+3. With a long event duration tail (p95=9.25s), a few slow events consume
+   VU capacity that could serve multiple fast arrivals.
+4. The issue is NOT just VU count — it's the combination of:
+   - sleep() holding VUs idle (always a risk in open-model scripts)
+   - backend tail latency amplifying event duration
+   - the 0-drop budget being very strict for an async workload
+
+Teaching value: This is even richer than the CAR-05 case because it shows that
+sometimes NO reasonable VU count can achieve zero drops when the script uses
+sleep() + async patterns under high arrival rates. The right approach may be:
+- Accept a non-zero drop budget (e.g., maxDropped=5)
+- Remove or reduce the sleep() in the script
+- Use a separate scenario for async jobs with its own VU pool
 ```
 
 For teaching, this is valuable: `checks=100%` and `http_req_failed=0%` are not enough.
 The open-model contract still failed because k6 could not start all scheduled arrivals.
-The fix is either more VUs or accepting a non-zero drop budget.
+Sometimes the fix is architectural (separate scenarios, remove sleep), not just "add more VUs."
 
 ## Per-case interpretation
 

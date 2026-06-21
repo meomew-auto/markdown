@@ -336,7 +336,7 @@ Chạy local với `BASE_URL=http://localhost:80`:
 | 02 | Login burst recovery | 507 | 0 | 507 | 23ms | 1 | ✅ PASS |
 | 03 | Payment webhook wave | 545 | 0 | 545 | 6ms | 0 | ✅ PASS |
 | 04 | Checkout flash-sale wave | 317 | 0 | 951 | 112ms | 1 | ✅ PASS |
-| 05 | Report job ingress ramp | 199 | **20** | 278 | 9.01s | 45 | ❌ FAIL |
+| 05 | Report job ingress ramp | 199 | **20** | 278 | 9.01s | 45 | ❌ FAIL (rerun pre=60/max=120: 216 iter, 3 drops, STILL FAIL) |
 | 06 | Cache feed wave | 949 | 0 | 949 | 4ms | 1 | ✅ PASS |
 | 07 | Production spike mix | 1035 | 0 | 1035 | 86ms | 6 | ✅ PASS |
 
