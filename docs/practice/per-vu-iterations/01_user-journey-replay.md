@@ -75,7 +75,18 @@ Công thức count khi chạy:
                  = 30  × (1 / iter_time)
 
     1/iter_time = tốc độ 1 VU (iter/s)
-      Ví dụ iter_time = 2s -> 1 VU làm được 0.5 iter trong 1 giây.
+
+      Đây là phép đảo đơn vị:
+        iter_time có đơn vị: giây / iteration   (vd: 2s/iter)
+        1/iter_time có đơn vị: iteration / giây  (vd: 1/2 = 0.5 iter/s)
+
+      Nghĩa: nếu 1 iteration mất iter_time giây, thì trong 1 giây
+      VU đó hoàn thành được 1/iter_time iteration.
+
+      Ví dụ cụ thể:
+        iter_time = 2s    -> 1 VU làm được 1/2 = 0.5 iter trong 1 giây
+        iter_time = 0.5s  -> 1 VU làm được 1/0.5 = 2 iter trong 1 giây
+        iter_time = 0.2s  -> 1 VU làm được 1/0.2 = 5 iter trong 1 giây
 
     vus/iter_time = 30 VU cộng lại làm được bao nhiêu iter trong 1 giây.
       Ví dụ iter_time = 2s -> 30/2 = 15 iter/s toàn pool.
