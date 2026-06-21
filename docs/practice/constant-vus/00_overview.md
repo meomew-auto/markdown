@@ -360,7 +360,7 @@ Tất cả run đã push final summary và verify qua dashboard/API `http://loca
 | 02 | #82 | PASS | 15 | 4,470 | 5,379 | 26 ms | không thấy BE issue từ run này |
 | 03 | #83 | PASS | 18 | 10,333 | 30,999 | 83 ms | không thấy BE issue từ run này |
 | 04 | #84 | PASS | 8 | 2,059 | 6,177 | 199 ms | không thấy BE issue từ run này |
-| 05 | #85 | PASS | 25 | 11,789 | 23,578 | 399 ms | không thấy BE issue từ run này |
+| 05 | #99 | PASS | 25 | 11,865 | 23,730 | 400 ms | recheck sau case-05 fix: không thấy BE issue từ run này |
 | 06 | #86 | PASS | 6 | 814 | 1,358 | 222.05 ms | không thấy BE issue từ run này |
 | 07 | #87 | PASS | 30 | 12,742 | 12,742 | 1,879.65 ms | không thấy BE issue từ run này |
 

@@ -1233,12 +1233,12 @@ Kết luận thực tế:
 | aggregate p95 OK but segment p95 high | Segmentation blindness | Lọc dashboard theo segment tags |
 | homefeed count ≠ rec count | Có loop bị skip 1 operation | Kiểm script flow, error handling |
 
-## Real run — default constant-vus baseline after X-User-ID header
+## Real run — default constant-vus baseline after case-05 fix
 
-Run verify qua local cloud/dashboard sau khi k6 helper gửi `X-User-ID: ctx.userId`:
+Run verify qua local cloud/dashboard sau khi case 05 được fix và k6 helper gửi `X-User-ID: ctx.userId`:
 
 ```text
-Run ID: #85
+Run ID: #99
 Script: cv-05-personalized-homefeed.js
 Exit code: 0
 summary_pushed: true
@@ -1251,38 +1251,39 @@ Config: 25 VUs, duration 5m, default sleep/env
 | Metric | Value |
 | --- | ---: |
 | `checks_rate` | `1` |
-| `checks_passes/checks_fails` | `23,578 / 0` |
+| `checks_passes/checks_fails` | `23,730 / 0` |
 | `http_req_failed_rate` | `0` |
-| `iterations` | `11,789` |
-| `iterations_rate` | `39.24/s` |
-| `http_reqs` | `23,578` |
-| `http_reqs_rate` | `78.48/s` |
+| `iterations` | `11,865` |
+| `iterations_rate` | `39.47/s` |
+| `http_reqs` | `23,730` |
+| `http_reqs_rate` | `78.94/s` |
 | `vus_min/vus_max` | `25 / 25` |
-| `constant_flow_duration_ms avg/med/p95/p99/max` | `236.32 / 202 / 399 / 497.12 / 639 ms` |
-| `http_req_duration avg/med/p95/p99/max` | `118.05 / 100.30 / 200.76 / 297.95 / 633.74 ms` |
+| `constant_flow_duration_ms avg/med/p95/p99/max` | `232.59 / 201 / 400 / 500 / 911 ms` |
+| `http_req_duration avg/med/p95/p99/max` | `116.18 / 100.06 / 201.19 / 299.00 / 806.37 ms` |
 
 Request breakdown:
 
 ```text
-personalized_recommendations GET 200 count=11,789
-personalized_homefeed GET 200 count=11,789
+personalized_homefeed GET 200 count=11,865
+personalized_recommendations GET 200 count=11,865
 ```
 
-### Đọc 3 chart dashboard cho run #85
+### Đọc 3 chart dashboard cho run #99
 
-**Chart 1 — Response time.** `http_req_duration` p95 ~200.76ms; `constant_flow_duration_ms` p95 ~399ms. Đây là baseline tốt hơn run trước và không có HTTP/check failures.
+**Chart 1 — Response time.** `http_req_duration` p95 ~201.19ms; `constant_flow_duration_ms` p95 ~400ms. Không có HTTP/check failures, percentile lấy từ `k6_summary`.
 
-**Chart 2 — Execution timeline.** `iterations` sum 11,789, `http_reqs` sum 23,578 = 2×iterations. Homefeed và recommendations đều 11,789, không thiếu branch.
+**Chart 2 — Execution timeline.** `iterations` sum 11,865, `http_reqs` sum 23,730 = 2×iterations. Homefeed và recommendations đều 11,865, không thiếu branch.
 
 Dashboard/API bucket summary:
 
 ```text
-iterations buckets: count=301, sum=11789, min=4.00, max=48.00
-http_reqs buckets:  count=301, sum=23578, min=19.00, max=93.00
-không có failed iteration buckets
+iterations buckets: count=300, sum=11865, min=30.00, max=49.00
+http_reqs points:    count=15009, sum=23730, min=1.00, max=3.00
+constant_active_iterations points: count=7502, sum=11865
+constant_active_iterations_failed points: count=0
 ```
 
-**Chart 3 — VUs vs iter/s.** VUs flat đúng 25 trong 300 buckets. Iter/s bucket 4–48 phản ánh loop completion/latency/think-time, không phải VU drop.
+**Chart 3 — VUs vs iter/s.** VUs flat đúng 25 trong 300 buckets. Iter/s bucket 30–49 phản ánh loop completion/latency/think-time, không phải VU drop.
 
 ```text
 vus buckets: count=300, min=25.00, max=25.00, avg=25.00
@@ -1291,10 +1292,10 @@ vus buckets: count=300, min=25.00, max=25.00, avg=25.00
 ### Backend verdict
 
 ```text
-PASS — personalization/homefeed functional clean trong run này.
+PASS — personalization/homefeed functional clean sau case-05 fix.
 ```
 
-Không cần báo BE.
+Không cần báo BE cho case 05.
 
 ## Nghịch lý và misconceptions của constant-vus
 
