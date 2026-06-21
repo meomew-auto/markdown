@@ -393,6 +393,7 @@ Dashboard bucket có thể downsample/aggregate; phải reconcile bằng sum đ�
 - Tham số/công thức: `docs/20260517_02_constant-arrival-rate-tham-so-cong-thuc.md`
 - Worked example QuickPizza: `docs/20260517_03_constant-arrival-rate-quickpizza-two-requests-worked-example.md`
 - Practice run guide: `docs/practice/constant-arrival-rate/RUN_GUIDE.md`
+- Full validation + chart analysis: `docs/practice/constant-arrival-rate/08_validation-and-chart-analysis.md`
 - Source pack: `E:\Projects\k6\k6-metrics-server\load-target\k6\constant-arrival-rate\README.md`
 
 ## Thứ tự đề xuất đọc/làm

@@ -12,6 +12,14 @@ Worked example QuickPizza:
 docs/20260517_03_constant-arrival-rate-quickpizza-two-requests-worked-example.md
 ```
 
+Practice pack 7 case thực tế + chart analysis:
+
+```text
+docs/practice/constant-arrival-rate/00_overview.md
+docs/practice/constant-arrival-rate/RUN_GUIDE.md
+docs/practice/constant-arrival-rate/08_validation-and-chart-analysis.md
+```
+
 ## Link nhanh
 
 - [Ý tưởng chính](./20260517_02_constant-arrival-rate-tham-so-cong-thuc.md#1-ý-tưởng-chính)
