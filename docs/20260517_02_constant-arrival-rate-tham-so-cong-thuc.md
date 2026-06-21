@@ -4328,6 +4328,7 @@ running (10.5s), 0/6 VUs, 101 complete and 0 interrupted iterations
   running (10.4s), 0/4 VUs, 68 complete and 0 interrupted iterations
 ```
 
+```text
 Câu hỏi kiểm tra:
   1) Có drop không? CÓ — dropped_iterations = 32
      N_drop / N_sched = 32/100 = 32% → RẤT ĐÁNG LO
@@ -4339,6 +4340,7 @@ Câu hỏi kiểm tra:
      Nguyên nhân chính: drop 32 slot — không phải do code chậm
 
   4) Verify tổng: N_done + N_drop = 68 + 32 = 100 = N_sched ✓
+```
 
 **── 4 câu hỏi kiểm tra cho constant-arrival-rate ──**
 

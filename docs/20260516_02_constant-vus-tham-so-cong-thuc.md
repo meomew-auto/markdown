@@ -3368,6 +3368,7 @@ So sánh cùng 4 VU:
 → Cùng số VU, throughput có thể chênh 5 lần tùy iter_time.
 → Đây cũng là lý do constant-vus KHÔNG phù hợp cho regression test
   (count không cố định — xem case 01 per-vu-iterations).
+```
 
 #### Tình huống 4: "Đã chạy xong, đọc summary"
 
