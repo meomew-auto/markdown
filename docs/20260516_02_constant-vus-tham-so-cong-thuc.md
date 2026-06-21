@@ -2883,8 +2883,8 @@ Liên hệ:
   iterations/s ≈ vus × per_vu_rate
       8.0/s   ≈  4  ×    1.82        ← khớp
 
-  iterations/s là throughput CẢ POOL (summary có)
-  per_vu_rate  là throughput 1 VU     (tự tính, summary KHÔNG có)
+  iterations/s là tốc độ CẢ POOL (summary có sẵn)
+  per_vu_rate  là tốc độ 1 VU     (tự tính, summary KHÔNG có sẵn)
 ```
 
 **Khi nào dùng**: debug khi VU chậm bất thường, hoặc muốn biết 1 VU
