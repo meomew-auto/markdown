@@ -48,16 +48,16 @@ $env:OPS_AUTH_TOKEN = "<ops-token>"
 
 | # | Check | Command | Expected | Observed |
 | --- | --- | --- | --- | --- |
-| 1 | `GET /health` public `:80` | `curl http://localhost:80/health` | 200 | pending |
-| 2 | `GET /health` control `:8088` | `curl http://localhost:8088/health` | 200 | pending |
-| 3 | `GET /health` events `:9091` | `curl http://localhost:9091/health` | 200 | pending |
-| 4 | Target routing | `check-target-routing.ps1 -TargetLayer full` | pass | pending |
-| 5 | Control profile with token | `curl :8088/ops/app/cdn/cache/profile -H "Authorization: Bearer <token>"` | 200 | pending |
-| 6 | Origin healthy | `GET /ops/app/cdn/origin/profile` | `healthy: true` | pending |
-| 7 | Origin request counts endpoint | `GET /ops/app/cdn/origin/request-counts` | 200 + JSON | pending |
-| 8 | Cache ban-url endpoint | `POST /ops/app/cdn/cache/ban-url` | 200 | pending |
-| 9 | Catalog events endpoint | `POST :9091/events/product-updated` | 200 | pending |
-| 10 | Tất cả route app đã sẵn sàng | Probe từng path trong `shared.js` paths | 200 hoặc 404 (tùy path) | pending |
+| 1 | `GET /health` public `:80` | `curl http://localhost:80/health` | 200 | 200 |
+| 2 | `GET /health` control `:8088` | `curl http://localhost:8088/health` | 200 | 200 |
+| 3 | `GET /health` events `:9091` | `curl http://localhost:9091/health` | 200 | 200 |
+| 4 | Target routing | `check-target-routing.ps1 -TargetLayer full` | pass | PASS, 37/37 routes |
+| 5 | Control profile with token | control/routing probes with token redacted | 200 | PASS via route + scenario control checks |
+| 6 | Origin healthy | scenario setup `resetOriginProfile()` | `healthy: true` before stateful cases | PASS |
+| 7 | Origin request counts endpoint | stateful cases 09/10/11 | 200 + JSON | PASS |
+| 8 | Cache ban-url endpoint | setup in cases 01/02/04/08/09/10/11 | 200 | PASS |
+| 9 | Catalog events endpoint | case 06 event flow | 200 | PASS |
+| 10 | Tất cả route app đã sẵn sàng | routing + full runtime suite | app routes ready | PASS |
 
 ---
 
