@@ -6,6 +6,20 @@ File này lưu bằng chứng runtime sau khi chạy CDN capability cases qua re
 
 Không bịa số. Nếu một case pass isolated nhưng fail trong full sequential run, ghi rõ cả hai vì đó là tín hiệu khác với CDN steady-state behavior.
 
+## Latest recheck after BE fix
+
+Recheck sau khi BE/test-harness sửa recovery giữa stale case và coalescing case:
+
+```text
+Full runtime command: ./scripts/run-cdn-capabilities.ps1 -Scenarios all
+Result: exit 0
+Scenarios started: 11/11
+Scenarios passed: 11/11
+OPS_AUTH_TOKEN: sourced from running container env, redacted in docs/output
+```
+
+Previous issue `cdn-10-request-coalescing` failing immediately after `cdn-09-stale-while-error` is now **verified fixed** in the full sequential suite.
+
 ## Validation environment
 
 ```text
@@ -30,18 +44,8 @@ GET http://localhost:9091/health
 # full static inspect, token redacted
 ./scripts/run-cdn-capabilities.ps1 -InspectOnly -Scenarios all
 
-# full runtime attempt, token redacted
+# full runtime, token redacted
 ./scripts/run-cdn-capabilities.ps1 -Scenarios all
-
-# targeted reruns, token redacted
-./scripts/run-cdn-capabilities.ps1 -Scenarios 10-request-coalescing
-./scripts/run-cdn-capabilities.ps1 -Scenarios 11-negative-caching
-
-# sequence diagnosis, token redacted
-./scripts/run-cdn-capabilities.ps1 -Scenarios 09-stale-while-error,10-request-coalescing
-./scripts/run-cdn-capabilities.ps1 -Scenarios 09-stale-while-error
-Start-Sleep -Seconds 10
-./scripts/run-cdn-capabilities.ps1 -Scenarios 10-request-coalescing
 ```
 
 No real token was printed or committed.
@@ -53,7 +57,7 @@ No real token was printed or committed.
 | `GET /health` public `:80` | 200 through full stack | 200 |
 | `GET /health` control `:8088` | 200 direct/control | 200 |
 | `GET /health` events `:9091` | 200 mock alive | 200 |
-| target routing | `TargetLayer=full` route contract pass | exit 0, all route contract checks passed |
+| target routing | `TargetLayer=full` route contract pass | exit 0, 37 pass, 0 fail |
 | control profile with token | 200 | covered by routing and scenario control checks |
 
 ## Static inspect
@@ -66,7 +70,7 @@ No real token was printed or committed.
 
 | Case | Script | Exit | Checks | HTTP failed | Primary observation | Result |
 | --- | --- | ---: | ---: | ---: | --- | --- |
-| 01 | `01-hit-smoke.js` | 0 | 21569/21569 | 0.00% | `MISS -> HIT`, sustained HIT | PASS |
+| 01 | `01-hit-smoke.js` | 0 | 21617/21617 | 0.00% | `MISS -> HIT`, sustained HIT | PASS |
 | 02 | `02-variant-keys.js` | 0 | 3720/3720 | 0.00% | per-variant `MISS -> HIT` isolation | PASS |
 | 03 | `03-bypass-rules.js` | 0 | 54/54 | 0.00% | auth/cookie/no-cache/write requests not `HIT` | PASS |
 | 04 | `04-query-normalization.js` | 0 | 36/36 | 0.00% | canonical `MISS -> HIT`, tracking `HIT`, business param `MISS -> HIT` | PASS |
@@ -74,34 +78,28 @@ No real token was printed or committed.
 | 06 | `06-invalidation-events.js` | 0 | 46/46 | 0.00% | product/homefeed events cause affected objects to `MISS` | PASS |
 | 07 | `07-cache-contract.js` | 0 | 22/22 | 0.00% | cache contract headers present and detail revalidation returned 304 | PASS |
 | 08 | `08-ttl-expiry.js` | 0 | 9/9 | 0.00% | homefeed `MISS -> HIT -> wait TTL -> MISS` | PASS |
-| 09 | `09-stale-while-error.js` | 0 | 15/15 | 0.00% | stale `HIT` while origin unhealthy with required headers | PASS |
-| 10 | `10-request-coalescing.js` | 99 in immediate full run; 0 isolated | 7/20 immediate; 20/20 isolated | 68.42% immediate; 0.00% isolated | immediate after case 09 batch statuses failed; isolated rerun passed with follow-up `HIT` | SEQUENCE ISSUE |
+| 09 | `09-stale-while-error.js` | 0 | 22/22 | 0.00% | stale `HIT` while origin unhealthy with required headers and recovery checks | PASS |
+| 10 | `10-request-coalescing.js` | 0 | 24/24 | 0.00% | cold burst succeeded, follow-up `HIT`, origin count proof passed | PASS |
 | 11 | `11-negative-caching.js` | 0 | 15/15 | 30.00% expected 404s | `404 MISS -> 404 HIT -> wait -> 404 MISS`, origin counts validated by script | PASS |
 
-## Case 10 sequence issue evidence
+## Case 10 sequence issue status
 
-`cdn-10-request-coalescing` is not a confirmed steady-state CDN coalescing failure because the same case passes when run alone. It is a full-suite sequencing/recovery issue after `cdn-09-stale-while-error`.
+Historical issue before BE fix:
 
-| Run shape | Result | Evidence |
-| --- | --- | --- |
-| Full `all` run, cases 01-09 then immediate case 10 | FAIL at case 10 | `checks_succeeded=7/20`, `checks_failed=13/20`, `http_req_failed=68.42%`; all 12 batch status-200 checks failed; follow-up cache state `HIT`; origin count endpoint 200 |
-| Immediate `09-stale-while-error,10-request-coalescing` sequence | FAIL at case 10 | same failure pattern: `checks_succeeded=7/20`, `http_req_failed=68.42%` |
-| Single `10-request-coalescing` rerun | PASS | `checks_succeeded=20/20`, `http_req_failed=0.00%`, batch statuses 200, follow-up `HIT`, origin counts endpoint 200 |
-| `09-stale-while-error`, wait 10s, then `10-request-coalescing` | PASS | case 09 `15/15`; case 10 `20/20`, `http_req_failed=0.00%` |
+| Run shape | Old result |
+| --- | --- |
+| Full `all` run, cases 01-09 then immediate case 10 | `cdn-10` failed with batch status failures |
+| Single `10-request-coalescing` rerun | passed |
+| `09-stale-while-error`, wait 10s, then `10-request-coalescing` | passed |
 
-Interpretation:
+Latest recheck:
 
-- Case 09 intentionally marks origin unhealthy and validates stale serving.
-- Case 09 teardown resets the origin profile, but the next case can start before Varnish/backend health has recovered from the stale test.
-- Case 10 setup also resets origin profile and counters, but immediately launches the cold coalescing batch.
-- Adding a 10s gap between case 09 and case 10 makes case 10 pass, so this looks like a recovery/health-probe race between cases, not a persistent coalescing defect.
+| Run shape | New result |
+| --- | --- |
+| Full `all` run, cases 01-09 then immediate case 10 | PASS |
+| `cdn-10-request-coalescing` in full suite | checks 24/24, `http_req_failed=0.00%` |
 
-Suggested backend/test-harness fix:
-
-- After `resetOriginProfile()` in `cdn/09-stale-while-error.js` teardown, wait until origin/CDN backend health is observed healthy before returning; or
-- make the origin reset control endpoint synchronous for CDN health recovery; or
-- add an explicit health wait in `cdn/10-request-coalescing.js` setup before the batch; or
-- make `run-cdn-capabilities.ps1` support a small inter-scenario recovery delay for stateful CDN cases.
+Conclusion: the suite sequencing/recovery race between stale serving and request coalescing is verified fixed.
 
 ## Special proof table for cases 09-11
 
@@ -110,8 +108,10 @@ Suggested backend/test-harness fix:
 | 09 | `X-Cache-Stale` | `true` | check passed | PASS |
 | 09 | `X-Cache-Backend-Healthy` | `false` | check passed | PASS |
 | 09 | origin request count during stale probe | `1` | script counter assertion passed | PASS |
-| 10 | follow-up cache state | `HIT` | check passed both in failed sequence and isolated rerun | PASS for this signal |
-| 10 | origin request count | `<= 2` | isolated script assertion passed; immediate sequence did not reach a clean status-200 batch | PASS isolated; sequence issue |
+| 09 | recovery/setup checks | healthy enough for next case | full suite proceeded to case 10 successfully | PASS |
+| 10 | batch responses | all 200 | checks passed | PASS |
+| 10 | follow-up cache state | `HIT` | check passed | PASS |
+| 10 | origin request count | `<= 2` | script counter assertion passed | PASS |
 | 11 | first response | `404 MISS` | check passed | PASS |
 | 11 | second response | `404 HIT` | check passed | PASS |
 | 11 | after expiry | `404 MISS` | check passed | PASS |
@@ -123,12 +123,12 @@ Dashboard/cloud runs were not performed in this pass. If runs are pushed later, 
 
 ## Current validation conclusion
 
-- Topology and routing are healthy.
-- Full static inspect succeeds.
-- CDN capability cases 01-09 pass in the full run before the runner stops at case 10.
-- Case 11 passes when run separately.
-- Case 10 passes when run separately, and also passes after a 10s recovery gap following case 09.
-- The only actionable issue is a **stateful suite sequencing/recovery race between case 09 and case 10**.
+- Topology health endpoints are reachable.
+- Route contract checks pass: 37 pass, 0 fail.
+- Full static inspect exits 0.
+- Full CDN runtime suite exits 0.
+- All 11 CDN capability cases pass in one sequential run.
+- Previous `cdn-09` -> `cdn-10` recovery race is verified fixed.
 
 ## Global pass/fail rule
 
