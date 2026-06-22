@@ -4,17 +4,17 @@
 > **Script:** `01-hit-smoke.js`
 > **Layer:** CDN / Varnish
 > **Executor:** `shared-iterations` | VUs=4 | duration=18s | sleep=0.025s
-> **Profile:** `guestVNMobileControl` (vì, VN, mobile, control, guest)
+> **Profile:** `guestVNMobileControl` (vi, VN, mobile, control, guest)
 > **Path:** `/api/sim/products/1` (product detail)
-> **Proof:** Product detail `MISS -> HIT`, sustained HIT under repeated reads
+> **Proof:** product detail `MISS -> HIT`, sustained HIT under repeated reads
 > **Evidence:** `X-Cache`, `X-Upstream-Service`, `X-Cache-Key-*`, `X-Cache-Hits`
 
 ## 1. tình huống thực tế
 
-### Product detail là endpoint bị request nhiêu nhất
+### product detail la endpoint bi request nhiều nhất
 
-trọng bat ky hệ thống e-commerce nao, product detail page (PDP -- trang chỉ tiết
-sản phẩm) là endpoint được truy cập nhiêu nhất boi anonymous shoppers:
+trong bat ky hệ thống e-commerce nao, product detail page (PDP -- trang chi tiết
+sản phẩm) la endpoint được truy cập nhiều nhất boi anonymous shoppers:
 
 ```text
 Customer journey thong thuong:
@@ -34,13 +34,13 @@ Customer journey thong thuong:
     - Trung binh 1 session guest xem 3-7 PDP truoc khi add-to-cart hoac thoat
 ```
 
-PDP là "mặt tiền" của hệ thống. nó chưa ảnh sản phẩm, mô tả, giả, reviews,
-variants, recommendations -- nhiêu data hon product list. Response size thương
-tử 15-50KB. với traffic 10,000 request/phút anonymous (còn số binh thương chỗ
-1 site vua-phải), origin sẽ phải phục vụ 10,000 lần tạo response tử database
-**nếu không cổ CDN cache**.
+PDP la "mat tien" cua hệ thống. no chứa ảnh sản phẩm, mô tả, gia, reviews,
+variants, recommendations -- nhiều data hon product list. response size thường
+tu 15-50KB. voi traffic 10,000 request/phut anonymous (con số bình thường cho
+1 site vua-phải), origin se phải phục vụ 10,000 lan tạo response từ database
+**nếu không có CDN cache**.
 
-### lời hứa cơ bản nhất của CDN: MISS -> HIT
+### lời hứa cơ bản nhất cua CDN: MISS -> HIT
 
 ```text
 CDN hua 2 dieu ve cache:
@@ -59,11 +59,11 @@ Day la loi hua don gian nhat -- nhung cung la quan trong nhat.
 Neu MISS->HIT khong dung, EVERYTHING ELSE ve CDN deu khong dang tin cay.
 ```
 
-đầy là **atomic contract** của CDN. thụ nó bảng mot smoke test: request cũng
-URL cũng headers 2 lần lien tiếp. lần 1 phải MISS. lần 2 phải HIT. nếu không,
-cài gì đó sai o VCL, sai o origin response headers, hoac sai o CDN runtime.
+day la **atomic contract** cua CDN. thử nó bằng mot smoke test: request cung
+URL cung headers 2 lan lien tiep. lần 1 phải MISS. lần 2 phải HIT. neu không,
+cai gi do sai o VCL, sai o origin response headers, hoac sai o CDN runtime.
 
-### Anonymous traffic trên PDP là use case ly tương chỗ smoke test
+### Anonymous traffic trên PDP là use case lý tưởng cho smoke test
 
 ```text
 Tai sao anonymous PDP, khong phai authenticated hay write?
@@ -89,7 +89,7 @@ Tai sao anonymous PDP, khong phai authenticated hay write?
     -> Perfect candidate cho CDN cache
 ```
 
-### Hậu quả nếu MISS->HIT không dụng
+### hậu quả nếu MISS->HIT không đúng
 
 ```text
 Scenario: Campaign launch, 500,000 anonymous users browse PDP
@@ -121,11 +121,11 @@ Scenario: Campaign launch, 500,000 anonymous users browse PDP
     - Chi phi compute/DB spike 500x trong 10 phut
 ```
 
-việc kiểm tra MISS->HIT không phải là "nice to have". đầy là **điều kiện cận**
-đề CDN thực hiện vài trò offload origin. không cổ nó, CDN chỉ là mot reverse
-proxy vô ích -- mới request deu di qua những không request nao được cache.
+viec kiểm tra MISS->HIT không phải la "nice to have". day la **điều kiện cần**
+de CDN thực hiện vai trò offload origin. không co no, CDN chi la mot reverse
+proxy vo ich -- mọi request đều đi qua nhưng không request nào được cache.
 
-### kết nối tối business metrics cụ thể
+### kết nối tới business metrics cụ thể
 
 ```text
 MISS->HIT transition co the duoc anh xa truc tiep toi cac chi so kinh doanh:
@@ -163,7 +163,7 @@ MISS->HIT transition co the duoc anh xa truc tiep toi cac chi so kinh doanh:
     - Cache fill tu MISS la prerequisite cho stale serving sau nay
 ```
 
-### vì sao anonymous PDP được chọn làm endpoint dấu tiên đề test
+### vi sao anonymous PDP được chọn làm endpoint đầu tiên de test
 
 ```text
 Trong so tat ca cac endpoint anonymous, product detail duoc chon lam
@@ -195,7 +195,7 @@ smoke test endpoint vi:
 
 ## 2. CDN capability being proven
 
-### MISS->HIT transition: nền tảng của mới CDN case khac
+### MISS->HIT transition: nền tảng của mọi CDN case khác
 
 ```text
   cdn-01-hit-smoke proves:
@@ -217,9 +217,9 @@ smoke test endpoint vi:
   Neu case 01 khong pass, **khong case nao khac dang tin cay**.
 ```
 
-### "HIT" nghỉa là gì trọng Varnish?
+### "HIT" nghĩa là gì trong Varnish?
 
-trọng Varnish (và hậu hết CDN), HIT/MISS được quyết định tại `vcl_deliver`:
+trong Varnish (va hầu hết CDN), HIT/MISS được quyết định tai `vcl_deliver`:
 
 ```vcl
 # default.vcl, sub vcl_deliver
@@ -235,12 +235,12 @@ sub vcl_deliver {
 ```
 
 `obj.hits` la Varnish internal counter cho biet object nay da duoc deliver bao
-nhiêu lần kẻ tử khi được fetch tử backend. `0` = lần dấu tiên, Varnish vua fetch
-tử origin. `>= 1` = đã từng được deliver ít nhất 1 lần trước đó.
+nhiều lan ke tu khi được fetch tu backend. `0` = lan dau tien, Varnish vua fetch
+tu origin. `>= 1` = da tung được deliver ít nhất 1 lan truoc do.
 
-điều quan trọng: **HIT không chỉ là "object tốn tại trọng cache"**. nó là "object
-tốn tại trọng cache và được deliver ít nhất 1 lần". Mot object cổ thể tốn tại
-trọng cache những đã expired (TTL < 0). khi đó `vcl_hit` chạy và cổ thể tra ve
+dieu quan trong: **HIT không chi la "object ton tai trong cache"**. no la "object
+ton tai trong cache va được deliver ít nhất 1 lan". Mot object có thể ton tai
+trong cache những da expired (TTL < 0). khi do `vcl_hit` chay va có thể tra ve
 `pass` (neu backend healthy) hoac deliver voi `X-Cache-Stale=true` (neu backend
 unhealthy + grace > 0).
 
@@ -261,7 +261,7 @@ khong "boc khoi". Trong CDN context:
   bypass, invalidation, TTL, ...).
 ```
 
-### Object lifecycle trọng Varnish: tử birth đến death
+### Object lifecycle trong Varnish: tu birth den death
 
 ```text
 Lifecycle cua mot cache object trong Varnish (product detail TTL=90s):
@@ -349,7 +349,7 @@ Lifecycle cua mot cache object trong Varnish (product detail TTL=90s):
   safety margin and zero risk of TTL expiry during test.
 ```
 
-### Varnish bản vs purge mechanism (technical nuance)
+### Varnish ban vs purge mechanism (technical nuance)
 
 ```text
 Case 01 uses ban-url (via control path). But the actual Varnish mechanism
@@ -393,9 +393,9 @@ difference is important for interpreting test results:
     - For our 18s test: both mechanisms are safe, MISS is guaranteed
 ```
 
-## 3. vì sao test o CDN layer
+## 3. vì sao test ở CDN layer
 
-### Testing o app layer vs CDN layer: hai thể giới khac nhau
+### Testing o app layer vs CDN layer: hai thế giới khác nhau
 
 ```text
 APP-LAYER TEST (direct to backend, bo qua CDN):
@@ -432,7 +432,7 @@ CDN-LAYER TEST (qua public edge path):
     - Origin offload proof qua request counters
 ```
 
-### Contract của cache năm o VCL + response headers, không phải application code
+### Contract cua cache nam o VCL + response headers, không phải application code
 
 ```text
 Application code KHONG BIET CDN ton tai:
@@ -475,7 +475,7 @@ Application code KHONG BIET CDN ton tai:
     - Them Vary: X-Device-Class -> VCL da lam viec nay, khong can them
 ```
 
-### tại sao ca 2 layer deu cận test
+### tại sao cả 2 layer đều cần test
 
 ```text
   App-layer test:
@@ -528,7 +528,7 @@ Application code KHONG BIET CDN ton tai:
                      invalidation tests like case 06)
 ```
 
-### vì sao cận bản-url như precondition
+### vì sao cần ban-url nhu precondition
 
 ```text
 Neu khong ban-url truoc khi test:
@@ -594,7 +594,7 @@ App validates token -> if valid, sends BAN request to Varnish:
   Neu token sai -> ban-url tra 401 -> setup fail -> cannot prove cold start
 ```
 
-### nếu không chạy bản-url thành cong (precondition fail)
+### nếu không chạy ban-url thành công (precondition fail)
 
 ```text
 Hau qua:
@@ -617,7 +617,7 @@ Khac phuc:
 
 ## 5. Script deep-dive
 
-### tổng quan script (63 đóng)
+### tổng quan script (63 dong)
 
 ```javascript
 // 01-hit-smoke.js -- structure
@@ -645,7 +645,7 @@ export function setup() { ... }
 export default function (data) { ... }
 ```
 
-### Phase chỉ tiết: `setup()` -- cold-start proof
+### phase chi tiết: `setup()` -- cold-start proof
 
 ```javascript
 export function setup() {
@@ -715,7 +715,7 @@ export function setup() {
 }
 ```
 
-### Phase chỉ tiết: `default()` -- sustained HIT verification
+### phase chi tiết: `default()` -- sustained HIT verification
 
 ```javascript
 export default function (data) {
@@ -749,7 +749,7 @@ export default function (data) {
 }
 ```
 
-### vụ model: shared-iterations, 4 VUs, 18s, sleep 0.025s
+### vu model: shared-iterations, 4 VUs, 18s, sleep 0.025s
 
 ```text
 shared-iterations la executor mac dinh cua k6 khi chi dinh `vus` + `duration`
@@ -806,7 +806,7 @@ Total checks trong script:
   Neu chi 1 check fail -> threshold checks['rate==1'] bi vi pham -> k6 exit 1
 ```
 
-### vì sao shared-iterations, không phải executor khac?
+### vi sao shared-iterations, không phải executor khac?
 
 ```text
 Case 01 dung shared-iterations (vus=4, duration=18s) -- executor mac dinh
@@ -900,9 +900,9 @@ sua script:
     $env:HIT_SMOKE_SLEEP_SECONDS = "0.005"
 ```
 
-## 6. Cache key model
+## 6. cache key model
 
-### cách Varnish xay dụng cache key chỗ product detail
+### cách Varnish xây dựng cache key cho product detail
 
 ```text
 Cache key la "danh tinh" cua mot object trong Varnish cache.
@@ -1066,9 +1066,9 @@ Neu origin gui X-Geo-Country="AU" -> normalize -> "VN" (fallback)
   -> Can xac nhan voi business requirement
 ```
 
-## 7. request sequence flow
+## 7. Request sequence flow
 
-### đầy đủ trace: tử bản-url đến sustained HIT
+### đầy đủ trace: từ ban-url đến sustained HIT
 
 ```text
 ═══════════════════════════════════════════════════════════════════
@@ -1299,7 +1299,7 @@ End state:
 
 ## 8. Key signals/headers
 
-### bảng tổng quan headers trọng response
+### bảng tổng quan headers trong response
 
 ```text
 HEADER                   | SOURCE      | Y NGHIA
@@ -1344,7 +1344,7 @@ X-Served-By              | Varnish     | Xac nhan response di qua Varnish
                          |             | Neu absent -> request bypassed Varnish
 ```
 
-### mới header proves điều gì
+### mỗi header proves điều gì
 
 ```text
 X-Cache: MISS -> HIT sequence:
@@ -1509,7 +1509,7 @@ X-Cache sequence chung minh "CDN dang cache dung cach".
 Ca 2 cung can. Thieu 1 trong 2, test FAIL.
 ```
 
-## 10. cách chạy + output độc
+## 10. cách chạy + output doc
 
 ### điều kiện tiên quyết
 
@@ -1663,7 +1663,7 @@ FAILING OUTPUT (http_req_failed > 0):
         Check: network connectivity between k6 and localhost:80.
 ```
 
-### Output điện hình khi chạy CI
+### output điển hình khi chạy CI
 
 ```text
 Trong CI pipeline, output se duoc capture va parsed. Key patterns:
@@ -1832,7 +1832,7 @@ URGENCY: MEDIUM. Cache IS eventually working (third request HIT).
          But reliability is compromised if TTL is too short.
 ```
 
-### Scenario D: bản-url setup fails
+### Scenario D: ban-url setup fails
 
 ```text
 OUTPUT SIGNATURE:
@@ -1890,7 +1890,7 @@ URGENCY: BLOCKER. Setup precondition must work for reliable test results.
 
 ## 12. Nghich ly / misconceptions
 
-### Nghich ly 1: "200 OK nghỉa là CDN hoạt động"
+### Nghich ly 1: "200 OK nghia la CDN hoạt động"
 
 ```text
 FALSE. Day la misconception pho bien nhat.
@@ -1911,7 +1911,7 @@ FALSE. Day la misconception pho bien nhat.
   Mot 200 OK khong co X-Cache header la INCOMPLETE evidence.
 ```
 
-### Nghich ly 2: "HIT nghỉa là object sẽ luôn được cache"
+### Nghich ly 2: "HIT nghia la object se luon được cache"
 
 ```text
 FALSE. HIT cho request HOM NAY khong dam bao gi ca cho request MAI SAU.
@@ -1935,7 +1935,7 @@ FALSE. HIT cho request HOM NAY khong dam bao gi ca cho request MAI SAU.
   HIT chi la snapshot in time, khong phai eternal guarantee.
 ```
 
-### Nghich ly 3: "bản-url xong là cache sach"
+### Nghich ly 3: "ban-url xong la cache sach"
 
 ```text
 FALSE -- hoac it nhat la khong chinh xac ve mat ky thuat.
@@ -1963,7 +1963,7 @@ FALSE -- hoac it nhat la khong chinh xac ve mat ky thuat.
   Khong lam nhiem cac object khac hoac variant khac.
 ```
 
-### Nghich ly 4: "cache key chỉ là URL"
+### Nghich ly 4: "cache key chi la URL"
 
 ```text
 FALSE. Cache key = URL + HOST + 5 VARIANT DIMENSIONS.
@@ -1986,7 +1986,7 @@ FALSE. Cache key = URL + HOST + 5 VARIANT DIMENSIONS.
   Thieu variant -> leakage. Thua variant -> fragmentation.
 ```
 
-### Nghich ly 5: "Sleep trọng test là vô dụng"
+### Nghich ly 5: "Sleep trong test la vo dung"
 
 ```text
 FALSE. sleep(0.025) trong default() co vai tro cu the:
@@ -2064,7 +2064,7 @@ FALSE. sleep(0.025) trong default() co vai tro cu the:
 [ ] Result recorded in test report / CI dashboard
 ```
 
-## 14. 4-5 variations với code
+## 14. 4-5 variations voi code
 
 ### Variation 1: Different endpoint (products list instead of detail)
 
@@ -2202,7 +2202,7 @@ export default function (data) {
 // US desktop cache object is SEPARATE from VN mobile object.
 ```
 
-### Variation 3: nó precondition (test with potentially warm cache)
+### Variation 3: no precondition (test with potentially warm cache)
 
 ```javascript
 // File: 01-hit-smoke-no-precondition.js
@@ -2405,7 +2405,7 @@ export default function (data) {
 
 ## 15. Anti-patterns
 
-### Anti-pattern 1: Testing without bản-url precondition
+### Anti-pattern 1: Testing without ban-url precondition
 
 ```text
 PROBLEM:
@@ -2576,7 +2576,7 @@ Ket qua validation:
 
 ## 17. Reference
 
-### Cross-references trọng CDN series
+### Cross-references trong CDN series
 
 ```text
   Case nay la FOUNDATION:

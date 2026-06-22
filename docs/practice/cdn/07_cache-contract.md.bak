@@ -9,12 +9,12 @@
 
 ---
 
-## 1. Tình huống thực tế
+## 1. Tinh huong thuc te
 
-### Response headers la Hợp đồng giữa origin va CDN
+### Response headers la HOP DONG giua origin va CDN
 
-Moi response cacheable ma origin trả về khong chi chua body (JSON, HTML, binary) --
-no con chua mot **Hợp đồng** (contract) nam trong cac response header. Hợp đồng này
+Moi response cacheable ma origin tra ve khong chi chua body (JSON, HTML, binary) --
+no con chua mot **HOP DONG** (contract) nam trong cac response header. Hop dong nay
 la loi hua tu origin den CDN (Varnish), noi rang:
 
 ```text
@@ -27,13 +27,13 @@ Origin noi voi CDN:
    Khi anh bao em xoa object, em dung Surrogate-Key nay de tim."
 ```
 
-Neu **BAT KY** header nao trong hợp đồng này bị thiếu hoac sai, CDN se:
-- **Cache quá hùng hăng** (quá aggressive): serve stale data cho user, user thay
-  sai sản phẩm, sai gia, sai ngôn ngữ.
-- **Hoac không cache gi ca**: moi request deu phai ve origin, origin quá tải,
+Neu **BAT KY** header nao trong hop dong nay bi thieu hoac sai, CDN se:
+- **Cache qua hung hang** (qua aggressive): serve stale data cho user, user thay
+  sai san pham, sai gia, sai ngon ngu.
+- **Hoac khong cache gi ca**: moi request deu phai ve origin, origin qua tai,
   CDN thanh "ong dan trong suot" vo dung.
 
-### Nhung header nao lap thanh hợp đồng?
+### Nhung header nao lap thanh hop dong?
 
 ```text
 BOX: 6 HEADER THANH PHAN CUA CACHE CONTRACT
@@ -89,9 +89,9 @@ BOX: 6 HEADER THANH PHAN CUA CACHE CONTRACT
    HIT/MISS, TTL expiry, stale serving, invalidation, coalescing.
 ```
 
-### Tai sao contract headers de bị thiếu hoac sai?
+### Tai sao contract headers de bi thieu hoac sai?
 
-Trong thực tế, cac hệ thống backend thuong mac phai nhung sai song sau:
+Trong thuc te, cac he thong backend thuong mac phai nhung sai song sau:
 
 ```text
 Loi 1: Thieu Cache-Control tren response cacheable
@@ -127,7 +127,7 @@ Loi 7: Vary khai bao sai header
   -> Hit ratio giam tham hai vi phan manh cache
 ```
 
-### Hiện trường thực tế
+### Hien truong thuc te
 
 ```text
 Tinh huong: 17:55 chieu thu 6 -- khach san sang mua sim cuoi tuan
@@ -167,17 +167,17 @@ Tinh huong: 17:55 chieu thu 6 -- khach san sang mua sim cuoi tuan
  khong?"
 ```
 
-Day không phải la "API co tra 200 khong". Day la cau hoi **contract**: origin
-da dua ra mot tap hop loi hua qua header; CDN co du thông tin de thực hiện
+Day khong phai la "API co tra 200 khong". Day la cau hoi **contract**: origin
+da dua ra mot tap hop loi hua qua header; CDN co du thong tin de thuc hien
 dung cong viec cua no khong?
 
 ---
 
-## 2. CDN capability được chứng minh
+## 2. CDN capability duoc chung minh
 
-Case nay chứng minh **5 capabilities** cua CDN layer lien quan den cache contract:
+Case nay chung minh **5 capabilities** cua CDN layer lien quan den cache contract:
 
-### (a) Cache-Control va CDN-Cache-Control hiện diện va dung
+### (a) Cache-Control va CDN-Cache-Control hien dien va dung
 
 ```text
 Origin phai emit Cache-Control voi it nhat:
@@ -194,7 +194,7 @@ Neu CDN-Cache-Control co mat, Varnish su dung no (ghi de Cache-Control).
 Neu khong co, Varnish fallback ve Cache-Control.
 ```
 
-### (b) ETag hiện diện tren response cacheable
+### (b) ETag hien dien tren response cacheable
 
 ```text
 ETag la "dau van tay" cua object. Origin tao ETag tu noi dung (hash),
@@ -215,7 +215,7 @@ Vi du: Vary: Accept-Language, X-Geo-Country
   -> Khong bi leakage giua cac variant
 ```
 
-### (d) Surrogate-Key hiện diện de invalidation theo nhom
+### (d) Surrogate-Key hien dien de invalidation theo nhom
 
 ```text
 Surrogate-Key chua space-separated tags. Varnish dung tags nay de:
@@ -224,7 +224,7 @@ Surrogate-Key chua space-separated tags. Varnish dung tags nay de:
     phai liet ke tung URL variant (product-1?lang=vi&geo=VN, ...)
 ```
 
-### (e) 304 Not Modified hoạt động khi ETag khop
+### (e) 304 Not Modified hoat dong khi ETag khop
 
 ```text
 Khi CDN co object da het han (expired) nhung con ETag:
@@ -243,7 +243,7 @@ Day la CHE DO TIET KIEM BANG THONG:
 
 ## 3. Vi sao test o CDN layer
 
-### Headers nay được set bởi origin nhung CONSUMED boi CDN
+### Headers nay duoc SET boi origin nhung CONSUMED boi CDN
 
 ```text
 DAY LA DIEM MAU CHOT:
@@ -287,7 +287,7 @@ Test qua Varnish (:80) xac nhan DUOC:
      (chung to CDN da su dung Surrogate-Key de tim object)
 ```
 
-### 304 revalidation flow -- tai sao Phải test o CDN layer?
+### 304 revalidation flow -- tai sao PHAI test o CDN layer?
 
 ```text
 304 revalidation la flow MA CHI CDN LAYER MOI CO THE KIEM TRA DUOC:
@@ -311,7 +311,7 @@ Test qua Varnish (:80) xac nhan DUOC:
         Client test truc tiep origin KHONG BAO GIO thay 304
 ```
 
-### Hanh vi Varnish cụ thể voi từng header
+### Hanh vi Varnish cu the voi tung header
 
 ```text
 Cache-Control: public, s-maxage=60, stale-while-revalidate=30, stale-if-error=120
@@ -390,7 +390,7 @@ EVENT PATH: khong su dung trong case nay
 5. Khong co cache warming truoc -- test tu tao MISS va 304
 ```
 
-### Tai sao precondition quan trọng?
+### Tai sao precondition quan trong?
 
 ```text
 Neu public request di thang Nginx (khong qua Varnish):
@@ -410,8 +410,8 @@ Neu origin khong healthy:
 
 ### Tong quan script
 
-Script `07-cache-contract.js` la execution don (1 VU, 1 iteration) thực hiện
-3 nhom kiểm tra:
+Script `07-cache-contract.js` la execution don (1 VU, 1 iteration) thuc hien
+3 nhom kiem tra:
 
 ```text
 PHASE 1: PRODUCT DETAIL CONTRACT (headers co ban)
@@ -450,9 +450,9 @@ export const options = {
 };
 ```
 
-**Giải thích config**:
-- `vus: 1, iterations: 1`: Day la functional validation, không phải load test.
-  Chi can 1 lan goi de xác nhận contract.
+**Giai thich config**:
+- `vus: 1, iterations: 1`: Day la functional validation, khong phai load test.
+  Chi can 1 lan goi de xac nhan contract.
 - `checks: ['rate==1']`: Threshold cung -- moi check deu phai pass.
   Chi 1 check fail la test FAIL.
 
@@ -492,7 +492,7 @@ assertHeaderContains(detail, 'Surrogate-Key', 'product-1', 'detail contract');
 assertHeaderPresent(detail, 'Vary', 'detail contract');
 ```
 
-**Phân tích từng assertion**:
+**Phan tich tung assertion**:
 
 ```text
 Cache-Control: public, s-maxage=...
@@ -539,7 +539,7 @@ const revalidated = requestCdn('GET', paths.productDetail, {
 assertStatus(revalidated, 304, 'detail revalidation');
 ```
 
-**Phân tích**:
+**Phan tich**:
 
 ```text
 1. Lay ETag tu response dau tien: detailETag = getHeader(detail, 'ETag')
@@ -588,7 +588,7 @@ if (!categoriesBody.success) {
 }
 ```
 
-**Phân tích**:
+**Phan tich**:
 
 ```text
 HOMEFEED:
@@ -611,9 +611,9 @@ CATEGORIES:
 
 ## 6. Cache contract headers deep-dive
 
-Day la phan **Quan trọng nhất** cua case nay. Moi header la mot điều khoản
-trong hợp đồng giữa origin va CDN. Hiểu sai mot header -> triển khai SAI
-toàn bộ cache strategy.
+Day la phan **QUAN TRONG NHAT** cua case nay. Moi header la mot dieu khoan
+trong hop dong giua origin va CDN. Hieu SAI mot header -> trien khai SAI
+toan bo cache strategy.
 
 ### 6.1 Cache-Control
 
@@ -629,7 +629,7 @@ Ai consume:      Browser, CDN (Varnish), intermediate proxies
 ================================================================
 ```
 
-**Cac directive quan trọng cho CDN**:
+**Cac directive quan trong cho CDN**:
 
 ```text
 +------------------+--------------------------------------------------+
@@ -678,7 +678,7 @@ Ai consume:      Browser, CDN (Varnish), intermediate proxies
 +------------------+--------------------------------------------------+
 ```
 
-**Cach Varnish xử lý cache-Control**:
+**Cach Varnish xu ly Cache-Control**:
 
 ```text
 1. Varnish parse Cache-Control header.
@@ -761,7 +761,7 @@ Tinh huong: Origin muon:
 +------------------+--------------------------------------------------+
 ```
 
-**Cach Varnish xử lý CDN-Cache-Control**:
+**Cach Varnish xu ly CDN-Cache-Control**:
 
 ```text
 Varnish (voi built-in VCL hoac custom VCL) xu ly nhu sau:
@@ -837,7 +837,7 @@ Lan 2c (TTL het, object thay doi): Client -> CDN -> Origin
   CDN: Cache body moi + ETag moi, serve body moi
 ```
 
-**Cach origin tao ETag đúng cách**:
+**Cach origin tao ETag dung cach**:
 
 ```text
 GOOD: ETag = hash(noi dung response body)
@@ -885,7 +885,7 @@ Co Vary: Accept-Language:
   -> Moi variant co cache object rieng -> khong leakage!
 ```
 
-**Cach CDN sử dụng Vary**:
+**Cach CDN su dung Vary**:
 
 ```text
 1. CDN doc Vary header tu origin response.
@@ -937,7 +937,7 @@ Ai consume:      CDN (Varnish) -- ban-tag operation
 ================================================================
 ```
 
-**Surrogate-Key khác gì voi purge/ban URL?**
+**Surrogate-Key khac gi voi purge/ban URL?**
 
 ```text
 Purge URL: xoa CHINH XAC 1 object theo URL
@@ -959,7 +959,7 @@ Ban tag (Surrogate-Key): xoa tat ca object co tag
   -> CHINH XAC, AN TOAN, NHANH
 ```
 
-**Cach Varnish xử lý Surrogate-Key**:
+**Cach Varnish xu ly Surrogate-Key**:
 
 ```text
 1. Origin emit Surrogate-Key: product-1 catalog-homefeed segment-guest
@@ -979,7 +979,7 @@ Ban tag (Surrogate-Key): xoa tat ca object co tag
 Day la co che INVALIDATION MANH ME NHAT cua Varnish.
 ```
 
-**Thiết kế Surrogate-Key cho cac endpoint**:
+**Thiet ke Surrogate-Key cho cac endpoint**:
 
 ```text
 Product detail:
@@ -1035,14 +1035,14 @@ Ai consume:      CDN, Browser (If-Modified-Since)
 +------------------+-----------------------------------+-----------------------------------+
 ```
 
-**Trong Varnish**: Varnish ưu tiên ETag cho revalidation. Nếu không có ETag,
-Varnish sử dụng Last-Modified voi If-Modified-Since.
+**Trong Varnish**: Varnish uu tien ETag cho revalidation. Neu khong co ETag,
+Varnish su dung Last-Modified voi If-Modified-Since.
 
 ---
 
 ## 7. 304 Revalidation deep-dive
 
-### Tai sao 304 la "che do tiết kiệm băng thông"?
+### Tai sao 304 la "che do tiet kiem bang thong"?
 
 ```text
 So sanh 2 scenario:
@@ -1061,7 +1061,7 @@ SCENARIO B: CO revalidation (co ETag)
 => TIET KIEM 95% bang thong giua origin va CDN
 ```
 
-### Full 304 flow (từng bước)
+### Full 304 flow (tung buoc)
 
 ```text
 BUOC 0: TRANG THAI BAN DAU
@@ -1152,7 +1152,7 @@ const revalidated = requestCdn('GET', paths.productDetail, {
 assertStatus(revalidated, 304, 'detail revalidation');
 ```
 
-**Giải thích 2 header trong request 2**:
+**Giai thich 2 header trong request 2**:
 
 ```text
 (1) Cache-Control: no-cache
@@ -1196,7 +1196,7 @@ Truong hop 5: Object da bi xoa khoi CDN cache
   -> Neu object bi evict (LRU) truoc khi TTL het -> mat co hoi 304
 ```
 
-### 304 trong CDN khác gì 304 trong browser?
+### 304 trong CDN khac gi 304 trong browser?
 
 ```text
 Browser nhan 304:
@@ -1428,7 +1428,7 @@ $env:OPS_AUTH_TOKEN = "<ops-token>"
 ./scripts/run-cdn-capabilities.ps1 -Scenarios 07-cache-contract
 ```
 
-Hoac chay trực tiếp bang k6:
+Hoac chay truc tiep bang k6:
 
 ```powershell
 k6 run `
@@ -1532,7 +1532,7 @@ default ✓ [======================================] 1 VUs  00m14.0s/10m0s  1/1 
 
 ## 11. 4 output-to-decision scenarios
 
-### Scenario 1: MISSING Cache-Control -- CDN không cache
+### Scenario 1: MISSING Cache-Control -- CDN khong cache
 
 ```text
 OUTPUT:
@@ -1640,7 +1640,7 @@ DEBUG:
      -> Kiem tra CDN: co forward If-None-Match tu client?
 ```
 
-### Scenario 4: Surrogate-Key MISSING -- không thể ban-tag
+### Scenario 4: Surrogate-Key MISSING -- khong the ban-tag
 
 ```text
 OUTPUT:
@@ -1679,7 +1679,7 @@ FIX:
 
 ## 12. Nghich ly / misconceptions
 
-### Misconception 1: "304 nghĩa là loi"
+### Misconception 1: "304 nghia la loi"
 
 ```text
 NHIEU NGUOI HIEN LAM: 304 la status error.
@@ -1702,7 +1702,7 @@ NEU TEST TRA VE 304 KHI MONG DOI 304 -> PASS.
 304 khong bao gio la "loi". No la "toi uu hoa".
 ```
 
-### Misconception 2: "Cache-Control la du, không cần CDN-Cache-Control"
+### Misconception 2: "Cache-Control la du, khong can CDN-Cache-Control"
 
 ```text
 NHIEU NGUOI NGHI: "Cache-Control da co s-maxage roi,
@@ -1733,7 +1733,7 @@ THUC TE: CDN-Cache-Control co vai tro KHAC BIET:
    No la MOT PHAN CUA CONTRACT HOAN CHINH.
 ```
 
-### Misconception 3: "ETag thay đổi mỗi request la binh thuong"
+### Misconception 3: "ETag thay doi moi request la binh thuong"
 
 ```text
 NHIEU NGUOI NGHI: "ETag la random string, moi request khac la OK."
@@ -1758,7 +1758,7 @@ Neu khong the hash body (performance):
   -> Khi content update -> version thay doi -> ETag khac
 ```
 
-### Misconception 4: "Vary la khong quan trọng, khong cần kiểm tra"
+### Misconception 4: "Vary la khong quan trong, khong can kiem tra"
 
 ```text
 NHIEU NGUOI NGHI: "Vary chi la metadata, khong anh huong den logic."
@@ -1827,7 +1827,7 @@ Ngoai ra:
 [ ] Khong co cache warming truoc (cache sach hoac cold)
 ```
 
-### Kiểm tra headers
+### Kiem tra headers
 
 ```text
 PRODUCT DETAIL:
@@ -1860,7 +1860,7 @@ CATEGORIES:
 [ ] Body parse duoc JSON, success=true
 ```
 
-### Kiểm tra 304 revalidation
+### Kiem tra 304 revalidation
 
 ```text
 [ ] Response 1 (200) co ETag
@@ -2205,7 +2205,7 @@ Fix:
   Whitelist Cache-Control, CDN-Cache-Control, ETag, Surrogate-Key, Vary.
 ```
 
-### Anti-pattern 6: ETag thay đổi theo instance
+### Anti-pattern 6: ETag thay doi theo instance
 
 ```text
 Sai:

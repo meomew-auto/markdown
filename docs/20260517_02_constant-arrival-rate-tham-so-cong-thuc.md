@@ -1358,12 +1358,48 @@ Các case có thể xảy ra:
 Ví dụ timeline với `preAllocatedVUs: 1`, `maxVUs: 4`:
 
 ```text
-t=0.00s  VU #1 rảnh      -> start iteration
-t=0.25s  VU #1 vẫn bận   -> drop mốc này, k6 bắt đầu tạo VU #2 ở background
-t=0.50s  VU #2 chưa xong -> drop tiếp, không chắc gửi thêm request tạo VU mới vì đang init
-t=0.60s  VU #2 init xong -> vào pool
-t=0.75s  có VU rảnh      -> mốc này mới có thể chạy
+t=0.00s  VU #1 rảnh (đã có trong activeVUPool) → start iteration, bận đến ~t=0.25+
+t=0.25s  VU #1 vẫn bận → drop mốc này
+         → k6 gửi tín hiệu tạo unplanned VU #2 ở background
+t=0.50s  VU #1 vẫn bận, VU #2 đang init (chưa vào pool)
+         → drop tiếp mốc này
+         → không gửi thêm tín hiệu tạo VU mới vì đã có 1 VU đang init
+t=0.60s  VU #2 init xong → activate → đưa vào activeVUPool
+         → LÚC NÀY VU #2 mới có thể nhận slot
+t=0.75s  VU #1 rảnh (hoặc VU #2 rảnh) → có VU trong pool rảnh → start iteration
+         → mốc này mới có thể chạy
 ```
+
+Giải thích thêm bước "vào pool":
+
+```text
+VU dù đã được tạo (init xong) nhưng chưa vào activeVUPool thì
+TryRunIteration() vẫn không thấy nó → không giao việc được.
+
+Chuỗi đầy đủ để 1 unplanned VU có thể nhận slot:
+  1. core gửi tín hiệu qua makeUnplannedVUCh
+  2. background goroutine nhận tín hiệu → bắt đầu init VU
+  3. init xong → activate VU (khởi động event loop)
+  4. đưa VU đã activate vào activeVUPool
+  5. từ lúc này, TryRunIteration() mới thấy VU và giao slot cho nó
+
+→ "vào pool" không phải là bước tách rời khỏi init — nó là bước cuối
+  của chuỗi tạo unplanned VU. Nhưng cho đến khi bước này hoàn thành,
+  VU đó "vô hình" với scheduler.
+```
+
+Vì vậy nhìn lại timeline trên:
+
+```text
+t=0.25: drop → bắt đầu tạo VU #2
+t=0.50: drop → VU #2 đang init, chưa vào pool, chưa giúp được gì
+t=0.60: VU #2 vào pool → từ đây mới có 2 VU trong pool
+t=0.75: slot đầu tiên được hưởng lợi từ VU #2
+```
+
+Khoảng trễ từ lúc drop (t=0.25) đến lúc VU mới giúp được (t=0.60-0.75)
+là lý do không nên dựa vào unplanned VU để giữ target rate đều đẹp —
+mỗi unplanned VU cần thời gian "khởi động" trước khi vào pool làm việc.
 
 ── Phân tích chi tiết: 3 tình huống sizing ──
 
@@ -1378,14 +1414,94 @@ Với M = preAllocatedVUs (ban đầu) hoặc lên đến maxVUs (sau khi tạo 
 Với W_effective = thời gian 1 VU bận cho 1 iteration
 ```
 
-Như đã chứng minh ở mục 3.3:
+Như đã chứng minh ở mục 3.3, nhưng giờ tách rõ HAI LOẠI capacity:
 
 ```text
 capacity_initial = preAllocatedVUs / W_effective    → khả năng xử lý lúc mới chạy
 capacity_max     = maxVUs / W_effective              → khả năng xử lý tối đa có thể đạt
 ```
 
-Nếu `capacity_initial < lambda` thì giây đầu có drop. Nếu `capacity_max < lambda` thì drop kéo dài suốt run.
+**Phân biệt kỹ hai loại capacity này:**
+
+Hãy tưởng tượng pool VU như một đội nhân viên:
+
+```text
+capacity_initial = sức mạnh của đội LÚC MỚI MỞ CỬA
+                 = số nhân viên có mặt sẵn (preAllocatedVUs) ÷ thời gian 1 việc (W)
+
+capacity_max     = sức mạnh của đội KHI ĐÃ HUY ĐỘNG HẾT
+                 = số nhân viên tối đa có thể có (maxVUs) ÷ thời gian 1 việc (W)
+```
+
+Ví dụ con số để thấy sự khác biệt:
+
+```text
+Config:
+  preAllocatedVUs = 3   (3 nhân viên có mặt từ đầu)
+  maxVUs          = 10  (có thể gọi thêm tối đa 7 người nữa)
+  W_effective     = 0.5s (mỗi việc 1 người làm mất 0.5 giây)
+
+Tính:
+  capacity_initial = 3 / 0.5 = 6 iterations/s
+  capacity_max     = 10 / 0.5 = 20 iterations/s
+
+  → Lúc mới mở cửa: xử lý được tối đa 6 slot/s
+  → Khi đã huy động hết: xử lý được tối đa 20 slot/s
+  → Khoảng cách giữa hai capacity: 20 - 6 = 14 slot/s
+    (đây là phần năng lực "tiềm ẩn" chỉ có được sau khi unplanned VU vào pool)
+```
+
+Hai capacity này trả lời hai câu hỏi khác nhau:
+
+```text
+Câu hỏi 1: "Giây đầu tiên có bị drop không?"
+  → So capacity_initial với lambda
+  → Nếu capacity_initial < lambda: giây đầu CÓ drop
+  → Vì lúc này pool mới chỉ có preAllocatedVUs VU sẵn, chưa kịp tạo thêm
+
+Câu hỏi 2: "Về lâu dài, drop có tự hết không?"
+  → So capacity_max với lambda
+  → Nếu capacity_max ≥ lambda: drop CHỈ tạm thời ở đầu, sẽ hết khi đủ VU
+  → Nếu capacity_max < lambda: drop LIÊN TỤC suốt run, không thể cứu
+```
+
+Minh họa bằng 3 tổ hợp thường gặp:
+
+```text
+Giả sử lambda = 10/s, W = 1s trong mọi case:
+
+CASE A: preAllocatedVUs=12, maxVUs=12
+  capacity_initial = 12/1 = 12/s ≥ 10/s → giây đầu KHÔNG drop
+  capacity_max     = 12/1 = 12/s ≥ 10/s → không cần tạo thêm VU
+  → Hai capacity bằng nhau vì maxVUs = preAllocatedVUs
+  → Pool dư sức ngay từ đầu, êm nhất
+
+CASE B: preAllocatedVUs=4, maxVUs=15
+  capacity_initial = 4/1 = 4/s < 10/s  → giây đầu CÓ drop (thiếu 6 slot/s)
+  capacity_max     = 15/1 = 15/s ≥ 10/s → về sau HẾT drop
+  → Hai capacity chênh lệch lớn (4→15)
+  → Khởi đầu khó khăn nhưng có đường lui — drop giảm dần về 0
+  → Đây là thiết kế có chủ đích: pool nhỏ lúc đầu, tự mở rộng khi cần
+
+CASE C: preAllocatedVUs=3, maxVUs=5
+  capacity_initial = 3/1 = 3/s < 10/s  → giây đầu CÓ drop (thiếu 7 slot/s)
+  capacity_max     = 5/1 = 5/s < 10/s  → drop LIÊN TỤC (thiếu 5 slot/s mỗi giây)
+  → Hai capacity đều dưới lambda
+  → Dù có huy động hết maxVUs vẫn không đủ — đây là lỗi sizing
+```
+
+Tóm lại:
+
+```text
+capacity_initial trả lời: "mở hàng có êm không?"
+capacity_max     trả lời: "có hy vọng hết drop không?"
+
+Nếu capacity_initial < lambda nhưng capacity_max ≥ lambda:
+  → drop là "chi phí khởi động", chấp nhận được
+
+Nếu capacity_max < lambda:
+  → drop là "mãn tính", phải tăng maxVUs (và preAllocatedVUs)
+```
 
 **Bước 2 — 3 tình huống sizing:**
 
