@@ -67,19 +67,17 @@ $env:OPS_AUTH_TOKEN = "<ops-token>"
 
 | # | Case | Script | Exit | Checks rate | HTTP failed | Iteration duration | Primary observation | Result |
 | --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- |
-| 01 | HIT smoke | `01-hit-smoke.js` | pending | pending | pending | pending | MISS -> HIT sustained | pending |
-| 02 | Variant keys | `02-variant-keys.js` | pending | pending | pending | pending | 5 variant pairs MISS/HIT isolation | pending |
-| 03 | Bypass rules | `03-bypass-rules.js` | pending | pending | pending | pending | 4 bypass types not HIT | pending |
-| 04 | Query normalization | `04-query-normalization.js` | pending | pending | pending | pending | tracking params HIT, business param MISS | pending |
-| 05 | Invalidation ops | `05-invalidation-ops.js` | pending | pending | pending | pending | purge/ban-url/ban-tag -> MISS | pending |
-| 06 | Invalidation events | `06-invalidation-events.js` | pending | pending | pending | pending | event -> MISS for detail/recs/search/homefeed | pending |
-| 07 | Cache contract | `07-cache-contract.js` | pending | pending | pending | pending | headers + 304 revalidation | pending |
-| 08 | TTL expiry | `08-ttl-expiry.js` | pending | pending | pending | pending | HIT -> wait TTL -> MISS | pending |
-| 09 | Stale while error | `09-stale-while-error.js` | 0 | 100% (15/15) | 0% (0/10) | 7s | stale HIT while origin unhealthy; all stall headers verified | **PASS** |
-| 10a | Coalescing (fail) | `10-request-coalescing.js` | 1 | 70% (7/10) | 33% (3/9) | 3.34ms | batch requests failed; origin unhealthy from previous run | **FAIL** |
-| 10b | Coalescing (rerun) | `10-request-coalescing.js` | 0 | 100% (10/10) | 0% (0/9) | 808ms | batch success, origin count <= 2 | **PASS** |
-| 11a | Negative (fail) | `11-negative-caching.js` | 1 | 58% (7/12) | 25% (2/8) | 4.02ms | origin count = 0; app route not ready | **FAIL** |
-| 11b | Negative (rerun) | `11-negative-caching.js` | 0 | 100% (15/15) | 30% (3/10) | 6s | MISS→HIT→MISS; origin count 1→2 | **PASS** |
+| 01 | HIT smoke | `01-hit-smoke.js` | 0 | 100% (21617/21617) | 0.00% (0/2703) | sustained run | MISS -> HIT sustained | **PASS** |
+| 02 | Variant keys | `02-variant-keys.js` | 0 | 100% (3720/3720) | 0.00% (0/600) | deterministic sequence | 5 variant pairs MISS/HIT isolation | **PASS** |
+| 03 | Bypass rules | `03-bypass-rules.js` | 0 | 100% (54/54) | 0.00% (0/8) | single iteration | 4 bypass types not HIT | **PASS** |
+| 04 | Query normalization | `04-query-normalization.js` | 0 | 100% (36/36) | 0.00% (0/6) | single iteration | tracking params HIT, business param MISS/HIT | **PASS** |
+| 05 | Invalidation ops | `05-invalidation-ops.js` | 0 | 100% (42/42) | 0.00% (0/23) | single iteration | purge/ban-url/ban-tag -> MISS | **PASS** |
+| 06 | Invalidation events | `06-invalidation-events.js` | 0 | 100% (46/46) | 0.00% (0/23) | single iteration | event -> MISS for detail/recs/search/homefeed | **PASS** |
+| 07 | Cache contract | `07-cache-contract.js` | 0 | 100% (22/22) | 0.00% (0/4) | single iteration | headers + 304 revalidation | **PASS** |
+| 08 | TTL expiry | `08-ttl-expiry.js` | 0 | 100% (9/9) | 0.00% (0/4) | TTL wait | HIT -> wait TTL -> MISS | **PASS** |
+| 09 | Stale while error | `09-stale-while-error.js` | 0 | 100% (22/22) | 0.00% (0/24) | stale/recovery wait | stale HIT while origin unhealthy; stale/recovery checks verified | **PASS** |
+| 10 | Request coalescing | `10-request-coalescing.js` | 0 | 100% (24/24) | 0.00% (0/27) | origin delay burst | batch success, follow-up HIT, origin count <= 2 | **PASS** |
+| 11 | Negative caching | `11-negative-caching.js` | 0 | 100% (15/15) | 30.00% (3/10) | negative TTL wait | MISS→HIT→MISS; origin count 1→2 | **PASS** |
 
 ### 4.2. Chi tiết checks breakdown cho các case đã chạy
 
@@ -149,28 +147,29 @@ HTTP metrics: `http_req_failed: 30.00%` — expected vì 3 response 404.
 
 ### 5.2. Case 10 — Request coalescing
 
-| Evidence | Expected | Observed (FAIL) | Observed (PASS) | Verified? |
-| --- | --- | --- | --- | --- |
-| Batch response status | 200 for all | ✗ 0% (connection error) | ✓ 100% | Yes (PASS run) |
-| Follow-up cache state | `HIT` | ✓ HIT | ✓ HIT | Yes |
-| Origin request count | `<= 2` | N/A (batch failed) | ✓ (không throw error) | Yes (PASS run) |
-| `http_req_duration` max | ~800ms (origin delay) | N/A | 803.59ms | Yes (PASS run) |
+| Evidence | Expected | Observed | Verified? |
+| --- | --- | --- | --- |
+| Batch response status | 200 for all | all batch status checks passed | Yes |
+| Follow-up cache state | `HIT` | `HIT` | Yes |
+| Origin request count | `<= 2` | script counter assertion passed | Yes |
+| `http_req_failed` | `0.00%` | `0.00% (0/27)` | Yes |
+| Checks | 100% | `24/24` | Yes |
 
-**Ghi chú về lần fail**: Lần chạy đầu của case 10 fail vì origin chưa được reset về healthy sau case 09. Batch request không thể kết nối đến origin → toàn bộ batch fail. Sau khi reset origin và wait healthy, rerun pass 100%.
+**Ghi chú**: Issue cũ là case 10 fail khi chạy ngay sau case 09 vì backend/CDN health chưa recover đủ nhanh. Sau fix, full sequential suite chạy `09 -> 10` trực tiếp và case 10 pass, nên race này đã được verify fixed.
 
 ### 5.3. Case 11 — Negative caching
 
-| Evidence | Expected | Observed (FAIL) | Observed (PASS) | Verified? |
-| --- | --- | --- | --- | --- |
-| First response | 404 MISS | ✗ (không phải 404) | ✓ 404 MISS | Yes (PASS run) |
-| `X-Negative-Cache` first | `true` | ✗ (không có) | ✓ true | Yes (PASS run) |
-| Second response | 404 HIT | ✗ | ✓ 404 HIT | Yes (PASS run) |
-| Origin count before expiry | `1` | 0 | 1 | Yes (PASS run) |
-| After expiry response | 404 MISS | N/A (dừng sớm) | ✓ 404 MISS | Yes (PASS run) |
-| Origin count after expiry | `2` | N/A | 2 | Yes (PASS run) |
-| `http_req_failed` rate | `~30%` (3/10) | 25% (2/8) | 30% (3/10) | Yes (PASS run) |
+| Evidence | Expected | Observed | Verified? |
+| --- | --- | --- | --- |
+| First response | 404 MISS | check passed | Yes |
+| `X-Negative-Cache` first | `true` | check passed | Yes |
+| Second response | 404 HIT | check passed | Yes |
+| Origin count before expiry | `1` | script counter assertion passed | Yes |
+| After expiry response | 404 MISS | check passed | Yes |
+| Origin count after expiry | `2` | script counter assertion passed | Yes |
+| `http_req_failed` rate | `~30%` expected 404s | `30.00% (3/10)` | Yes — expected |
 
-**Ghi chú về lần fail**: Lần chạy đầu của case 11 fail vì route `/api/cached/missing/*` chưa sẵn sàng. First request không trả về 404, dẫn đến tất cả check downstream fail và origin count = 0.
+**Ghi chú**: Với case 11, `http_req_failed=30%` không phải defect. Đây là hệ quả của 3 response 404 expected trong negative caching proof; pass/fail phải đọc bằng checks, `X-Negative-Cache`, cache sequence và origin counters.
 
 ---
 
@@ -418,54 +417,180 @@ Bài học thực tế: Lần chạy đầu của case 10 fail vì chạy ngay s
 
 ---
 
-## 9. Cách đọc dashboard cho CDN cases
+## 9. Phân tích dashboard/chart cho CDN cases
 
-### 9.1. Dashboard có cần thiết cho CDN cases không?
+### 9.1. Đánh giá pass/fail đã đủ chưa?
 
-**Ngắn gọn: Không cần thiết.** CDN capability cases là correctness proof, không phải performance benchmark. Evidence chính nằm trong checks output và header sequence, không phải chart.
-
-Tuy nhiên, nếu push lên k6 Cloud hoặc Grafana dashboard, các chart sau có thể hữu ích:
-
-### 9.2. Chart hữu ích và cách đọc
-
-| Chart | Hữu ích cho case nào | Cách đọc |
-| --- | --- | --- |
-| **Checks rate over time** | Tất cả | Phải = 100% suốt test duration. Bất kỳ drop nào = fail. |
-| **HTTP request duration (p95)** | 08, 09, 10 | Spike khi origin delay hoặc origin unhealthy. Case 10: expect p95 ~800ms (origin delay). |
-| **HTTP request duration by tag** | 10 (coalescing) | Batch requests có duration cao hơn HIT requests. |
-| **Request timeline** | 11 (negative) | Thấy rõ 3 cụm request: first + second (t=0s), after expiry (t=6s). |
-| **HTTP status codes** | 07, 11 | Case 07: 200 + 304. Case 11: chỉ có 404. |
-| **VUs over time** | Tất cả | Luôn = 1. Nếu >1, sai config. |
-| **Data sent/received** | Tất cả | Rất thấp (<10KB) — đúng với correctness test. |
-
-### 9.3. Chart KHÔNG hữu ích cho CDN cases
-
-| Chart | Tại sao không hữu ích |
-| --- | --- |
-| **RPS (requests per second)** | Quá thấp để có ý nghĩa (<10 requests total) |
-| **Iteration duration distribution** | Chỉ 1 iteration, không có distribution |
-| **Network I/O** | Data transfer không đáng kể |
-| **Concurrency** | Luôn = 1 VU |
-
-### 9.4. Evidence thay thế dashboard
-
-Thay vì dashboard, CDN cases dùng:
+**Có.** Với CDN layer, kết luận pass/fail không phụ thuộc dashboard. Full runtime suite đã đủ evidence để kết luận vì mỗi case encode contract bằng checks:
 
 ```text
-1. k6 console output (checks list)
-2. k6 --summary-export summary.json (machine-readable)
-3. Manual curl verification (X-Cache headers)
-4. varnishlog capture (VCL behavior)
-5. Origin request count API response (định lượng)
+Full runtime: 11/11 scenarios passed
+Checks: 100% cho tất cả case
+Routing: 37/37 pass
+Case 09/10/11: có thêm header/counter proof
+Case 11: http_req_failed=30% là expected do 404 negative caching
 ```
 
-### 9.5. Cách export evidence cho audit
+Dashboard/chart chỉ là **supporting evidence** để nhìn hình dạng thời gian, latency và status mix. Chart không thay thế được `X-Cache`, `X-Cache-Stale`, `X-Negative-Cache`, `Surrogate-Key`, hoặc origin request counters.
+
+### 9.2. Vì sao chart của CDN khác chart của executor?
+
+| Điểm đọc | Executor docs | CDN docs |
+| --- | --- | --- |
+| Mục tiêu chart | Chứng minh traffic shape, throughput, latency dưới tải | Quan sát timing/state transition của cache proof |
+| RPS/VUs | Rất quan trọng | Ít quan trọng, đa số case 1 VU/1 iteration |
+| Latency p95/p99 | Evidence chính | Chỉ là phụ trợ; cache correctness mới là chính |
+| Status code | Gần như luôn mong 2xx | Có 200, 304, và expected 404 |
+| Tags/checks | Hữu ích | Bắt buộc để đọc từng bước MISS/HIT/stale/negative |
+| Counter/header evidence | Thường không cần | Bắt buộc cho 09/10/11 |
+
+Nói ngắn gọn: executor chart trả lời **“traffic có đúng shape không?”**. CDN chart chỉ giúp giải thích **“các bước proof xảy ra theo thời gian như thế nào?”**.
+
+### 9.3. Chart nên đọc theo từng nhóm case
+
+| Nhóm case | Chart nên xem | Dạng chart expected | Không được kết luận chỉ từ chart |
+| --- | --- | --- | --- |
+| 01 HIT smoke | checks, request timeline, latency by tag | một đoạn sustained traffic, checks 100%, request failed 0% | không thể biết HIT nếu không đọc `X-Cache` checks |
+| 02 Variant keys | checks by tag/group | nhiều cụm request nhỏ cho từng variant | hit ratio cao không chứng minh không leakage |
+| 03 Bypass rules | checks + status codes | status 200, checks 100%, failed 0% | chart không cho biết request có bypass hay không |
+| 04 Query normalization | checks by tag | canonical/tracking/business-param sequence đều pass | RPS/latency không chứng minh query normalization đúng |
+| 05 Manual invalidation | checks timeline | warm HIT trước invalidation, next request pass MISS check | control 200 trên chart không đủ; phải có next public MISS |
+| 06 Event invalidation | checks timeline + status | event call 200, affected public requests pass MISS check | event endpoint 200 không chứng minh invalidation nếu thiếu public MISS |
+| 07 Cache contract | status code mix | 200 + 304, checks 100% | 304 phải đi kèm ETag/If-None-Match checks |
+| 08 TTL expiry | request timeline | gap theo `TTL_WAIT_SECONDS`, after-expiry request pass MISS check | latency sau wait không tự chứng minh TTL |
+| 09 Stale while error | timeline, status, checks | warm MISS/HIT, wait, stale probe 200, failed 0% | 200 không chứng minh stale; cần `X-Cache-Stale=true` và backend unhealthy header |
+| 10 Request coalescing | batch latency, checks, failed rate | burst ngắn, all 200, follow-up HIT, failed 0% | all 200 không chứng minh coalescing; cần origin count `<=2` |
+| 11 Negative caching | status code mix, request timeline | expected 404s, `http_req_failed≈30%`, checks 100% | HTTP failed chart nhìn đỏ nhưng không phải fail |
+
+### 9.4. Chart-by-chart deep dive
+
+#### Checks rate over time
+
+Đây là chart dashboard quan trọng nhất cho CDN suite.
+
+Expected:
+
+```text
+checks rate = 100% từ đầu đến cuối
+không có drop ở case 09 -> 10
+không có drop ở case 11 dù status là 404
+```
+
+Nếu chart có drop:
+
+- drop ở setup checks → control plane/token/routing issue;
+- drop ở cache-state checks → VCL/cache behavior issue;
+- drop ở header checks → origin/VCL header contract issue;
+- drop ở counter checks → origin offload/coalescing/stale proof issue.
+
+#### HTTP failed rate
+
+Không đọc giống executor.
+
+| Case | Expected `http_req_failed` | Diễn giải |
+| --- | --- | --- |
+| 01-10 | `0.00%` | mọi request trong proof là expected 2xx/304 behavior |
+| 11 | khoảng `30%` trong run hiện tại | 3 response 404 expected trong 10 HTTP requests |
+
+Vì vậy dashboard `http_req_failed` đỏ ở case 11 là **false alarm nếu checks vẫn 100%**.
+
+#### HTTP status codes
+
+Expected status mix:
+
+- case 01-06, 08-10: chủ yếu 200;
+- case 07: 200 + 304 revalidation;
+- case 11: 404 là expected business outcome.
+
+Nếu dashboard gom cả suite, status-code chart có thể làm người đọc nhầm rằng 404 là lỗi. Cách đọc đúng là filter theo `scenario=cdn_negative_caching` hoặc đọc cùng checks.
+
+#### HTTP request duration / latency
+
+Latency chỉ là support signal:
+
+- HIT thường nhanh hơn MISS, nhưng local Docker noise có thể che khác biệt.
+- Case 08/09/11 có sleep/wait nên **iteration duration** dài; đó không phải latency backend.
+- Case 10 có `origin_delay_ms` để tạo cold burst; latency batch có thể cao hơn follow-up HIT.
+- Nếu case 10 all 200 nhưng origin counter cao, latency chart vẫn không đủ để pass.
+
+Nguyên tắc: latency chart giúp hiểu “request nào phải đợi origin”, nhưng không chứng minh cache correctness.
+
+#### Request timeline
+
+Chart này hữu ích nhất để dạy flow:
+
+```text
+Case 08: MISS -> HIT -> sleep TTL -> MISS
+Case 09: MISS -> HIT -> sleep TTL -> set unhealthy -> stale HIT
+Case 10: concurrent batch -> follow-up HIT
+Case 11: 404 MISS -> 404 HIT -> sleep negative TTL -> 404 MISS
+```
+
+Nếu timeline không có gap ở case 08/09/11, nghĩa là env wait bị override sai hoặc script không chạy đúng path.
+
+#### VUs / iterations
+
+Expected:
+
+- hầu hết cases: `vus=1`, `iterations=1`;
+- case 01 có sustained traffic theo config riêng;
+- case 10 tạo concurrency bằng `http.batch`, không phải bằng nhiều VUs.
+
+Nếu dashboard cho thấy nhiều VUs ở case 02/05/06/08/09/11, kết quả có thể bị nhiễu vì CDN cases phụ thuộc sequence deterministic.
+
+### 9.5. Đọc chart cho issue cũ `09 -> 10`
+
+Trước fix, nếu nhìn dashboard, pattern sẽ là:
+
+```text
+case 09: checks 100%, http failed 0%
+case 10 ngay sau đó: checks drop mạnh, http failed spike
+```
+
+Dễ kết luận nhầm là coalescing hỏng. Nhưng evidence đúng cho thấy case 10 pass isolated và pass nếu chờ recovery, nên root cause là recovery race giữa stale test và coalescing test.
+
+Sau fix, full sequential run expected chart:
+
+```text
+case 09: checks 100%, failed 0%
+case 10: checks 100%, failed 0%
+không còn spike failure giữa hai case
+```
+
+Đây là giá trị chính của dashboard ở đây: nhìn được **transition giữa case 09 và case 10** đã sạch.
+
+### 9.6. Chart KHÔNG nên dùng làm pass/fail proof
+
+| Chart | Vì sao không đủ |
+| --- | --- |
+| RPS | CDN correctness suite quá nhỏ; RPS thấp không có ý nghĩa capacity |
+| Aggregate p95/p99 toàn suite | bị sleep của case 08/09/11 và origin delay case 10 làm méo |
+| Hit ratio tổng | có thể cao nhưng vẫn variant leakage hoặc invalidation fail |
+| Status code tổng | case 11 intentionally 404; aggregate status dễ gây false negative |
+| Network I/O | payload nhỏ; không chứng minh cache state |
+
+### 9.7. Nếu muốn dashboard/cloud evidence thật
+
+Run hiện tại là local validation. Nếu muốn phần chart giống executor theo nghĩa có run ID/screenshot, cần thêm một pass có output dashboard/cloud, rồi điền:
+
+```text
+run id / dashboard URL
+screenshots hoặc exported panels
+checks-over-time panel
+status-code panel
+http_req_duration by scenario/tag
+request timeline cho case 08/09/10/11
+```
+
+Nhưng đây là **bổ sung trình bày**, không phải điều kiện để kết luận CDN pass/fail. Với evidence hiện tại, phần đánh giá correctness đã đủ.
+
+### 9.8. Cách export evidence cho audit
 
 ```powershell
 # Export JSON summary
 k6 run .\k6\cdn\11-negative-caching.js --summary-export cdn-11-summary.json
 
-# Export chi tiết từng check
+# Export chi tiết từng event/check
 k6 run .\k6\cdn\11-negative-caching.js --out json=cdn-11-results.json
 
 # Lưu console output
@@ -616,6 +741,7 @@ Tuần 1: Chạy case 01-03 (HIT, variant, bypass) — nắm cơ bản.
 Tuần 2: Chạy case 04-07 (query, invalidation, headers) — hiểu control plane.
 Tuần 3: Chạy case 08-11 (TTL, stale, coalescing, negative) — hiểu edge cases.
 Tuần 4: Tích hợp vào CI/CD — chạy tự động mỗi khi deploy.
+```
 
 ---
 
