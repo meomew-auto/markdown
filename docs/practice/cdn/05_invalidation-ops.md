@@ -11,7 +11,7 @@
 
 ---
 
-## 1. Tính huống thực tế
+## 1. Tình huống thực tế
 
 ### Bài toán: cache đã cũ, content đã mới
 

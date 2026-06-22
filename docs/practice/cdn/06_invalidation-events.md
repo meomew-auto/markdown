@@ -1,16 +1,16 @@
 # Case 06: Event-Driven CDN Invalidation
 
 > **Case ID:** `cdn-06-invalidation-events`
-> **Script:** `06-invalidation-events.js` (104 đồng)
+> **Script:** `06-invalidation-events.js` (104 dòng)
 > **Layer:** CDN / Varnish
 > **Proof:** Catalog events (product.updated, category.updated, homefeed.updated) trigger targeted CDN invalidation -- warmed HIT -> event -> next public MISS
-> **Phân biệt với case 05:** Case 05 là **manual invalidation** (gọi trực tiếp purge/bản API). Case 06 là **event-driven invalidation** (event được emit, handler tự động thực thì invalidation). Case 05 kiểm trả "purge có hoạt động không". Case 06 kiểm trả "event có dẫn đến invalidation thật sự không".
+> **Phân biệt với case 05:** Case 05 là **manual invalidation** (gọi trực tiếp purge/ban API). Case 06 là **event-driven invalidation** (event được emit, handler tự động thực thi invalidation). Case 05 kiểm tra "purge có hoạt động không". Case 06 kiểm tra "event có dẫn đến invalidation thật sự không".
 
 ---
 
 ## 1. Tình huống thực tế
 
-### Người quan trì CMS cập nhất sản phẩm
+### Người quản trị CMS cập nhật sản phẩm
 
 ```text
 11:32 AM - Marketing team quyet dinh giam gia san pham "Giay chay bo Pro X"
@@ -89,7 +89,7 @@ Day la infrastructure CRITICAL. Neu no break:
      Trong khoang thoi gian do, MOI user deu thay data sai
 ```
 
-### Event-driven invalidation không phải là "nice tổ have"
+### Event-driven invalidation không phải là "nice to have"
 
 ```text
 Day la infrastructure requirement cho bat ky e-commerce platform nao
@@ -150,7 +150,7 @@ Case 06 proves LEVEL 3:
 
 ```text
 CONTRACT: Khi mot catalog event duoc gui den internal event endpoint,
-         CDN PHAl invalidate cac cache objects lien quan trong
+         CDN PHAI invalidate cac cache objects lien quan trong
          khoang thoi gian du nho (gan nhu ngay lap tuc).
 
 INPUT:  Event type + entity_id duoc POST den /internal/cdn/events/catalog
@@ -174,18 +174,18 @@ PHAI co ca 4 buoc. Thieu bat ky buoc nao -> khong the ket luan.
 
 | Event Type | Ý nghĩa | Affected paths (theo handler) |
 | --- | --- | --- |
-| `product.updated` | Một sản phẩm thấy đổi (giá, mô tả, tồn khó, hình ảnh) | Detail page, recommendations, search results, products list, homefeed |
-| `category.updated` | Category taxonomy thấy đổi (sản phẩm chuyển category, category rename) | Categories list, products list, homefeed, search results |
-| `homefeed.updated` | Homefeed curation thấy đổi (featured products, banners, layout) | Homefeed (theo segment) |
+| `product.updated` | Một sản phẩm thay đổi (giá, mô tả, tồn kho, hình ảnh) | Detail page, recommendations, search results, products list, homefeed |
+| `category.updated` | Category taxonomy thay đổi (sản phẩm chuyển category, category rename) | Categories list, products list, homefeed, search results |
+| `homefeed.updated` | Homefeed curation thay đổi (featured products, banners, layout) | Homefeed (theo segment) |
 
-Mới event type map đến một tập hợp cache objects KHÁC NHAU. Handler phải:
-- Xác định dùng affected paths
-- Invalidate dùng objects (không thừa, không thiếu)
+Mỗi event type map đến một tập hợp cache objects KHÁC NHAU. Handler phải:
+- Xác định đúng affected paths
+- Invalidate đúng objects (không thừa, không thiếu)
 - Optionally warm lại high-traffic paths
 
 ---
 
-## 3. Vì sao test o CDN layer
+## 3. Vì sao test ở CDN layer
 
 ### Event -> Invalidation chain là INTEGRATION, không phải unit
 
@@ -223,7 +223,7 @@ CHI integration test (case 06) moi tra loi duoc cau hoi that su:
   "Tu event den cache state, toan bo chain co hoat dong khong?"
 ```
 
-### Tại sao không test o Application layer?
+### Tại sao không test ở Application layer?
 
 ```text
 Neu test o application layer (goi truc tiep handler, mock Varnish):
@@ -254,7 +254,7 @@ CDN layer test = APPLICATION + INFRASTRUCTURE + INTEGRATION
   -> La diem DUY NHAT chung minh duoc event->cache chain hoat dong
 ```
 
-### Số sanh với manual invalidation (case 05)
+### So sánh với manual invalidation (case 05)
 
 ```text
 Case 05 (manual invalidation):
@@ -441,10 +441,10 @@ export const options = {
 ```
 
 Điểm quan trọng: `vus: 1, iterations: 1`. Không phải load test. Đây là
-**functional correctness test**. Một VỤ chạy tuần tự quá tất cả bước:
-warm -> event -> verify -> warm -> event -> verify. Không cần nhiều VỤ
+**functional correctness test**. Một VU chạy tuần tự qua tất cả bước:
+warm -> event -> verify -> warm -> event -> verify. Không cần nhiều VU
 vì không test concurrency hay throughput. Nếu checks rate < 1, có nghĩa
-là CÓ IT NHẤT MỘT BƯỚC BỊ FAIL. Threshold này đảm bảo KHÔNG FALSE PASS.
+là CÓ ÍT NHẤT MỘT BƯỚC BỊ FAIL. Threshold này đảm bảo KHÔNG FALSE PASS.
 
 ### Helper: warmUntilHit()
 
@@ -497,7 +497,7 @@ export function setup() {
 }
 ```
 
-Tại sao lại dùng banUrl + banPrefix thấy vì purge?
+Tại sao lại dùng banUrl + banPrefix thay vì purge?
 
 ```text
   - purge = xoa EXACT object (URL + headers phai match chinh xac)
@@ -702,7 +702,7 @@ Hai profile được sử dụng:
      ma khong quan tam den segment
 ```
 
-### Lưu ý: category.updated Không được test trong script
+### Lưu ý: category.updated KHÔNG được test trong script
 
 ```text
   Mac du handler ho tro category.updated, script 06 chi test
@@ -916,7 +916,7 @@ Hay trace tung buoc voi event product.updated (product_id='1').
     -> Moi request: MISS -> HIT (warm cache)
 ```
 
-### Bước 5: Response tổ event caller
+### Bước 5: Response to event caller
 
 ```text
   Handler tra JSON response:
@@ -984,7 +984,7 @@ Hay trace tung buoc voi event product.updated (product_id='1').
     - Targeted: nhung path khong lien quan (neu co) van HIT
 ```
 
-### Số sanh plan cho 3 event type
+### So sánh plan cho 3 event type
 
 ```text
   PRODUCT.UPDATED (product_id='1'):
@@ -1245,7 +1245,7 @@ TIMELINE: 06-invalidation-events.js (1 VU, 1 iteration)
        decodeJSON + check success se catch
 ```
 
-### Signal 2: X-Cache header ổn public path
+### Signal 2: X-Cache header on public path
 
 ```text
   Day la SIGNAL CHINH:
@@ -1373,7 +1373,7 @@ TIMELINE: 06-invalidation-events.js (1 VU, 1 iteration)
        -> k6 exit 0 (neu khong co threshold) nhung thuc su FAIL
 ```
 
-### How tổ distinguish PASS from FALSE PASS
+### How to distinguish PASS from FALSE PASS
 
 ```text
   FALSE PASS: TAT CA checks pass nhung cache state khong dung
@@ -1565,7 +1565,7 @@ k6 run `
       NO  -> Fix catalog-events-mock.py
 ```
 
-### Scenario 2: EVENT CAUSES MISS ỔN WRONG PATHS
+### Scenario 2: EVENT CAUSES MISS ON WRONG PATHS
 
 ```text
   OUTPUT:
@@ -1589,7 +1589,7 @@ k6 run `
     Over-invalidation that su la:
       Handler ban /api/sim/products (prefix) -> tat ca product
       path bi xoa, bao gom ca nhung path khong lien quan
-      -> CAc path chi doc (khong lien quan den product 1)
+      -> Cac path chi doc (khong lien quan den product 1)
          van MISS -> khong can thiet
       -> Lam tang MISS rate -> tang origin load
 
@@ -1655,7 +1655,7 @@ k6 run `
   ROOT CAUSE:
     - Warm request den origin nhung origin down
     - Warm request timeout
-    - Warm request headers SAi -> origin tra 4xx/5xx
+    - Warm request headers SAI -> origin tra 4xx/5xx
     - Origin khong phuc vu path warm (vd: homefeed can auth)
 
   IMPACT:
@@ -1677,13 +1677,13 @@ k6 run `
     Warm la "nice to have" (performance optimization),
     khong phai "must have" (correctness).
     Ban la "must have" (correctness).
-    Neu ban OK nhung warm fail -> event VẪN THANH CONG
+    Neu ban OK nhung warm fail -> event VẪN THÀNH CÔNG
     (day la trade-off dung dan)
 ```
 
 ---
 
-## 13. Nghich ly / Misconceptions
+## 13. Nghịch lý / Misconceptions
 
 ### Misconception 1: "Event-driven = real-time"
 
@@ -1783,7 +1783,7 @@ k6 run `
   Du de tranh stampede cho majority traffic.
 ```
 
-### Misconception 4: "Bản URL X chỉ ảnh hưởng đến URL X"
+### Misconception 4: "Ban URL X chỉ ảnh hưởng đến URL X"
 
 ```text
   SAI.
@@ -1813,7 +1813,7 @@ k6 run `
       /api/sim/products/10, /api/sim/products/100, /api/sim/products/1xxx
 ```
 
-### Misconception 5: "Case 06 và case 05 là giong nhau"
+### Misconception 5: "Case 06 và case 05 là giống nhau"
 
 ```text
   SAI.
@@ -2154,7 +2154,7 @@ k6 run `
     - Handler khong bao gio nhan event
     - Cache KHONG BAO GIO bi invalidate
     - Stale content ton tai CHO DEN KHI TTL HET HAN
-    - Co the VAi GIO neu TTL dai
+    - Co the VAI GIO neu TTL dai
 
   CACH LAM DUNG:
     - Event producer: retry + exponential backoff
@@ -2310,26 +2310,26 @@ k6 run `
 
 ---
 
-## Tom tất
+## Tóm tắt
 
-Case `cdn-06-invalidation-events` chứng mình rằng CATALOG EVENTS
+Case `cdn-06-invalidation-events` chứng minh rằng CATALOG EVENTS
 (product.updated, category.updated, homefeed.updated) thật sự dẫn đến
 CDN CACHE INVALIDATION -- không chỉ là "event endpoint trả 200" mà là
-"cache object chuyển từ HIT sáng MISS".
+"cache object chuyển từ HIT sang MISS".
 
 Đây là EVENT-DRIVEN INVALIDATION: không ai manual purge. CMS/backend
 emit event; handler tự động xác định affected paths, execute targeted
-bản operations, và optionally warm lại cache.
+ban operations, và optionally warm lại cache.
 
-Test chứng mình:
+Test chứng minh:
 
 - **product.updated** -> product detail, recommendations, search MISS
 - **homefeed.updated** -> homefeed (cả guest + returning) MISS
 - **Targeted**: chỉ affected paths MISS, unaffected paths giữ nguyên
 
-Linh hơn của test này năm o **Event -> Invalidation Chain** (section 6):
-5 bước tự event POST đến cache state change, mới bước deu PHẢI hoạt động.
-Một mất xich gây -> người dùng thấy stale content.
+Linh hồn của test này nằm ở **Event -> Invalidation Chain** (section 6):
+5 bước từ event POST đến cache state change, mỗi bước đều PHẢI hoạt động.
+Một mắt xích gãy -> người dùng thấy stale content.
 
 Phân biệt RÕ RÀNG với case 05 (manual invalidation):
 case 05 test Varnish control API; case 06 test event->handler->Varnish
