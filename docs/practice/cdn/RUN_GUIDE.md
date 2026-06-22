@@ -19,8 +19,8 @@ Không fail negative caching chỉ vì status 404.
 Chạy từ backend repo:
 
 ```powershell
-cd E:\Projects\k6\k6-metrics-server
-.\scripts\stack.ps1 -Stack target -Action up -Build -TargetLayer full -ScaleApp 2
+cd E:/Projects/k6/k6-metrics-server
+./scripts/stack.ps1 -Stack target -Action up -Build -TargetLayer full -ScaleApp 2
 ```
 
 Topology cần đúng:
@@ -40,7 +40,7 @@ $env:CATALOG_EVENTS_BASE_URL = "http://localhost:9091"
 $env:OPS_AUTH_TOKEN = "<ops-token>"
 ```
 
-`OPS_AUTH_TOKEN` required cho control-plane cases. Không in real token trong report. `OPS_TOKEN` được `shared.js` accept như fallback nhưng docs nên dùng `OPS_AUTH_TOKEN`.
+`OPS_AUTH_TOKEN` required cho control-plane cases. Không in real token trong report. `OPS_TOKEN` được `shared.js` accept như fallback, nhưng docs nên dùng `OPS_AUTH_TOKEN`.
 
 ## Preflight
 
@@ -49,14 +49,13 @@ curl.exe -i http://localhost:80/health
 curl.exe -i http://localhost:8088/health
 curl.exe -i http://localhost:9091/health
 
-.\scripts\check-target-routing.ps1 -TargetLayer full -BaseUrl "http://localhost:80"
+./scripts/check-target-routing.ps1 -TargetLayer full -BaseUrl "http://localhost:80"
 ```
 
 Control profile probe, token redacted:
 
 ```powershell
-curl.exe -i http://localhost:8088/ops/app/cdn/cache/profile `
-  -H "Authorization: Bearer <ops-token>" `
+curl.exe -i http://localhost:8088/ops/app/cdn/origin/profile `
   -H "X-Ops-Token: <ops-token>"
 ```
 
@@ -65,22 +64,22 @@ curl.exe -i http://localhost:8088/ops/app/cdn/cache/profile `
 Inspect all scripts:
 
 ```powershell
-.\scriptsun-cdn-capabilities.ps1 -InspectOnly -Scenarios all
+./scripts/run-cdn-capabilities.ps1 -InspectOnly -Scenarios all
 ```
 
 Run all cases sequentially:
 
 ```powershell
-.\scriptsun-cdn-capabilities.ps1 -Scenarios all
+./scripts/run-cdn-capabilities.ps1 -Scenarios all
 ```
 
 Run one case:
 
 ```powershell
-.\scriptsun-cdn-capabilities.ps1 -Scenarios 01-hit-smoke
-.\scriptsun-cdn-capabilities.ps1 -Scenarios 09-stale-while-error
-.\scriptsun-cdn-capabilities.ps1 -Scenarios 10-request-coalescing
-.\scriptsun-cdn-capabilities.ps1 -Scenarios 11-negative-caching
+./scripts/run-cdn-capabilities.ps1 -Scenarios 01-hit-smoke
+./scripts/run-cdn-capabilities.ps1 -Scenarios 09-stale-while-error
+./scripts/run-cdn-capabilities.ps1 -Scenarios 10-request-coalescing
+./scripts/run-cdn-capabilities.ps1 -Scenarios 11-negative-caching
 ```
 
 Không chạy các case song song vì cache/control state dùng chung.
@@ -88,30 +87,30 @@ Không chạy các case song song vì cache/control state dùng chung.
 ## Direct k6 pattern
 
 ```powershell
-cd E:\Projects\k6\k6-metrics-server\load-target
+cd E:/Projects/k6/k6-metrics-server/load-target
 $env:BASE_URL = "http://localhost:80"
 $env:CONTROL_BASE_URL = "http://localhost:8088"
 $env:CATALOG_EVENTS_BASE_URL = "http://localhost:9091"
 $env:OPS_AUTH_TOKEN = "<ops-token>"
 
-k6 run .\k6\cdn-hit-smoke.js
+k6 run ./k6/cdn/01-hit-smoke.js
 ```
 
 ## Commands từng case
 
 | Case | Command |
 | --- | --- |
-| 01 HIT smoke | `.\scriptsun-cdn-capabilities.ps1 -Scenarios 01-hit-smoke` |
-| 02 Variant keys | `.\scriptsun-cdn-capabilities.ps1 -Scenarios 02-variant-keys` |
-| 03 Bypass rules | `.\scriptsun-cdn-capabilities.ps1 -Scenarios 03-bypass-rules` |
-| 04 Query normalization | `.\scriptsun-cdn-capabilities.ps1 -Scenarios 04-query-normalization` |
-| 05 Invalidation ops | `.\scriptsun-cdn-capabilities.ps1 -Scenarios 05-invalidation-ops` |
-| 06 Invalidation events | `.\scriptsun-cdn-capabilities.ps1 -Scenarios 06-invalidation-events` |
-| 07 Cache contract | `.\scriptsun-cdn-capabilities.ps1 -Scenarios 07-cache-contract` |
-| 08 TTL expiry | `.\scriptsun-cdn-capabilities.ps1 -Scenarios 08-ttl-expiry` |
-| 09 Stale while error | `.\scriptsun-cdn-capabilities.ps1 -Scenarios 09-stale-while-error` |
-| 10 Request coalescing | `.\scriptsun-cdn-capabilities.ps1 -Scenarios 10-request-coalescing` |
-| 11 Negative caching | `.\scriptsun-cdn-capabilities.ps1 -Scenarios 11-negative-caching` |
+| 01 HIT smoke | `./scripts/run-cdn-capabilities.ps1 -Scenarios 01-hit-smoke` |
+| 02 Variant keys | `./scripts/run-cdn-capabilities.ps1 -Scenarios 02-variant-keys` |
+| 03 Bypass rules | `./scripts/run-cdn-capabilities.ps1 -Scenarios 03-bypass-rules` |
+| 04 Query normalization | `./scripts/run-cdn-capabilities.ps1 -Scenarios 04-query-normalization` |
+| 05 Invalidation ops | `./scripts/run-cdn-capabilities.ps1 -Scenarios 05-invalidation-ops` |
+| 06 Invalidation events | `./scripts/run-cdn-capabilities.ps1 -Scenarios 06-invalidation-events` |
+| 07 Cache contract | `./scripts/run-cdn-capabilities.ps1 -Scenarios 07-cache-contract` |
+| 08 TTL expiry | `./scripts/run-cdn-capabilities.ps1 -Scenarios 08-ttl-expiry` |
+| 09 Stale while error | `./scripts/run-cdn-capabilities.ps1 -Scenarios 09-stale-while-error` |
+| 10 Request coalescing | `./scripts/run-cdn-capabilities.ps1 -Scenarios 10-request-coalescing` |
+| 11 Negative caching | `./scripts/run-cdn-capabilities.ps1 -Scenarios 11-negative-caching` |
 
 ## Useful env knobs
 
@@ -125,6 +124,7 @@ $env:STALE_TTL_SECONDS = "2"
 $env:STALE_IF_ERROR_SECONDS = "120"
 $env:STALE_POST_TTL_WAIT_SECONDS = "3"
 $env:STALE_PROBE_WAIT_SECONDS = "4"
+$env:STALE_PROBE_RECOVERY_WAIT_SECONDS = "3"
 $env:COALESCE_CONCURRENCY = "12"
 $env:COALESCE_ORIGIN_DELAY_MS = "800"
 $env:COALESCE_TTL_SECONDS = "30"
@@ -165,4 +165,4 @@ For negative caching, 404 is expected; checks decide pass/fail.
 
 - Overview: `./00_overview.md`
 - Validation report: `./12_validation-and-chart-analysis.md`
-- Source README: `E:\Projects\k6\k6-metrics-server\load-target\k6\cdn\README.md`
+- Source README: `E:/Projects/k6/k6-metrics-server/load-target/k6/cdn/README.md`

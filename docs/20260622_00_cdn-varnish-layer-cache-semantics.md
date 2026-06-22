@@ -1,17 +1,19 @@
 # CDN/Varnish layer: cache semantics trước capacity
 
-## 1. Vì sao sau executor lại học layer?
+## 1. Vì sao layer testing đến sau executor testing?
 
-Executor practice packs trả lời traffic được schedule như thế nào: fixed users, fixed backlog, constant/ramping arrivals. Nhưng production không chỉ fail vì traffic shape. Nó còn fail vì từng layer xử lý request sai contract.
+Executor practice packs trả lời k6 tạo traffic như thế nào: fixed users, fixed backlog, constant arrival, ramping arrival. Nhưng production không chỉ fail vì traffic shape. Nó còn fail vì từng layer xử lý request sai contract.
 
-CDN/Varnish layer là layer đầu tiên sau client/k6. Nếu layer này sai, mọi số latency/RPS phía sau đều dễ bị hiểu nhầm.
+CDN/Varnish là layer đầu tiên sau client/k6. Nếu layer này sai, latency/RPS phía sau rất dễ bị hiểu nhầm:
 
 ```text
-Executor question: k6 tạo traffic theo shape nào?
+Executor question: traffic shape là gì?
 Layer question: request đi qua layer này có đúng semantics không?
 ```
 
-## 2. Mental model CDN/Varnish
+Vì vậy CDN layer testing đi sau executor testing: khi đã hiểu cách tạo traffic, ta dùng k6 để chứng minh behavior của một layer cụ thể.
+
+## 2. CDN/Varnish mental model
 
 ```text
 Client/k6
@@ -21,93 +23,122 @@ Client/k6
   -> app handlers / microservices
 ```
 
-Control/direct path dùng `:8088`, không dùng để chứng minh public cache HIT/MISS. Event-driven invalidation đi qua catalog-events mock `:9091`.
+Public path `:80` là nơi đọc HIT/MISS/BYPASS/stale. Control/direct path `:8088` dùng cho purge/ban/origin profile/origin counters. Catalog event mock `:9091` dùng để mô phỏng event-driven invalidation.
 
-## 3. Cache correctness quan trọng hơn hit ratio
+## 3. Public path vs control path
 
-Hit ratio cao không đủ nếu cache key sai hoặc invalidation sai.
+| Path | Mục đích | Có chứng minh CDN HIT/MISS không? |
+| --- | --- | --- |
+| `http://localhost:80` | public user traffic qua Varnish | Có |
+| `http://localhost:8088` | ops/control/direct app path | Không; chỉ setup/observe |
+| `http://localhost:9091` | catalog event mock | Không; chỉ trigger event |
 
-Ví dụ:
+Sai lầm thường gặp là gọi direct/control path rồi kết luận cache behavior. Với CDN, behavior phải được chứng minh trên public path.
+
+## 4. Cache key, TTL, stale, purge, ban, surrogate key
+
+| Primitive | Ý nghĩa thực tế |
+| --- | --- |
+| Cache key | Object identity tại CDN; key sai gây leakage hoặc fragmentation. |
+| `Vary` | Những request-header dimensions response có thể khác nhau theo. |
+| Variant key headers | Signal debug như language/geo/device/AB/segment. |
+| TTL / `s-maxage` | Freshness window ở shared cache. |
+| Stale / grace | Cho phép serve object cũ khi origin unhealthy hoặc trong stale window. |
+| Purge | Xóa exact object. |
+| Ban URL / prefix | Invalidate một URL hoặc nhóm URL. |
+| Surrogate-Key / ban-tag | Gắn tag cho nhiều objects liên quan để invalidation theo business entity. |
+| ETag / Last-Modified | Revalidation contract, ví dụ 304 với `If-None-Match`. |
+
+## 5. Hit ratio không đủ
+
+Hit ratio cao có thể là dấu hiệu tốt, nhưng không đủ để kết luận CDN đúng.
 
 ```text
-HIT cao + variant leakage = nguy hiểm hơn MISS nhiều.
-Purge endpoint 200 + object vẫn HIT = invalidation contract fail.
-Status 200 + missing X-Cache-Stale = chưa chứng minh stale serving.
+HIT cao + variant leakage = serve sai audience.
+Purge endpoint 200 + next request still HIT = invalidation fail.
+Status 200 + thiếu X-Cache-Stale = chưa chứng minh stale serving.
+All batch responses 200 + origin count cao = hidden stampede.
 ```
 
-## 4. Những primitive cần hiểu
+Do đó CDN validation phải kết hợp correctness + origin offload:
 
-| Primitive | Ý nghĩa |
-| --- | --- |
-| Cache key | Object identity tại CDN. |
-| Vary | Header dimension mà response có thể vary theo. |
-| Surrogate-Key | Tag cho invalidation theo nhóm objects. |
-| TTL / s-maxage | Freshness window tại shared cache. |
-| ETag / Last-Modified | Revalidation contract. |
-| Stale | Serve cached object khi origin lỗi hoặc trong stale window. |
-| Coalescing | Collapse nhiều cold requests cùng key thành ít origin hits. |
-| Negative caching | Cache response lỗi expected như 404 trong TTL ngắn. |
+- correctness: đúng response cho đúng variant và đúng cache policy;
+- offload: origin counter giảm đúng ở stale/coalescing/negative-cache cases.
 
-## 5. k6 quan sát được gì?
+## 6. k6 quan sát được gì?
 
-k6 quan sát được:
+k6 có thể đọc:
 
 ```text
 status code
-headers
-checks
+response headers
+named checks
 response timing
 control-plane response
 origin request-count endpoint
 ```
 
-k6 không tự biết “CDN đúng” nếu script không check headers/counters. Vì vậy CDN scripts phải encode contract bằng checks: `X-Cache`, `X-Cache-Key-*`, stale headers, origin counts.
+k6 không tự biết “CDN đúng” nếu script không encode contract. Vì vậy các CDN scripts check `X-Cache`, `X-Cache-Key-*`, cache contract headers, stale headers, negative-cache headers và origin counters.
 
-## 6. 11 capability proofs
+## 7. 11 capability proofs
 
 | Case | Capability | Lesson |
 | --- | --- | --- |
 | 01 | HIT smoke | Object cacheable phải `MISS -> HIT`. |
-| 02 | Variant keys | Không được serve nhầm language/geo/device/AB/segment. |
-| 03 | Bypass rules | Private/write/no-cache traffic không được HIT. |
+| 02 | Variant keys | Không serve nhầm language/geo/device/AB/segment. |
+| 03 | Bypass rules | Private/write/no-cache traffic không được `HIT`. |
 | 04 | Query normalization | Tracking params không phá cache; business params có key riêng. |
 | 05 | Manual invalidation | Ops purge/ban/tag phải tác động đúng object. |
 | 06 | Event invalidation | Business event phải invalidate CDN qua internal path. |
 | 07 | Cache contract | Origin phải emit headers đủ để CDN/client revalidate/invalidate. |
-| 08 | TTL expiry | Fresh HIT phải quay lại MISS sau TTL. |
+| 08 | TTL expiry | Fresh `HIT` phải quay lại `MISS` sau TTL. |
 | 09 | Stale while error | CDN giữ availability khi origin unhealthy bằng stale object. |
 | 10 | Request coalescing | Cold burst không stampede origin. |
-| 11 | Negative caching | 404 expected có thể cache ngắn để giảm origin pressure. |
+| 11 | Negative caching | Expected 404 có thể cache ngắn để giảm origin pressure. |
 
-## 7. Failure modes thường gặp
+## 8. Failure modes và diagnosis
+
+| Symptom | Diagnosis hướng tới |
+| --- | --- |
+| Second request vẫn `MISS` | Object không cacheable, TTL/header sai, hoặc key bị thay đổi. |
+| Variant request `HIT` ngay | Cache key thiếu dimension; có nguy cơ leakage. |
+| Auth/cookie request `HIT` | Bypass rule sai; nguy cơ private data leak. |
+| Tracking URL `MISS` | Query normalization chưa strip tracking params. |
+| `sort=price` lại `HIT` canonical | Query normalization quá aggressive. |
+| Invalidation endpoint 200 nhưng next request `HIT` | Control plane/VCL ban/purge không tác động object thật. |
+| Stale returns 200 nhưng thiếu stale headers | Có thể origin vẫn healthy hoặc stale path chưa chạy. |
+| Coalescing origin count cao | CDN không collapse forwarding; origin có stampede. |
+| Negative cache second request `MISS` | 404 không được cached hoặc negative TTL/header sai. |
+
+## 9. Dashboard/summary reading
+
+Dashboard response-time chart hữu ích để xem edge/client latency và traffic timeline. Nhưng với CDN layer, dashboard không thay thế header/counter evidence.
+
+Một report tốt luôn có:
 
 ```text
-Wrong cache key -> data leakage hoặc cache fragmentation.
-Wrong bypass -> private data cached hoặc write response cached.
-Wrong invalidation -> stale product/feed after update.
-No stale support -> origin error lan thẳng ra client.
-No coalescing -> cold object burst đập origin.
-No negative cache -> bot/user retry 404 làm origin nóng.
-```
-
-## 8. Dashboard reading
-
-Dashboard response-time chart hữu ích để xem edge/client latency, nhưng CDN correctness phải dựa vào headers/counters. Với layer này, report tốt luôn có cả:
-
-```text
-k6 checks
+k6 exit/checks
 X-Cache sequence
 key/stale/negative headers
 origin request counts
 control/event effects
+optional dashboard/cloud run IDs nếu có push
 ```
 
-## 9. Roadmap tiếp theo
+Nếu không push dashboard/cloud, ghi rõ “dashboard/cloud runs not performed”.
 
-Sau CDN/Varnish layer, học tiếp:
+## 10. Layer này feed các layer sau như thế nào?
+
+Sau CDN/Varnish, các layer tiếp theo có thể là:
 
 ```text
 LB/Nginx -> app gateway -> microservices -> Redis/state -> Postgres/DB -> external dependency -> resource/capacity
 ```
 
-CDN layer là nền vì nó quyết định request nào đi tiếp vào origin và request nào được offload ngay tại edge.
+CDN layer là nền vì nó quyết định request nào đi tiếp vào origin, request nào bị bypass, request nào được offload, và lúc origin lỗi user có còn được serve stale object không.
+
+## Practice pack
+
+- Overview: `docs/practice/cdn/00_overview.md`
+- Run guide: `docs/practice/cdn/RUN_GUIDE.md`
+- Validation: `docs/practice/cdn/12_validation-and-chart-analysis.md`
