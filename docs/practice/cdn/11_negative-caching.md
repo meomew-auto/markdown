@@ -5,27 +5,27 @@
 > **Layer:** CDN / Varnish
 > **Proof:** expected 404 is cached briefly, expires correctly, protects origin from repeated invalid requests
 
-## 1. Tinh huong thuc te
+## 1. Tình huống thực tế
 
-### Ke tan cong va may khach buggy
+### Kẻ tấn công và máy khách buggy
 
-Mot ke tan cong — hoac don gian la mot con bot crawl bi cau hinh sai, mot client SDK bi
-loop retry, hay mot trinh duyet cu cua nguoi dung lien tuc goi lai URL bi hong — bat dau
-bom request den nhung product ID khong ton tai:
+Một kẻ tấn công — hoặc đơn giản là một con bot crawl bị cấu hình sai, một client SDK bị
+loop retry, hay một trình duyệt cũ của người dùng liên tục gọi lại URL bị hỏng — bắt đầu
+bom request đến những product ID không tồn tại:
 
 ```text
 GET /api/products/9999999 -> 404
-GET /api/products/9999999 -> 404  (lai)
-GET /api/products/9999999 -> 404  (lai nua)
-GET /api/products/8888888 -> 404  (ID khac cung khong ton tai)
-GET /api/products/8888888 -> 404  (lai)
-... 10,000 requests nua cho hang nghin ID khong ton tai khac
+GET /api/products/9999999 -> 404  (lại)
+GET /api/products/9999999 -> 404  (lại nữa)
+GET /api/products/8888888 -> 404  (ID khác cũng không tồn tại)
+GET /api/products/8888888 -> 404  (lại)
+... 10,000 requests nữa cho hàng nghìn ID không tồn tại khác
 ```
 
-Tuong tuong 10,000 requests, 10,000 product IDs khac nhau, tat ca deu 404.
-Khong mot request nao co san pham thuc su. Khong mot request nao dem lai doanh thu.
+Tưởng tượng 10,000 requests, 10,000 product IDs khác nhau, tất cả đều 404.
+Không một request nào có sản phẩm thực sự. Không một request nào đem lại doanh thu.
 
-### Dieu gi xay ra neu KHONG CO negative caching?
+### Điều gì xảy ra nếu KHÔNG CÓ negative caching?
 
 ```text
 Client                CDN/Varnish              Origin (App + DB)
@@ -33,44 +33,44 @@ Client                CDN/Varnish              Origin (App + DB)
   |--- GET /prd/9999 -->|                         |
   |                      |--- GET /prd/9999 ------>|
   |                      |                         |--- SELECT * FROM products WHERE id=9999
-  |                      |                         |--- DB tra ve: 0 rows (not found)
-  |                      |                         |--- App logic: kiem tra cache, check cache
+  |                      |                         |--- DB trả về: 0 rows (not found)
+  |                      |                         |--- App logic: kiểm tra cache, check cache
   |                      |                         |          warmer, validate input, build
   |                      |                         |          response body, log, metrics
   |                      |<--- 404 JSON -----------|
   |<--- 404 MISS -------|                         |
   |                      |                         |
-  |--- GET /prd/9999 -->|  (lai, request thu 2)   |
-  |                      |--- GET /prd/9999 ------>|  <-- LAI VAO ORIGIN!
-  |                      |                         |--- LAI SELECT * FROM products...
-  |                      |                         |--- LAI 0 rows
-  |                      |                         |--- LAI toan bo pipeline xu ly
+  |--- GET /prd/9999 -->|  (lại, request thứ 2)   |
+  |                      |--- GET /prd/9999 ------>|  <-- LẠI VÀO ORIGIN!
+  |                      |                         |--- LẠI SELECT * FROM products...
+  |                      |                         |--- LẠI 0 rows
+  |                      |                         |--- LẠI toàn bộ pipeline xử lý
   |                      |<--- 404 JSON -----------|
   |<--- 404 MISS -------|                         |
   |                      |                         |
-  |--- GET /prd/8888 -->|  (ID khac, cung loi)    |
-  |                      |--- GET /prd/8888 ------>|  <-- VAO ORIGIN LAN NUA!
-  |                      |                         |--- LAI SELECT... LAI 0 rows...
+  |--- GET /prd/8888 -->|  (ID khác, cùng lỗi)    |
+  |                      |--- GET /prd/8888 ------>|  <-- VÀO ORIGIN LẦN NỮA!
+  |                      |                         |--- LẠI SELECT... LẠI 0 rows...
 ```
 
-**Moi request 404 deu MISS va di thang toi origin.** Origin phai:
+**Mỗi request 404 đều MISS và đi thẳng tới origin.** Origin phải:
 
 ```text
-1. Nhan HTTP request tu Varnish
+1. Nhận HTTP request từ Varnish
 2. Parse URL, extract product ID
-3. Validate input (ID co hop le khong?)
+3. Validate input (ID có hợp lệ không?)
 4. Query database: SELECT * FROM products WHERE id = ?
-5. Database scan index, tra ve 0 rows
-6. App tao JSON response body: { "success": false, "error": "not found" }
+5. Database scan index, trả về 0 rows
+6. App tạo JSON response body: { "success": false, "error": "not found" }
 7. Serialize JSON
-8. Gui response ve Varnish
+8. Gửi response về Varnish
 9. Ghi log
 10. Emit metrics
 ```
 
-Moi buoc tren tieu ton CPU, memory, database connection, I/O. Voi 10,000 request
-404, origin tieu ton **tai nguyen nhu phuc vu 10,000 request 200** — nhung gia tri
-kinh doanh mang lai **bang 0**.
+Mỗi bước trên tiêu tốn CPU, memory, database connection, I/O. Với 10,000 request
+404, origin tiêu tốn **tài nguyên như phục vụ 10,000 request 200** — nhưng giá trị
+kinh doanh mang lại **bằng 0**.
 
 ### Hậu quả cụ thể của việc không negative-cache
 
@@ -120,36 +120,36 @@ Negative caching là **CDN đứng ra hứng chịu impact của traffic xấu/l
 origin. CDN nói: "404 này tao đã thấy rồi, tao sẽ trả lời thay mày trong X giây,
 đừng làm phiền origin nữa."
 
-### Phan biet cac nguon goc cua 404 traffic
+### Phân biệt các nguồn gốc của 404 traffic
 
-404 requests co the den tu nhieu nguon khac nhau, va moi nguon co anh huong
-khac nhau den origin:
+404 requests có thể đến từ nhiều nguồn khác nhau, và mỗi nguồn có ảnh hưởng
+khác nhau đến origin:
 
 ```text
-NGUON 404                    TAN SUAT        ANH HUONG DEN ORIGIN
+NGUỒN 404                    TẦN SUẤT        ẢNH HƯỞNG ĐẾN ORIGIN
 ───────────────────────────  ──────────────  ──────────────────────────
-Broken internal links        Thap - Trung    Tuong doi thap
-(app link sai)                               (chi user click moi bi)
+Broken internal links        Thấp - Trung    Tương đối thấp
+(app link sai)                               (chỉ user click mới bị)
 
 Old external links           Trung - Cao     Cao
-(SEO backlink cu)                            (Google bot crawl lien tuc)
+(SEO backlink cũ)                            (Google bot crawl liên tục)
 
-Bot scanning / crawling      Cao             Rat cao
-(Googlebot, Ahrefs, ...)                     (50k+ requests/ngay)
+Bot scanning / crawling      Cao             Rất cao
+(Googlebot, Ahrefs, ...)                     (50k+ requests/ngày)
 
-Malicious scanning           Khong doan      RAT CAO
-(DDoS, vulnerability probe)  truoc duoc      (Co the la tan cong thuc su)
+Malicious scanning           Không đoán      RẤT CAO
+(DDoS, vulnerability probe)  trước được      (Có thể là tấn công thực sự)
 
-Client retry loop            Dot bien        Cao dot bien
-(SDK bug, network error)                     (Co the 10k requests/s)
+Client retry loop            Đột biến        Cao đột biến
+(SDK bug, network error)                     (Có thể 10k requests/s)
 
-Deleted product IDs          Vua phai        Vua phai
-(business-as-usual)                          (Traffic tu user that)
+Deleted product IDs          Vừa phải        Vừa phải
+(business-as-usual)                          (Traffic từ user thật)
 ```
 
-Neu khong co negative caching, TAT CA cac nguon nay deu bi origin xu ly nhu nhau.
-Origin khong the phan biet "request nay la tu user that click broken link" hay
-"request nay la tu bot tan cong".
+Nếu không có negative caching, TẤT CẢ các nguồn này đều bị origin xử lý như nhau.
+Origin không thể phân biệt "request này là từ user thật click broken link" hay
+"request này là từ bot tấn công".
 
 ### "Expected 404" — không phải 404 nào cũng là lỗi
 
@@ -235,91 +235,91 @@ t=7s    Request #3: GET /api/cached/missing/missing-1734567890
         -> Origin counter: 2 (tăng từ 1 lên 2)
 ```
 
-## 3. Vi sao test o CDN layer
+## 3. Vì sao test ở CDN layer
 
-### Negative caching la chinh sach CUA CDN
+### Negative caching là chính sách CỦA CDN
 
-Day la mot diem quan trong ma nhieu nguoi bo qua:
+Đây là một điểm quan trọng mà nhiều người bỏ qua:
 
 ```text
 App/Origin                     CDN/Varnish                   Client
 ───────────────                ────────────────               ─────────
-App chi biet:                  CDN quyet dinh:               Client thay:
-"Co request,                   404 nay co cache            "404 Not Found"
-tao xu ly,                      khong?
-tra ve 404"                    Cache bao lau?
-                               (bao nhieu giay?)
+App chỉ biết:                  CDN quyết định:               Client thấy:
+"Có request,                   404 này có cache              "404 Not Found"
+tao xử lý,                      không?
+trả về 404"                    Cache bao lâu?
+                               (bao nhiêu giây?)
 
-App KHONG quyet dinh           CDN LA NOI DUY NHAT           Client khong biet
-404 co duoc cache              quyet dinh chinh             (va khong can biet)
-hay khong                      sach negative               CDN da cache response
-                               caching                      nay hay chua
+App KHÔNG quyết định           CDN LÀ NƠI DUY NHẤT           Client không biết
+404 có được cache              quyết định chính              (và không cần biết)
+hay không                       sách negative               CDN đã cache response
+                               caching                      này hay chưa
 ```
 
-App chi tra ve HTTP 404. App khong the ra lenh: "hay cache cai 404 nay."
-CDN/Varnish la noi quyet dinh:
+App chỉ trả về HTTP 404. App không thể ra lệnh: "hãy cache cái 404 này."
+CDN/Varnish là nơi quyết định:
 
-1. **Co cache 404 khong?** — Quyet dinh trong `vcl_backend_response`:
+1. **Có cache 404 không?** — Quyết định trong `vcl_backend_response`:
    ```vcl
    if (beresp.status == 404 || beresp.status == 410) {
-       set beresp.ttl = 15s;   // <-- CDN quyet dinh cache 15s
+       set beresp.ttl = 15s;   // <-- CDN quyết định cache 15s
    }
    ```
 
-2. **Cache bao lau?** — TTL la policy cua CDN, khong phai cua app:
-   - 404 (not found): 15s — ngu, resource co the duoc tao ra sau vai giay
-   - 410 (gone): 86400s (24h) — resource da bi xoa vinh vien, cache lau hon
-   - 403 (forbidden): 0s (khong cache) — vi authorization co the thay doi
+2. **Cache bao lâu?** — TTL là policy của CDN, không phải của app:
+   - 404 (not found): 15s — ngắn, resource có thể được tạo ra sau vài giây
+   - 410 (gone): 86400s (24h) — resource đã bị xóa vĩnh viễn, cache lâu hơn
+   - 403 (forbidden): 0s (không cache) — vì authorization có thể thay đổi
 
-3. **Header X-Negative-Cache** — CDN danh dau de observability:
+3. **Header X-Negative-Cache** — CDN đánh dấu để observability:
    ```vcl
    set beresp.http.X-Negative-Cache = "true";
    ```
 
-### Tai sao KHONG TEST O APP LAYER?
+### Tại sao KHÔNG TEST Ở APP LAYER?
 
 ```text
-NEU TEST O APP LAYER:
-  -> App tra 404 -> test pass
-  -> Nhung KHONG BIET CDN co cache 404 nay khong
-  -> Nhung KHONG BIET TTL cua negative cache la bao nhieu
-  -> Nhung KHONG BIET X-Negative-Cache header co duoc them vao khong
-  -> Nhung KHONG BIET negative cache co expire dung han khong
-  -> App-layer test khong the tra loi bat ky cau hoi CDN nao
+NẾU TEST Ở APP LAYER:
+  -> App trả 404 -> test pass
+  -> Nhưng KHÔNG BIẾT CDN có cache 404 này không
+  -> Nhưng KHÔNG BIẾT TTL của negative cache là bao nhiêu
+  -> Nhưng KHÔNG BIẾT X-Negative-Cache header có được thêm vào không
+  -> Nhưng KHÔNG BIẾT negative cache có expire đúng hạn không
+  -> App-layer test không thể trả lời bất kỳ câu hỏi CDN nào
 
-TEST O CDN LAYER:
+TEST Ở CDN LAYER:
   -> Request qua CDN (http://localhost:80)
-  -> Kiem tra X-Cache: HIT hay MISS
-  -> Kiem tra X-Negative-Cache: true
-  -> Kiem tra origin counter: 1 -> 1 -> 2
-  -> Kiem tra status code van la 404 (khong bi CDN bien thanh 200)
-  -> Day la nhung thong tin CHI CO O CDN layer
+  -> Kiểm tra X-Cache: HIT hay MISS
+  -> Kiểm tra X-Negative-Cache: true
+  -> Kiểm tra origin counter: 1 -> 1 -> 2
+  -> Kiểm tra status code vẫn là 404 (không bị CDN biến thành 200)
+  -> Đây là những thông tin CHỈ CÓ Ở CDN layer
 ```
 
-Negative caching thuoc ve **CDN-edge behavior**. No la mot chinh sach ma CDN
-van hanh doc lap voi application. Test o app layer co the biet app tra 404 dung,
-nhung khong the biet CDN co bao ve origin khoi 404 traffic lap lai hay khong.
+Negative caching thuộc về **CDN-edge behavior**. Nó là một chính sách mà CDN
+vận hành độc lập với application. Test ở app layer có thể biết app trả 404 đúng,
+nhưng không thể biết CDN có bảo vệ origin khỏi 404 traffic lặp lại hay không.
 
-### VCL la noi duy nhat quyet dinh
+### VCL là nơi duy nhất quyết định
 
 ```text
-BOX: AI QUYET DINH VIEC NEGATIVE CACHING?
+BOX: AI QUYẾT ĐỊNH VIỆC NEGATIVE CACHING?
 
- App (Go/Python/Node)  -->  Chi tra ve HTTP status code
-                             App khong the set "hay cache
-                             cai 404 nay trong 15s"
-                             (App co the set Cache-Control
-                             nhung CDN override trong VCL)
+ App (Go/Python/Node)  -->  Chỉ trả về HTTP status code
+                             App không thể set "hãy cache
+                             cái 404 này trong 15s"
+                             (App có thể set Cache-Control
+                             nhưng CDN override trong VCL)
 
- VCL (Varnish config)  -->  LA NOI QUYET DINH DUY NHAT:
-                             - Status code nao duoc negative-cache?
-                             - TTL bao nhieu?
-                             - Co tag X-Negative-Cache khong?
-                             - Co cho phep grace (stale serving)
-                               cho negative cache khong?
+ VCL (Varnish config)  -->  LÀ NƠI QUYẾT ĐỊNH DUY NHẤT:
+                             - Status code nào được negative-cache?
+                             - TTL bao nhiêu?
+                             - Có tag X-Negative-Cache không?
+                             - Có cho phép grace (stale serving)
+                               cho negative cache không?
 
- => VCL la single source of truth cho negative caching policy
- => Test CDN layer la cach DUY NHAT de verify policy nay hoat dong
+ => VCL là single source of truth cho negative caching policy
+ => Test CDN layer là cách DUY NHẤT để verify policy này hoạt động
 ```
 
 ## 4. Topology & precondition
@@ -335,72 +335,72 @@ Control path (cho origin counter):
   k6 -> http://localhost:8088/ops/app/cdn/origin/request-counts
   k6 -> http://localhost:8088/ops/app/cdn/origin/request-counts/reset
 
-Event path: khong su dung trong case nay
+Event path: không sử dụng trong case này
 ```
 
 ### Precondition
 
 ```text
-1. Origin counters duoc reset ve 0
+1. Origin counters được reset về 0
    POST /ops/app/cdn/origin/request-counts/reset
 
-2. Origin profile duoc reset ve default
+2. Origin profile được reset về default
    POST /ops/app/cdn/origin/reset
 
-3. Duong dan missing duoc tao dong de dam bao isolated test:
+3. Đường dẫn missing được tạo động để đảm bảo isolated test:
    buildCachedMissingPath("missing-{timestamp}", { ttl_seconds: 5 })
    -> /api/cached/missing/missing-1734567890?ttl_seconds=5
 
-   Tai sao can dynamic path?
-   - Tranh pollution tu previous runs
-   - Moi lan chay la mot test sach, khong bi anh huong boi cache cu
-   - Timestamp dam bao uniqueness
+   Tại sao cần dynamic path?
+   - Tránh pollution từ previous runs
+   - Mỗi lần chạy là một test sạch, không bị ảnh hưởng bởi cache cũ
+   - Timestamp đảm bảo uniqueness
 
-4. Ban URL de xoa cache cu (neu co):
+4. Ban URL để xóa cache cũ (nếu có):
    POST /ops/app/cdn/cache/ban-url { url: "/api/cached/missing/missing-..." }
 ```
 
-### buildCachedMissingPath() — path tao 404 expected
+### buildCachedMissingPath() — path tạo 404 expected
 
 ```text
-buildCachedMissingPath(key, params) tra ve:
+buildCachedMissingPath(key, params) trả về:
 
   /api/cached/missing/{key}?ttl_seconds={n}&stale_if_error_seconds={m}
 
 Handler Go (GetCachedMissing):
-  1. Nhan request
-  2. Increment origin counter cho path nay
-  3. Neu co origin_delay_ms -> sleep
+  1. Nhận request
+  2. Increment origin counter cho path này
+  3. Nếu có origin_delay_ms -> sleep
   4. Set Cache-Control header: public, max-age={ttl}, s-maxage={ttl},
      stale-if-error={stale_if_error}
   5. Set X-Negative-Cache: true
   6. Set X-Origin-Request-Count: {count}
-  7. Tra ve HTTP 404 JSON: { success: false, error: "cached object not found",
+  7. Trả về HTTP 404 JSON: { success: false, error: "cached object not found",
      cacheable_not_found: true, request_key: "..." }
 
-Day LA expected 404: app xu ly binh thuong, tra ve loi "khong tim thay",
-danh dau object nay co the cache duoc (cacheable_not_found: true).
+Đây LÀ expected 404: app xử lý bình thường, trả về lỗi "không tìm thấy",
+đánh dấu object này có thể cache được (cacheable_not_found: true).
 ```
 
 ## 5. Script deep-dive
 
-### Tong quan script
+### Tổng quan script
 
-Script `11-negative-caching.js` (84 lines) la mot sequence test chinh xac, tuong tu
-nhu case 08 (TTL expiry) va case 09 (stale-while-error): `vus=1, iterations=1`.
-No chay mot sequence cac request chinh xac, kiem tra tung response mot.
+Script `11-negative-caching.js` (84 lines) là một sequence test chính xác, tương tự
+như case 08 (TTL expiry) và case 09 (stale-while-error): `vus=1, iterations=1`.
+Nó chạy một sequence các request chính xác, kiểm tra từng response một.
 
 ```text
-vus: 1, iterations: 1  -->  Mot VU duy nhat chay toan bo sequence
-                            Khong can nhieu VU vi day la correctness test,
-                            khong phai load test
+vus: 1, iterations: 1  -->  Một VU duy nhất chạy toàn bộ sequence
+                            Không cần nhiều VU vì đây là correctness test,
+                            không phải load test
 ```
 
-### setup() — Chuan bi moi truong sach
+### setup() — Chuẩn bị môi trường sạch
 
 ```javascript
 export function setup() {
-  // Tao dynamic path de tranh cache pollution
+  // Tạo dynamic path để tránh cache pollution
   const path = buildCachedMissingPath(`missing-${Date.now()}`, {
     ttl_seconds: NEGATIVE_TTL_SECONDS,  // default: 5
   });
@@ -419,7 +419,7 @@ export function setup() {
 
 ### Default function — 3 phase test
 
-**Phase 1: Tao negative cache + verify HIT**
+**Phase 1: Tạo negative cache + verify HIT**
 
 ```javascript
 // --- REQUEST #1: MISS (cold) ---
@@ -473,7 +473,7 @@ assertCacheState(afterExpiry, 'MISS', 'negative after expiry');
 // nhưng vẫn có X-Negative-Cache: true từ response origin
 ```
 
-**Verification #2: Origin count tang len 2**
+**Verification #2: Origin count tăng lên 2**
 
 ```javascript
 counts = getOriginRequestCounts();
@@ -485,7 +485,7 @@ if (requestCount !== 2) {
 }
 ```
 
-**Teardown: Don dep**
+**Teardown: Dọn dẹp**
 
 ```javascript
 export function teardown() {
@@ -494,7 +494,7 @@ export function teardown() {
 }
 ```
 
-### Bang tong ket sequence
+### Bảng tổng kết sequence
 
 ```text
 PHASE  | REQUEST | EXPECTED STATUS | EXPECTED CACHE | X-NEG-CACHE | ORIGIN COUNT
@@ -513,217 +513,217 @@ setup  | reset   | -               | -              | -           | 0
 
 ```text
 NEGATIVE_TTL_SECONDS  (default: 5)
-  -> TTL cho negative cache. Object 404 se duoc cache trong N giay nay.
-  -> Truyen vao buildCachedMissingPath() de set Cache-Control header cua origin.
+  -> TTL cho negative cache. Object 404 sẽ được cache trong N giây này.
+  -> Truyền vào buildCachedMissingPath() để set Cache-Control header của origin.
 
-NEGATIVE_WAIT_SECONDS  (default: NEGATIVE_TTL_SECONDS + 1, tuc la 6)
-  -> Thoi gian sleep de dam bao negative cache da het han.
-  -> +1s la safety margin — dam bao object chac chan da expired.
-  -> NOTE: Trong VCL, negative TTL mac dinh la 15s. Nhung script override
-     bang cach set ?ttl_seconds=5 trong query string, origin set Cache-Control
-     tuong ung, VCL ton trong Cache-Control tu origin.
+NEGATIVE_WAIT_SECONDS  (default: NEGATIVE_TTL_SECONDS + 1, tức là 6)
+  -> Thời gian sleep để đảm bảo negative cache đã hết hạn.
+  -> +1s là safety margin — đảm bảo object chắc chắn đã expired.
+  -> NOTE: Trong VCL, negative TTL mặc định là 15s. Nhưng script override
+     bằng cách set ?ttl_seconds=5 trong query string, origin set Cache-Control
+     tương ứng, VCL tôn trọng Cache-Control từ origin.
 ```
 
-### Luu y ve TTL interaction
+### Lưu ý về TTL interaction
 
 ```text
-Mat xich quan trong: TTL tu origin (qua Cache-Control header) vs VCL default.
+Mắt xích quan trọng: TTL từ origin (qua Cache-Control header) vs VCL default.
 
 Origin (GetCachedMissing handler):
   -> Set Cache-Control: public, max-age={ttl}, s-maxage={ttl}
-  -> Voi ttl_seconds=5: max-age=5, s-maxage=5
+  -> Với ttl_seconds=5: max-age=5, s-maxage=5
 
 VCL (vcl_backend_response):
-  -> Doc beresp.ttl tu Cache-Control cua origin
-  -> Neu beresp.status == 404 && beresp.ttl <= 0s:
+  -> Đọc beresp.ttl từ Cache-Control của origin
+  -> Nếu beresp.status == 404 && beresp.ttl <= 0s:
      set beresp.ttl = 15s  (VCL default)
-  -> Neu beresp.status == 404 && beresp.ttl > 0s:
-     KHONG override — ton trong TTL tu origin
+  -> Nếu beresp.status == 404 && beresp.ttl > 0s:
+     KHÔNG override — tôn trọng TTL từ origin
 
-  => Khi origin set max-age=5, VCL ton trong, negative TTL = 5s
-  => Khi origin khong set (ttl <= 0), VCL set default = 15s
+  => Khi origin set max-age=5, VCL tôn trọng, negative TTL = 5s
+  => Khi origin không set (ttl <= 0), VCL set default = 15s
 ```
 
 ## 6. Negative caching model deep-dive
 
-### Status codes nao nen duoc negative-cache
+### Status codes nào nên được negative-cache
 
-Day la cau hoi kien truc quan trong nhat cua negative caching.
-**Khong phai error code nao cung nen cache.** Quyet dinh dua vao
-y nghia kinh doanh va kha nang thay doi cua resource.
+Đây là câu hỏi kiến trúc quan trọng nhất của negative caching.
+**Không phải error code nào cũng nên cache.** Quyết định dựa vào
+ý nghĩa kinh doanh và khả năng thay đổi của resource.
 
 ```text
-BANG: STATUS CODE VA QUYET DINH NEGATIVE CACHING
+BẢNG: STATUS CODE VÀ QUYẾT ĐỊNH NEGATIVE CACHING
 ──────────────────────────────────────────────────────────────────────
 
 NÊN NEGATIVE-CACHE (expected business outcomes):
 ──────────────────────────────────────────────
-  STATUS    | Y NGHIA              | TTL GOI Y    | LY DO
+  STATUS    | Ý NGHĨA              | TTL GỢI Ý    | LÝ DO
   ──────────┼──────────────────────┼──────────────┼──────────────────
-  404       | Not Found            | 1s - 60s     | Resource chua
-            |                      | (thuong 15s) | ton tai, nhung co
-            |                      |              | the duoc tao ra
-            |                      |              | SOM. TTL ngan de
-            |                      |              | tranh stale 404.
+  404       | Not Found            | 1s - 60s     | Resource chưa
+            |                      | (thường 15s) | tồn tại, nhưng có
+            |                      |              | thể được tạo ra
+            |                      |              | SỚM. TTL ngắn để
+            |                      |              | tránh stale 404.
   ──────────┼──────────────────────┼──────────────┼──────────────────
-  410       | Gone                 | 1h - 24h     | Resource da bi xoa
-            |                      |              | VINH VIEN. Khong
-            |                      |              | co kha nang xuat
-            |                      |              | hien tro lai.
-            |                      |              | TTL dai hon 404.
+  410       | Gone                 | 1h - 24h     | Resource đã bị xóa
+            |                      |              | VĨNH VIỄN. Không
+            |                      |              | có khả năng xuất
+            |                      |              | hiện trở lại.
+            |                      |              | TTL dài hơn 404.
   ──────────┼──────────────────────┼──────────────┼──────────────────
-  403       | Forbidden            | 0s - 10s     | CÂN NHAC KY.
-            | (carefully)          |              | Authorization co
-            |                      |              | the thay doi khi
-            |                      |              | user login. Chi
-            |                      |              | cache 403 neu la
-            |                      |              | resource that su
-            |                      |              | khong the truy
-            |                      |              | cap (blocked geo).
+  403       | Forbidden            | 0s - 10s     | CÂN NHẮC KỸ.
+            | (carefully)          |              | Authorization có
+            |                      |              | thể thay đổi khi
+            |                      |              | user login. Chỉ
+            |                      |              | cache 403 nếu là
+            |                      |              | resource thực sự
+            |                      |              | không thể truy
+            |                      |              | cập (blocked geo).
   ──────────┼──────────────────────┼──────────────┼──────────────────
-  400       | Bad Request          | HAU NHU      | Request bi loi do
-            | (rarely)             | KHONG BAO GIO| client sai format.
-            |                      |              | Moi bad request
-            |                      |              | la unique. Cache
-            |                      |              | khong co y nghia.
+  400       | Bad Request          | HẦU NHƯ      | Request bị lỗi do
+            | (rarely)             | KHÔNG BAO GIỜ| client sai format.
+            |                      |              | Mỗi bad request
+            |                      |              | là unique. Cache
+            |                      |              | không có ý nghĩa.
 
 KHÔNG ĐƯỢC NEGATIVE-CACHE (server errors):
 ──────────────────────────────────────────
-  STATUS    | Y NGHIA              | LY DO KHONG DUOC CACHE
+  STATUS    | Ý NGHĨA              | LÝ DO KHÔNG ĐƯỢC CACHE
   ──────────┼──────────────────────┼────────────────────────────────
-  500       | Internal Server      | Day la LOI HE THONG. Cache 500
-            | Error                | se CHE GIAU loi, khien team
-            |                      | khong phat hien ra van de.
-            |                      | Origin can thay moi 500 de debug.
+  500       | Internal Server      | Đây là LỖI HỆ THỐNG. Cache 500
+            | Error                | sẽ CHE GIẤU lỗi, khiến team
+            |                      | không phát hiện ra vấn đề.
+            |                      | Origin cần thấy mọi 500 để debug.
   ──────────┼──────────────────────┼────────────────────────────────
-  502       | Bad Gateway          | Upstream service dang down.
+  502       | Bad Gateway          | Upstream service đang down.
             |                      | Cache 502 = fake "OK" khi
-            |                      | upstream that su chet.
-            |                      | Dung stale-if-error thay vi cache.
+            |                      | upstream thực sự chết.
+            |                      | Dùng stale-if-error thay vì cache.
   ──────────┼──────────────────────┼────────────────────────────────
-  503       | Service Unavailable  | Maintenance hoac overload.
-            |                      | Neu cache 503, user se tuong
-            |                      | service down vinh vien.
-            |                      | Dung stale-if-error thay vi cache.
+  503       | Service Unavailable  | Maintenance hoặc overload.
+            |                      | Nếu cache 503, user sẽ tưởng
+            |                      | service down vĩnh viễn.
+            |                      | Dùng stale-if-error thay vì cache.
   ──────────┼──────────────────────┼────────────────────────────────
-  504       | Gateway Timeout      | Khong cache — can retry.
+  504       | Gateway Timeout      | Không cache — cần retry.
 ```
 
-### Cach VCL hien thuc hoa negative caching
+### Cách VCL hiện thực hóa negative caching
 
-VCL la single source of truth cho negative caching policy. Day la logic
-trong `vcl_backend_response` cua du an:
+VCL là single source of truth cho negative caching policy. Đây là logic
+trong `vcl_backend_response` của dự án:
 
 ```vcl
 sub vcl_backend_response {
-    // (1) Server errors (500+) — TUYET DOI KHONG CACHE
+    // (1) Server errors (500+) — TUYỆT ĐỐI KHÔNG CACHE
     if (beresp.status >= 500) {
         set beresp.ttl = 0s;
         set beresp.uncacheable = true;
         return (deliver);
     }
 
-    // (2) Negative caching cho 404 va 410
+    // (2) Negative caching cho 404 và 410
     if (beresp.status == 404 || beresp.status == 410) {
         if (beresp.ttl <= 0s) {
             set beresp.ttl = 15s;  // Default negative TTL
         }
-        set beresp.grace = 30s;    // Cho phep stale serving khi
+        set beresp.grace = 30s;    // Cho phép stale serving khi
         set beresp.keep = 120s;    // origin unhealthy
         set beresp.http.X-Negative-Cache = "true";
         return (deliver);
     }
 
-    // (3) Response co Set-Cookie -> private, khong cache
+    // (3) Response có Set-Cookie -> private, không cache
     if (beresp.http.Set-Cookie) {
         set beresp.ttl = 0s;
         set beresp.uncacheable = true;
         return (deliver);
     }
 
-    // (4) Cache-Control: no-store|private -> tuan thu
+    // (4) Cache-Control: no-store|private -> tuân thủ
     if (beresp.http.Cache-Control ~ "(?i)no-store|private") {
         set beresp.ttl = 0s;
         set beresp.uncacheable = true;
         return (deliver);
     }
 
-    // (5) Fallback TTLs cho cac path khong co cache header
+    // (5) Fallback TTLs cho các path không có cache header
     // ...
 }
 ```
 
-### Phan tich VCL logic
+### Phân tích VCL logic
 
 ```text
-THU TU XU LY (quan trong):
+THỨ TỰ XỬ LÝ (quan trọng):
 ───────────────────────────
-1. 500+ -> KHONG cache (exit som nhat)
-   Dieu nay DAM BAO server errors khong bao gio bi cache, du app co
-   set Cache-Control the nao di nua. VCL override app cho 5xx.
+1. 500+ -> KHÔNG cache (exit sớm nhất)
+   Điều này ĐẢM BẢO server errors không bao giờ bị cache, dù app có
+   set Cache-Control thế nào đi nữa. VCL override app cho 5xx.
 
 2. 404/410 -> NEGATIVE cache
-   - Neu app da set TTL (qua Cache-Control) -> ton trong TTL cua app
-   - Neu app khong set TTL -> VCL set default 15s
-   - Luon set X-Negative-Cache: true (observability)
-   - Luon set grace=30s (cho phep stale serving)
-   - Luon set keep=120s (giu object trong cache de phuc vu grace)
+   - Nếu app đã set TTL (qua Cache-Control) -> tôn trọng TTL của app
+   - Nếu app không set TTL -> VCL set default 15s
+   - Luôn set X-Negative-Cache: true (observability)
+   - Luôn set grace=30s (cho phép stale serving)
+   - Luôn set keep=120s (giữ object trong cache để phục vụ grace)
 
-   Grace cho negative cache? Tai sao?
-   -> Neu origin gap loi (500), CDN co the serve 404 tu cache
-      thay vi pass error 500 den client. Day la "stale-if-error"
-      nhung ap dung cho ca negative cache.
-   -> 404 stale van la 404 — tot hon la 500.
+   Grace cho negative cache? Tại sao?
+   -> Nếu origin gặp lỗi (500), CDN có thể serve 404 từ cache
+      thay vì pass error 500 đến client. Đây là "stale-if-error"
+      nhưng áp dụng cho cả negative cache.
+   -> 404 stale vẫn là 404 — tốt hơn là 500.
 
-3. Set-Cookie -> KHONG cache
-   Response co Set-Cookie la private, khong the cache o shared cache.
+3. Set-Cookie -> KHÔNG cache
+   Response có Set-Cookie là private, không thể cache ở shared cache.
 
-4. no-store|private -> KHONG cache
-   Tuan thu Cache-Control directive tu origin.
+4. no-store|private -> KHÔNG cache
+   Tuân thủ Cache-Control directive từ origin.
 
-5. Fallback TTLs -> Chi cho path cu the
+5. Fallback TTLs -> Chỉ cho path cụ thể
 ```
 
-### TTL cho negative cache: tai sao NGAN?
+### TTL cho negative cache: tại sao NGẮN?
 
 ```text
-SO SANH TTL:
+SO SÁNH TTL:
 
 Positive cache (200 OK):
   /api/sim/products/1              TTL = 90s
   /api/sim/products/categories     TTL = 300s
   /api/sim/products/homefeed       TTL = 20s
-  Muc dich: serve nhanh, giam origin load
+  Mục đích: serve nhanh, giảm origin load
 
 Negative cache (404/410):
   /api/cached/missing/*            TTL = 15s (default)
   /api/sim/products/999999         TTL = 15s (default)
-  Muc dich: bao ve origin, nhung khong block resource moi
+  Mục đích: bảo vệ origin, nhưng không block resource mới
 
-  Tai sao TTL NGAN?
+  Tại sao TTL NGẮN?
   ┌──────────────────────────────────────────────────────────────┐
-  │ Tinh huong: Product ID 99999 chua ton tai luc 10:00:00      │
-  │ CDN cache 404 voi TTL = 15s                                  │
+  │ Tình huống: Product ID 99999 chưa tồn tại lúc 10:00:00      │
+  │ CDN cache 404 với TTL = 15s                                  │
   │                                                              │
-  │ Neu TTL = 300s (5 phut):                                     │
-  │   Admin tao product ID 99999 luc 10:00:30                    │
-  │   User request ID 99999 luc 10:01:00                         │
-  │   -> Van thay 404 HIT (stale!)                               │
-  │   -> Product that su da ton tai nhung CDN van tra 404        │
-  │   -> Mat doanh thu trong 4.5 phut                            │
+  │ Nếu TTL = 300s (5 phút):                                     │
+  │   Admin tạo product ID 99999 lúc 10:00:30                    │
+  │   User request ID 99999 lúc 10:01:00                         │
+  │   -> Vẫn thấy 404 HIT (stale!)                               │
+  │   -> Product thực sự đã tồn tại nhưng CDN vẫn trả 404        │
+  │   -> Mất doanh thu trong 4.5 phút                            │
   │                                                              │
-  │ Neu TTL = 15s:                                               │
-  │   Admin tao product ID 99999 luc 10:00:30                    │
-  │   User request ID 99999 luc 10:01:00                         │
-  │   -> Cache da expire -> MISS -> origin -> 200 OK             │
-  │   -> User thay product that                                  │
-  │   -> Chi mat toi da 15s, khong phai 5 phut                   │
+  │ Nếu TTL = 15s:                                               │
+  │   Admin tạo product ID 99999 lúc 10:00:30                    │
+  │   User request ID 99999 lúc 10:01:00                         │
+  │   -> Cache đã expire -> MISS -> origin -> 200 OK             │
+  │   -> User thấy product thật                                  │
+  │   -> Chỉ mất tối đa 15s, không phải 5 phút                   │
   │                                                              │
   │ Rule of thumb:                                               │
-  │   TTL negative = MIN(thoi gian toi da co the co resource     │
-  │                      moi duoc tao, 60s)                      │
-  │   404: 1-60s vi resource co the duoc tao moi                 │
-  │   410: 86400s+ vi resource da bi xoa vinh vien               │
+  │   TTL negative = MIN(thời gian tối đa có thể có resource     │
+  │                      mới được tạo, 60s)                      │
+  │   404: 1-60s vì resource có thể được tạo mới                 │
+  │   410: 86400s+ vì resource đã bị xóa vĩnh viễn               │
   └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -732,224 +732,224 @@ Negative cache (404/410):
 ```text
 X-Negative-Cache: true
 
-Header nay duoc VCL them vao CHO MOI RESPONSE co nguon goc tu negative cache,
-du la HIT hay MISS. No la co hieu de monitoring tools biet:
+Header này được VCL thêm vào CHO MỌI RESPONSE có nguồn gốc từ negative cache,
+dù là HIT hay MISS. Nó là cờ hiệu để monitoring tools biết:
 
-  "Response nay la 404, va no CO THE da duoc cache."
-  (Khac voi 404 tu app ma CDN quyet dinh KHONG cache.)
+  "Response này là 404, và nó CÓ THỂ đã được cache."
+  (Khác với 404 từ app mà CDN quyết định KHÔNG cache.)
 
-Su dung X-Negative-Cache:
-  - Alert: neu ti le X-Negative-Cache HIT giam -> negative caching broken
-  - Debug: biet ngay response tu negative cache hay tu origin
-  - Dashboard: theo doi negative cache hit ratio rieng biet voi positive cache
+Sử dụng X-Negative-Cache:
+  - Alert: nếu tỉ lệ X-Negative-Cache HIT giảm -> negative caching broken
+  - Debug: biết ngay response từ negative cache hay từ origin
+  - Dashboard: theo dõi negative cache hit ratio riêng biệt với positive cache
 
-Luu y: Resonse MISS van co X-Negative-Cache: true vi origin da set header
-nay. VCL chi ADD header nay neu chua co tu origin, hoac OVERRIDE neu origin
-khong set.
+Lưu ý: Response MISS vẫn có X-Negative-Cache: true vì origin đã set header
+này. VCL chỉ ADD header này nếu chưa có từ origin, hoặc OVERRIDE nếu origin
+không set.
 ```
 
-### Grace va Keep cho negative cache
+### Grace và Keep cho negative cache
 
 ```text
 GRACE (30s) cho negative cache:
-  Neu origin unhealthy (backend probe fail):
-    -> CDN serve 404 stale TU CACHE
-    -> Client van nhan 404 (dung voi thuc te)
-    -> KHONG pass error 503/502 den client
-  Grace cho negative cache it quan trong hon grace cho positive cache
-  (404 stale khong co gia tri kinh doanh), nhung van tot hon 500.
+  Nếu origin unhealthy (backend probe fail):
+    -> CDN serve 404 stale TỪ CACHE
+    -> Client vẫn nhận 404 (đúng với thực tế)
+    -> KHÔNG pass error 503/502 đến client
+  Grace cho negative cache ít quan trọng hơn grace cho positive cache
+  (404 stale không có giá trị kinh doanh), nhưng vẫn tốt hơn 500.
 
 KEEP (120s) cho negative cache:
-  Giữ object trong cache sau khi het han de co the serve grace.
-  Sau 120s, object bi xoa hoan toan khoi cache.
+  Giữ object trong cache sau khi hết hạn để có thể serve grace.
+  Sau 120s, object bị xóa hoàn toàn khỏi cache.
 ```
 
-### Cach set negative TTL theo status code
+### Cách set negative TTL theo status code
 
-### Tuong tac giua origin Cache-Control va VCL default TTL
+### Tương tác giữa origin Cache-Control và VCL default TTL
 
-Mot diem quan trong trong negative caching la **ai la nguon su that cho TTL**:
+Một điểm quan trọng trong negative caching là **ai là nguồn sự thật cho TTL**:
 origin (qua Cache-Control header) hay VCL (qua `set beresp.ttl`)?
 
 ```text
-THU TU UU TIEN:
+THỨ TỰ ƯU TIÊN:
 
-1. Origin Cache-Control header (uu tien cao nhat)
-   Neu origin set Cache-Control: max-age=5, s-maxage=5
-   -> beresp.ttl = 5s (Varnish tu dong parse)
-   -> VCL kiem tra: if (beresp.ttl <= 0s) => FALSE (5 > 0)
-   -> VCL KHONG override => TTL = 5s
-   => Origin quyet dinh TTL
+1. Origin Cache-Control header (ưu tiên cao nhất)
+   Nếu origin set Cache-Control: max-age=5, s-maxage=5
+   -> beresp.ttl = 5s (Varnish tự động parse)
+   -> VCL kiểm tra: if (beresp.ttl <= 0s) => FALSE (5 > 0)
+   -> VCL KHÔNG override => TTL = 5s
+   => Origin quyết định TTL
 
 2. VCL default (fallback)
-   Neu origin KHONG set Cache-Control headers
+   Nếu origin KHÔNG set Cache-Control headers
    -> beresp.ttl = 0s (Varnish default)
-   -> VCL kiem tra: if (beresp.ttl <= 0s) => TRUE
+   -> VCL kiểm tra: if (beresp.ttl <= 0s) => TRUE
    -> VCL set: set beresp.ttl = 15s
-   => VCL quyet dinh TTL = 15s
+   => VCL quyết định TTL = 15s
 
-3. VCL override (kiem soat tuyet doi - can than!)
-   Neu VCL muon LUON set TTL rieng, bat chap origin:
-   set beresp.ttl = 15s;  // Khong kiem tra dieu kien
-   => VCL LUON quyet dinh TTL
-   => Nhung mat di su linh hoat cua origin
+3. VCL override (kiểm soát tuyệt đối - cẩn thận!)
+   Nếu VCL muốn LUÔN set TTL riêng, bất chấp origin:
+   set beresp.ttl = 15s;  // Không kiểm tra điều kiện
+   => VCL LUÔN quyết định TTL
+   => Nhưng mất đi sự linh hoạt của origin
 ```
 
-### Tai sao ton trong origin Cache-Control la quan trong?
+### Tại sao tôn trọng origin Cache-Control là quan trọng?
 
 ```text
-Loi ich cua viec origin set TTL:
-  - App developer biet ro nhat TTL phu hop
-  - Vi du: product detail page -> 90s
-  - Vi du: health check -> 1s
-  - Vi du: negative cache -> 5s (theo script)
-  - VCL chi la safety net (default 15s khi origin khong set)
+Lợi ích của việc origin set TTL:
+  - App developer biết rõ nhất TTL phù hợp
+  - Ví dụ: product detail page -> 90s
+  - Ví dụ: health check -> 1s
+  - Ví dụ: negative cache -> 5s (theo script)
+  - VCL chỉ là safety net (default 15s khi origin không set)
 
-Loi ich cua viec VCL co default:
-  - Origin developer co the QUEN set Cache-Control
-  - VCL default dam bao negative cache luon hoat dong
-  - Giam operational risk
-  - Tranh truong hop "quen set -> khong cache -> origin bi tan cong"
+Lợi ích của việc VCL có default:
+  - Origin developer có thể QUÊN set Cache-Control
+  - VCL default đảm bảo negative cache luôn hoạt động
+  - Giảm operational risk
+  - Tránh trường hợp "quên set -> không cache -> origin bị tấn công"
 
-Pattern toi uu (nhu trong du an nay):
-  Origin: set Cache-Control voi TTL phu hop
+Pattern tối ưu (như trong dự án này):
+  Origin: set Cache-Control với TTL phù hợp
   VCL:    if (beresp.ttl <= 0s) { set beresp.ttl = 15s; }
-         // Chi override khi origin khong set
-         // Ton trong origin khi origin set
+         // Chỉ override khi origin không set
+         // Tôn trọng origin khi origin set
 
   => Origin developer control TTL
-  => VCL la safety net
+  => VCL là safety net
 ```
 
-### Loi thuong gap: VCL LUON set TTL ma khong kiem tra
+### Lỗi thường gặp: VCL LUÔN set TTL mà không kiểm tra
 
 ```text
 ANTI-PATTERN:
   if (beresp.status == 404) {
-      set beresp.ttl = 15s;  // LUON set, bo qua origin Cache-Control
+      set beresp.ttl = 15s;  // LUÔN set, bỏ qua origin Cache-Control
   }
 
-  Voi cach nay:
-  - Origin set Cache-Control: max-age=2 -> VAN bi VCL override thanh 15s
-  - Origin set Cache-Control: max-age=60 -> VAN bi VCL override thanh 15s
-  - Origin KHONG the kiem soat TTL
-  - Case 11 script set ?ttl_seconds=5 -> bi VCL ignore -> TTL that su la 15s
-    -> NEGATIVE_WAIT_SECONDS=6 < 15s -> test FAIL vi chua expire!
+  Với cách này:
+  - Origin set Cache-Control: max-age=2 -> VẪN bị VCL override thành 15s
+  - Origin set Cache-Control: max-age=60 -> VẪN bị VCL override thành 15s
+  - Origin KHÔNG thể kiểm soát TTL
+  - Case 11 script set ?ttl_seconds=5 -> bị VCL ignore -> TTL thực sự là 15s
+    -> NEGATIVE_WAIT_SECONDS=6 < 15s -> test FAIL vì chưa expire!
 
-PATTERN DUNG (nhu du an nay):
+PATTERN ĐÚNG (như dự án này):
   if (beresp.status == 404 || beresp.status == 410) {
       if (beresp.ttl <= 0s) {
-          set beresp.ttl = 15s;  // Chi set khi origin KHONG set
+          set beresp.ttl = 15s;  // Chỉ set khi origin KHÔNG set
       }
   }
 
-  Voi cach nay:
-  - Origin set Cache-Control: max-age=5 -> beresp.ttl = 5s (ton trong origin)
-  - Origin KHONG set -> beresp.ttl = 0s -> VCL set 15s (safety net)
-  - Case 11 script set ?ttl_seconds=5 -> TTL dung = 5s -> test PASS
+  Với cách này:
+  - Origin set Cache-Control: max-age=5 -> beresp.ttl = 5s (tôn trọng origin)
+  - Origin KHÔNG set -> beresp.ttl = 0s -> VCL set 15s (safety net)
+  - Case 11 script set ?ttl_seconds=5 -> TTL đúng = 5s -> test PASS
 ```
 
-### Cach set negative TTL theo status code
+### Cách set negative TTL theo status code
 
 ```text
-PATTERN: Phan biet TTL theo status code:
+PATTERN: Phân biệt TTL theo status code:
 
 404 (Not Found):
   Default TTL: 15s
-  Ly do: resource co the duoc tao moi bat cu luc nao
+  Lý do: resource có thể được tạo mới bất cứ lúc nào
   Config VCL: set beresp.ttl = 15s
 
 410 (Gone):
-  Default TTL: 86400s (24h) hoac dai hon
-  Ly do: resource da bi xoa vinh vien, khong quay lai
-  Config VCL (them vao):
+  Default TTL: 86400s (24h) hoặc dài hơn
+  Lý do: resource đã bị xóa vĩnh viễn, không quay lại
+  Config VCL (thêm vào):
     if (beresp.status == 410) {
         set beresp.ttl = 86400s;
     }
 
-403 (Forbidden) — chi khi chac chan:
-  Default TTL: 5s (rat ngan)
-  Ly do: authorization co the thay doi (user login)
-  Chir cache 403 cho geo-blocked noi dung hoac IP-ban
-  Them dieu kien kiem tra truoc khi cache 403.
+403 (Forbidden) — chỉ khi chắc chắn:
+  Default TTL: 5s (rất ngắn)
+  Lý do: authorization có thể thay đổi (user login)
+  Chỉ cache 403 cho geo-blocked nội dung hoặc IP-ban
+  Thêm điều kiện kiểm tra trước khi cache 403.
 
-5xx: KHONG BAO GIO CACHE
+5xx: KHÔNG BAO GIỜ CACHE
   Config VCL: set beresp.ttl = 0s; set beresp.uncacheable = true
 ```
 
 ## 7. Negative vs Positive cache comparison
 
-### Bang so sanh toan dien
+### Bảng so sánh toàn diện
 
 ```text
-THUOC TINH          POSITIVE CACHE              NEGATIVE CACHE
+THUỘC TÍNH          POSITIVE CACHE              NEGATIVE CACHE
 ─────────────────── ─────────────────────────── ───────────────────────────
 Status code        200 (OK), 304 (Not Modified) 404 (Not Found), 410 (Gone)
 
-TTL                20s - 300s (phut)            1s - 60s (giay), 410: dai hon
+TTL                20s - 300s (phút)            1s - 60s (giây), 410: dài hơn
 
-Muc dich chinh     PERFORMANCE                  DEFENSE
-                   Tang toc do serve,           Bao ve origin khoi
-                   giam origin load cho          traffic xau/loi lap lai
-                   noi dung thuc su
+Mục đích chính     PERFORMANCE                  DEFENSE
+                   Tăng tốc độ serve,           Bảo vệ origin khỏi
+                   giảm origin load cho          traffic xấu/lỗi lặp lại
+                   nội dung thực sự
 
-Surrogate-Key      CO                           THUONG KHONG CAN
-                   De invalidate khi            Vi 404 khong co noi dung
-                   noi dung thay doi             de invalidate; TTL ngan
-                                                tu giai quyet
+Surrogate-Key      CÓ                           THƯỜNG KHÔNG CẦN
+                   Để invalidate khi            Vì 404 không có nội dung
+                   nội dung thay đổi             để invalidate; TTL ngắn
+                                                tự giải quyết
 
-Grace (stale)      120s (phuc vu khi            30s (phong ho)
-                   origin unhealthy)            It quan trong hon nhung
-                                                van co mat
+Grace (stale)      120s (phục vụ khi            30s (phòng hờ)
+                   origin unhealthy)            Ít quan trọng hơn nhưng
+                                                vẫn có mặt
 
-Keep               600s (giu trong cache)       120s
+Keep               600s (giữ trong cache)       120s
 
-Header danh dau    Khong can header dac biet    X-Negative-Cache: true
+Header đánh dấu    Không cần header đặc biệt    X-Negative-Cache: true
 
-Cache key          Path + variant headers       Path (thuong khong can
-                   (language, geo, device...)    variant vi 404 la 404)
+Cache key          Path + variant headers       Path (thường không cần
+                   (language, geo, device...)    variant vì 404 là 404)
 
-Hit ratio target   90-99% (cao)                 Khong dat target cao vi
-                                                TTL ngan + it traffic 404
+Hit ratio target   90-99% (cao)                 Không đặt target cao vì
+                                                TTL ngắn + ít traffic 404
 
-Rui ro neu qua     STALE DATA                   STALE 404
-TTL dai            User thay noi dung cu        Resource moi da duoc tao
-                   (gia sai, ton kho sai)       nhung CDN van tra 404
-                   -> Mat doanh thu             -> Mat doanh thu
-                                                (nhung window ngan hon)
+Rủi ro nếu quá     STALE DATA                   STALE 404
+TTL dài            User thấy nội dung cũ        Resource mới đã được tạo
+                   (giá sai, tồn kho sai)       nhưng CDN vẫn trả 404
+                   -> Mất doanh thu             -> Mất doanh thu
+                                                (nhưng window ngắn hơn)
 
-Rui ro neu qua     Origin phai xu ly them       Origin bi spam 404
-TTL ngan           200 requests                 -> Ton tai nguyen
-                   -> Ton tai nguyen            -> Giam performance
+Rủi ro nếu quá     Origin phải xử lý thêm       Origin bị spam 404
+TTL ngắn           200 requests                 -> Tốn tài nguyên
+                   -> Tốn tài nguyên            -> Giảm performance
 
-Chi phi neu        Nang (origin load cho        Nang (origin load cho
-KHONG CO           200 requests)                404 requests)
-                   User cham hon                User thay 404 sau hon
-                                                Origin de bi tan cong hon
+Chi phí nếu        Nặng (origin load cho        Nặng (origin load cho
+KHÔNG CÓ           200 requests)                404 requests)
+                   User chậm hơn                User thấy 404 sau hơn
+                                                Origin dễ bị tấn công hơn
 
-Tam quan trong     RAT CAO                      TRUNG BINH - CAO
-cho production     Moi request 200 deu          Neu khong co, origin
-                   huong loi tu cache           co the bi DDoS boi
-                                                chinh traffic 404
+Tầm quan trọng     RẤT CAO                      TRUNG BÌNH - CAO
+cho production     Mọi request 200 đều          Nếu không có, origin
+                   hưởng lợi từ cache           có thể bị DDoS bởi
+                                                chính traffic 404
 ```
 
-### Hai muc dich, hai cach nghi
+### Hai mục đích, hai cách nghĩ
 
 ```text
 POSITIVE CACHING                      NEGATIVE CACHING
 ─────────────────────                 ─────────────────────
-"Lam sao de serve nhanh nhat?"        "Lam sao de origin khong bi
-                                       ton hai boi request rai rac?"
+"Làm sao để serve nhanh nhất?"        "Làm sao để origin không bị
+                                       tổn hại bởi request rải rác?"
 
 Optimization mindset                  Defense mindset
-Truoc focus: FE, user experience      Truoc focus: Backend stability,
+Trước focus: FE, user experience      Trước focus: Backend stability,
                                        resource protection
 
 KPIs:                                 KPIs:
 - Cache hit ratio                     - Negative hit ratio
 - Time to first byte                  - Origin request count
 - Page load time                      - 404 origin offload %
-- Origin offload % (positive)         - False 200 rate (= 404 la 200)
+- Origin offload % (positive)         - False 200 rate (= 404 là 200)
 
 Tool: CDN monitoring dashboard        Tool: Origin counter + CDN logs
                                        + X-Negative-Cache header
@@ -959,31 +959,31 @@ Tool: CDN monitoring dashboard        Tool: Origin counter + CDN logs
 
 ### Origin counters — THE evidence
 
-Giong nhu case 09 (stale-while-error) va case 10 (request coalescing),
-**origin request counters la bang chung khong the tranh cai** cho negative caching.
+Giống như case 09 (stale-while-error) và case 10 (request coalescing),
+**origin request counters là bằng chứng không thể tranh cãi** cho negative caching.
 
 ```text
-NGUYEN TAC:
-  - Moi MISS -> origin nhan request -> counter++ (qua incrementCDNOriginCount)
-  - Moi HIT -> origin KHONG nhan request -> counter KHONG tang
-  - Dua vao counter, ta biet CHINH XAC so lan origin bi goi
+NGUYÊN TẮC:
+  - Mỗi MISS -> origin nhận request -> counter++ (qua incrementCDNOriginCount)
+  - Mỗi HIT -> origin KHÔNG nhận request -> counter KHÔNG tăng
+  - Dựa vào counter, ta biết CHÍNH XÁC số lần origin bị gọi
 
-PATH DEM:
-  GET  /ops/app/cdn/origin/request-counts        -> lay counter hien tai
-  POST /ops/app/cdn/origin/request-counts/reset  -> reset ve 0
+PATH ĐẾM:
+  GET  /ops/app/cdn/origin/request-counts        -> lấy counter hiện tại
+  POST /ops/app/cdn/origin/request-counts/reset  -> reset về 0
 ```
 
 ### Increment logic trong Go handler
 
 ```go
 func (h *Handler) GetCachedMissing(c *gin.Context) {
-    // Tao key tu URL path de dem
+    // Tạo key từ URL path để đếm
     requestKey := normalizeCDNOriginRequestKey(c.Request.URL.RequestURI())
 
-    // INCREMENT COUNTER TRUOC KHI XU LY
+    // INCREMENT COUNTER TRƯỚC KHI XỬ LÝ
     requestCount, _ := h.incrementCDNOriginCount(ctx, requestKey)
 
-    // Sau do moi xu ly delay, set headers, tra 404
+    // Sau đó mới xử lý delay, set headers, trả 404
     // ...
     c.Header("X-Origin-Request-Count", strconv.FormatInt(requestCount, 10))
     c.Header("X-Negative-Cache", "true")
@@ -996,20 +996,20 @@ func (h *Handler) GetCachedMissing(c *gin.Context) {
 }
 ```
 
-### Increment la atomic va truoc khi xu ly
+### Increment là atomic và trước khi xử lý
 
 ```text
 Tại sao increment TRƯỚC khi xử lý request?
   -> Đảm bảo counter luôn đếm đúng, kể cả khi handler panic hoặc
      request bị cancel giữa chừng
-  -> Nếu increment sau xử lý, request fail giữa chừng se khong duoc dem
-     -> "Origin khong bi hit" la sai (origin da bi hit, chi la khong
-        hoan thanh request)
+  -> Nếu increment sau xử lý, request fail giữa chừng sẽ không được đếm
+     -> "Origin không bị hit" là sai (origin đã bị hit, chỉ là không
+        hoàn thành request)
 
 Tại sao dùng requestKey = normalize URL?
-  -> De tim chinh xac counter cho path cu the
-  -> Tranh bi anh huong boi query string khac nhau
-  -> findOriginRequestCount(counts, path) tim trong array counts
+  -> Để tìm chính xác counter cho path cụ thể
+  -> Tránh bị ảnh hưởng bởi query string khác nhau
+  -> findOriginRequestCount(counts, path) tìm trong array counts
      theo request_key
 ```
 
@@ -1023,96 +1023,96 @@ AFTER SETUP (reset):
 
 AFTER PHASE 1 (request #1 MISS, request #2 HIT):
   getOriginRequestCounts() -> findOriginRequestCount(counts, path) PHẢI = 1
-  Neu = 0: origin chua bao gio duoc goi (khong the co 404 MISS)
-  Neu = 2: negative cache khong hoat dong (MISS ca 2 lan)
-  Neu = 1: DUNG -> chi 1 origin hit, lan 2 la HIT tu negative cache
+  Nếu = 0: origin chưa bao giờ được gọi (không thể có 404 MISS)
+  Nếu = 2: negative cache không hoạt động (MISS cả 2 lần)
+  Nếu = 1: ĐÚNG -> chỉ 1 origin hit, lần 2 là HIT từ negative cache
 
 AFTER PHASE 2 (request #3 sau sleep):
   getOriginRequestCounts() -> findOriginRequestCount(counts, path) PHẢI = 2
-  Neu = 1: negative cache chua expire? sleep chua du? TTL dai hon du kien?
-  Neu = 3: co them request nao do khong mong muon?
-  Neu = 2: DUNG -> them 1 origin hit sau khi negative cache expire
+  Nếu = 1: negative cache chưa expire? sleep chưa đủ? TTL dài hơn dự kiến?
+  Nếu = 3: có thêm request nào đó không mong muốn?
+  Nếu = 2: ĐÚNG -> thêm 1 origin hit sau khi negative cache expire
 ```
 
-### Counter la bang chung cua offload
+### Counter là bằng chứng của offload
 
 ```text
 OFFLOAD PROOF:
 
-Neu khong co negative caching:
+Nếu không có negative caching:
   3 requests -> 3 origin hits -> counter = 3
   Offload = 0%
 
-Co negative caching:
+Có negative caching:
   3 requests -> 2 origin hits -> counter = 2
   Offload = 1/3 = 33%
 
-Neu scale len 10,000 requests trong 15s window (cung URL):
-  Khong co negative cache: 10,000 origin hits
-  Co negative cache:       1 origin hit     -> offload = 99.99%
+Nếu scale lên 10,000 requests trong 15s window (cùng URL):
+  Không có negative cache: 10,000 origin hits
+  Có negative cache:       1 origin hit     -> offload = 99.99%
 
-  Do la suc manh cua negative caching: 1 request toi origin,
-  9,999 requests duoc CDN hap thu.
+  Đó là sức mạnh của negative caching: 1 request tới origin,
+  9,999 requests được CDN hấp thụ.
 ```
 
 ## 9. Key signals/headers
 
-### Response headers can kiem tra
+### Response headers cần kiểm tra
 
 ```text
-HEADER                 Y NGHIA                            GIA TRI MONG DOI
+HEADER                 Ý NGHĨA                            GIÁ TRỊ MONG ĐỢI
 ────────────────────── ────────────────────────────────── ──────────────────
 X-Cache                Cache state                        MISS -> HIT -> MISS
-                        HIT = CDN serve tu cache
-                        MISS = CDN goi origin
+                       HIT = CDN serve từ cache
+                       MISS = CDN gọi origin
 
-X-Negative-Cache       Response nay la negative cache     "true" cho ca
-                       (du HIT hay MISS)                  HIT va MISS
+X-Negative-Cache       Response này là negative cache     "true" cho cả
+                       (dù HIT hay MISS)                  HIT và MISS
 
-X-Cache-Hits           So lan object da duoc hit          > 0 cho HIT
-                       trong cache truoc khi expire
+X-Cache-Hits           Số lần object đã được hit          > 0 cho HIT
+                       trong cache trước khi expire
 
-Status Code            HTTP status                        404 (luon 404,
-                                                          khong bao gio 200)
+Status Code            HTTP status                        404 (luôn 404,
+                                                          không bao giờ 200)
 
-X-Served-By            Node CDN da serve                  "varnish"
+X-Served-By            Node CDN đã serve                  "varnish"
 
-X-Origin-Request-Count So lan origin da nhan request      Tang sau moi MISS
-                       cho path nay (tu origin)           Khong tang khi HIT
+X-Origin-Request-Count Số lần origin đã nhận request      Tăng sau mỗi MISS
+                       cho path này (từ origin)           Không tăng khi HIT
 
-Age                    Thoi gian object da o trong        Tang dan tu 0
-                       cache (giay)                       Reset ve 0 sau MISS
+Age                    Thời gian object đã ở trong        Tăng dần từ 0
+                       cache (giây)                       Reset về 0 sau MISS
 
-Cache-Control          Chinh sach cache tu origin         public, max-age=5,
+Cache-Control          Chính sách cache từ origin         public, max-age=5,
                                                           s-maxage=5
 
-CDN-Cache-Control      Chinh sach cache danh cho CDN      max-age=5,
+CDN-Cache-Control      Chính sách cache dành cho CDN      max-age=5,
                                                           stale-if-error=120
 ```
 
-### Cach doc sequence tu headers
+### Cách đọc sequence từ headers
 
 ```text
 Request #1 (MISS):
   X-Cache: MISS
   X-Negative-Cache: true         <-- origin set
-  X-Origin-Request-Count: 1      <-- vua duoc dem
-  Age: 0 (hoac khong co)         <-- vua moi tao
+  X-Origin-Request-Count: 1      <-- vừa được đếm
+  Age: 0 (hoặc không có)         <-- vừa mới tạo
 
 Request #2 (HIT):
   X-Cache: HIT
-  X-Cache-Hits: 1                 <-- lan dau object duoc hit
-  X-Negative-Cache: true          <-- van con (luu tu origin)
-  X-Origin-Request-Count: 1       <-- VAN LA 1 (khong tang)
-  Age: ~1                          <-- da ton tai 1s
+  X-Cache-Hits: 1                 <-- lần đầu object được hit
+  X-Negative-Cache: true          <-- vẫn còn (lưu từ origin)
+  X-Origin-Request-Count: 1       <-- VẪN LÀ 1 (không tăng)
+  Age: ~1                          <-- đã tồn tại 1s
 
 Sleep 6s...
 
 Request #3 (MISS, sau expire):
   X-Cache: MISS
-  X-Negative-Cache: true          <-- origin set lai
-  X-Origin-Request-Count: 2       <-- tang len 2
-  Age: 0 (hoac khong co)          <-- object moi duoc tao lai
+  X-Negative-Cache: true          <-- origin set lại
+  X-Origin-Request-Count: 2       <-- tăng lên 2
+  Age: 0 (hoặc không có)          <-- object mới được tạo lại
 ```
 
 ### Header warning signs
@@ -1120,118 +1120,118 @@ Request #3 (MISS, sau expire):
 ```text
 DANGER SIGNALS:
 
-1. X-Cache: HIT nhung KHONG CO X-Negative-Cache
-   -> Co the la positive cache (200), khong phai negative cache
-   -> Kiem tra status code
+1. X-Cache: HIT nhưng KHÔNG CÓ X-Negative-Cache
+   -> Có thể là positive cache (200), không phải negative cache
+   -> Kiểm tra status code
 
-2. X-Cache: HIT nhung status = 200
-   -> Object da bi overwrite boi positive cache?
-   -> Hoac path nay dang tra 200 thay vi 404
+2. X-Cache: HIT nhưng status = 200
+   -> Object đã bị overwrite bởi positive cache?
+   -> Hoặc path này đang trả 200 thay vì 404
 
-3. X-Cache: MISS nhung X-Origin-Request-Count khong tang
-   -> Origin counter bi broken
-   -> Khong the verify offload
+3. X-Cache: MISS nhưng X-Origin-Request-Count không tăng
+   -> Origin counter bị broken
+   -> Không thể verify offload
 
-4. X-Cache: HIT nhung X-Origin-Request-Count tang
-   -> Co request khac den origin cho cung path
-   -> Co the do variant headers khac?
+4. X-Cache: HIT nhưng X-Origin-Request-Count tăng
+   -> Có request khác đến origin cho cùng path
+   -> Có thể do variant headers khác?
 ```
 
 ## 10. Pass/fail criteria
 
-### Dieu kien PASS
+### Điều kiện PASS
 
 ```text
-PASS KHI TAT CA CAC DIEU KIEN SAU DUNG:
+PASS KHI TẤT CẢ CÁC ĐIỀU KIỆN SAU ĐÚNG:
 
 1. k6 exit code = 0
-   -> checks rate = 1 (tat ca check deu pass)
-   -> Khong co throw Error nao
+   -> checks rate = 1 (tất cả check đều pass)
+   -> Không có throw Error nào
 
-2. Cache-state sequence DUNG:
+2. Cache-state sequence ĐÚNG:
    404 MISS -> 404 HIT -> wait -> 404 MISS
-   -> Chuyen tiep MISS->HIT chung minh negative cache da duoc luu
-   -> Chuyen tiep HIT->MISS sau sleep chung minh negative cache da expire
+   -> Chuyển tiếp MISS->HIT chứng minh negative cache đã được lưu
+   -> Chuyển tiếp HIT->MISS sau sleep chứng minh negative cache đã expire
 
-3. Origin count DUNG:
-   -> Sau phase 1: count = 1 (origin chi bi goi 1 lan)
-   -> Sau phase 2: count = 2 (them 1 lan sau khi expire)
-   -> Neu count khong dung pattern -> negative cache khong offload origin
-      hoac khong expire
+3. Origin count ĐÚNG:
+   -> Sau phase 1: count = 1 (origin chỉ bị gọi 1 lần)
+   -> Sau phase 2: count = 2 (thêm 1 lần sau khi expire)
+   -> Nếu count không đúng pattern -> negative cache không offload origin
+      hoặc không expire
 
-4. Status code BAO TOAN:
-   -> Luon la 404 (khong bao gio 200, 500, hay status khac)
-   -> CDN khong duoc thay doi status code cua negative cache
+4. Status code BẢO TOÀN:
+   -> Luôn là 404 (không bao giờ 200, 500, hay status khác)
+   -> CDN không được thay đổi status code của negative cache
 
-5. X-Negative-Cache header HIEN DIEN:
-   -> Co tren ca MISS va HIT responses
-   -> Chứng minh CDN gán tag negative caching cho object nay
+5. X-Negative-Cache header HIỆN DIỆN:
+   -> Có trên cả MISS và HIT responses
+   -> Chứng minh CDN gán tag negative caching cho object này
 ```
 
-### Dieu kien FAIL
+### Điều kiện FAIL
 
 ```text
-FAIL KHI BAT KY DIEU KIEN NAO SAU DAY SAI:
+FAIL KHI BẤT KỲ ĐIỀU KIỆN NÀO SAU ĐÂY SAI:
 
-1. 404 bi coi la FAILURE do status code
-   -> k6 assertion: assertStatus(first, 404) khong pass
-   -> Nguyen nhan: k6 config hoac script khong accept 404 la expected
-   -> Fix: dam bao script dung assertStatus (k6 check) khong phai
+1. 404 bị coi là FAILURE do status code
+   -> k6 assertion: assertStatus(first, 404) không pass
+   -> Nguyên nhân: k6 config hoặc script không accept 404 là expected
+   -> Fix: đảm bảo script dùng assertStatus (k6 check) không phải
       http.expectedStatuses (k6 throw error)
 
-2. Request #2 la MISS thay vi HIT
+2. Request #2 là MISS thay vì HIT
    -> "negative second cache state HIT" check fail
-   -> Nguyen nhan kha nang:
-      a) VCL khong cache 404 -> kiem tra vcl_backend_response
-      b) Cache key khong match -> kiem tra URL normalization
-      c) Object bi evict truoc TTL -> cache memory qua nho
-      d) Request headers khac nhau tao cache key khac
+   -> Nguyên nhân khả năng:
+      a) VCL không cache 404 -> kiểm tra vcl_backend_response
+      b) Cache key không match -> kiểm tra URL normalization
+      c) Object bị evict trước TTL -> cache memory quá nhỏ
+      d) Request headers khác nhau tạo cache key khác
 
-3. Request #3 la HIT thay vi MISS sau sleep
+3. Request #3 là HIT thay vì MISS sau sleep
    -> "negative after expiry cache state MISS" check fail
-   -> Nguyen nhan kha nang:
-      a) NEGATIVE_WAIT_SECONDS < TTL thuc te
-      b) TTL duoc set dai hon du kien (kiem tra VCL default 15s)
-      c) Grace period van con hoat dong
+   -> Nguyên nhân khả năng:
+      a) NEGATIVE_WAIT_SECONDS < TTL thực tế
+      b) TTL được set dài hơn dự kiến (kiểm tra VCL default 15s)
+      c) Grace period vẫn còn hoạt động
 
-4. Origin count KHONG DUNG:
+4. Origin count KHÔNG ĐÚNG:
    -> Sau phase 1: count != 1
    -> Sau phase 2: count != 2
-   -> Nguyen nhan: counter khong reset dung, hoac co request khac
-      cung path chay song song
+   -> Nguyên nhân: counter không reset đúng, hoặc có request khác
+      cùng path chạy song song
 
-5. Khong co X-Negative-Cache header:
-   -> VCL khong set header nay cho 404 responses
-   -> Kiem tra vcl_backend_response -> phai co
+5. Không có X-Negative-Cache header:
+   -> VCL không set header này cho 404 responses
+   -> Kiểm tra vcl_backend_response -> phải có
       set beresp.http.X-Negative-Cache = "true"
 ```
 
 ### Partial pass patterns
 
 ```text
-MOT SO PATTERN CHI PASS MOT PHAN:
+MỘT SỐ PATTERN CHỈ PASS MỘT PHẦN:
 
-Pattern A: MISS->HIT DUNG, nhung count = 2 o phase 1
-  -> Negative cache hoat dong (co HIT)
-  -> Nhung origin bi goi 2 lan thay vi 1
-  -> Co the request #1 bi goi lai do retry hoac redirect
+Pattern A: MISS->HIT ĐÚNG, nhưng count = 2 ở phase 1
+  -> Negative cache hoạt động (có HIT)
+  -> Nhưng origin bị gọi 2 lần thay vì 1
+  -> Có thể request #1 bị gọi lại do retry hoặc redirect
 
-Pattern B: MISS->HIT DUNG, count = 1 o phase 1,
-           nhung sau sleep van HIT
-  -> Negative cache hoat dong nhung chua expire
-  -> TTL thuc te > NEGATIVE_WAIT_SECONDS
-  -> Hoac grace period dang serve stale
+Pattern B: MISS->HIT ĐÚNG, count = 1 ở phase 1,
+           nhưng sau sleep vẫn HIT
+  -> Negative cache hoạt động nhưng chưa expire
+  -> TTL thực tế > NEGATIVE_WAIT_SECONDS
+  -> Hoặc grace period đang serve stale
 
-Pattern C: 404 MISS -> 404 MISS (khong co HIT),
-           nhung count = 1 o phase 1
-  -> Origin chi bi goi 1 lan nhung CDN khong cache
-  -> Co the VCL khong nhan dien duoc 404 nay
-     (vi du: 404 tu path khac /api/sim thay vi /api/cached)
+Pattern C: 404 MISS -> 404 MISS (không có HIT),
+           nhưng count = 1 ở phase 1
+  -> Origin chỉ bị gọi 1 lần nhưng CDN không cache
+  -> Có thể VCL không nhận diện được 404 này
+     (ví dụ: 404 từ path khác /api/sim thay vì /api/cached)
 ```
 
-## 11. Cach chay + output
+## 11. Cách chạy + output
 
-### Cach chay co ban
+### Cách chạy cơ bản
 
 ```powershell
 cd E:/Projects/k6/k6-metrics-server
@@ -1244,38 +1244,38 @@ $env:OPS_AUTH_TOKEN = "<ops-token>"
 ./scripts/run-cdn-capabilities.ps1 -Scenarios 11-negative-caching
 ```
 
-### Override TTL va wait time (tuy chon)
+### Override TTL và wait time (tùy chọn)
 
 ```powershell
-# Negative TTL = 3 giay, wait = 5 giay
+# Negative TTL = 3 giây, wait = 5 giây
 $env:NEGATIVE_TTL_SECONDS = "3"
 $env:NEGATIVE_WAIT_SECONDS = "5"
 ./scripts/run-cdn-capabilities.ps1 -Scenarios 11-negative-caching
 
-# Negative TTL = 10 giay, wait = 12 giay (dai hon de test TTL dai)
+# Negative TTL = 10 giây, wait = 12 giây (dài hơn để test TTL dài)
 $env:NEGATIVE_TTL_SECONDS = "10"
 $env:NEGATIVE_WAIT_SECONDS = "12"
 ./scripts/run-cdn-capabilities.ps1 -Scenarios 11-negative-caching
 ```
 
-### Luu y ve thoi gian chay
+### Lưu ý về thời gian chạy
 
 ```text
-Case nay CAN THOI GIAN do sleep NEGATIVE_WAIT_SECONDS:
-  - Default: 6s sleep -> tong thoi gian ~8-10s
-  - Neu set NEGATIVE_TTL_SECONDS=30 -> sleep 31s -> tong ~35s
-  - Can kien nhan khi chay case nay
+Case này CẦN THỜI GIAN do sleep NEGATIVE_WAIT_SECONDS:
+  - Default: 6s sleep -> tổng thời gian ~8-10s
+  - Nếu set NEGATIVE_TTL_SECONDS=30 -> sleep 31s -> tổng ~35s
+  - Cần kiên nhẫn khi chạy case này
 
-So voi cac case khac:
+So với các case khác:
   - Case 01 (hit-smoke): <1s
   - Case 08 (ttl-expiry): ~22s (sleep 21s)
   - Case 11 (negative-caching): ~8s (sleep 6s default)
 ```
 
-### Output dien hinh
+### Output điển hình
 
 ```text
-PASS output dien hinh:
+PASS output điển hình:
 
   execution: local
      script: 11-negative-caching.js
@@ -1313,29 +1313,29 @@ PASS output dien hinh:
   vus............................: 1
 ```
 
-### Cach doc output
+### Cách đọc output
 
 ```text
-KIEM TRA TRONG OUTPUT:
+KIỂM TRA TRONG OUTPUT:
 
-1. checks rate = 100%: TAT CA check pass -> sequence dung
+1. checks rate = 100%: TẤT CẢ check pass -> sequence đúng
 
-2. So request = 3:
-   - 1 cho MISS ban dau
-   - 1 cho HIT (tu cache)
+2. Số request = 3:
+   - 1 cho MISS ban đầu
+   - 1 cho HIT (từ cache)
    - 1 cho MISS sau expire
-   - Day la 3 requests tu k6 den CDN, KHONG PHAI 3 origin hits
+   - Đây là 3 requests từ k6 đến CDN, KHÔNG PHẢI 3 origin hits
 
-3. Origin counters (khong hien thi trong k6 output):
-   - Phai kiem tra qua control path hoac dashboard
+3. Origin counters (không hiển thị trong k6 output):
+   - Phải kiểm tra qua control path hoặc dashboard
    - GET /ops/app/cdn/origin/request-counts
-   - Tim request_key tuong ung -> count phai = 2
+   - Tìm request_key tương ứng -> count phải = 2
 
-4. Neu FAIL:
-   - Xem check nao fail -> biet duoc buoc nao bi loi
-   - "negative second cache state HIT" fail -> negative cache ko hoat dong
-   - "negative after expiry cache state MISS" fail -> TTL chua expire
-   - Error message tu origin count check -> biet actual count vs expected
+4. Nếu FAIL:
+   - Xem check nào fail -> biết được bước nào bị lỗi
+   - "negative second cache state HIT" fail -> negative cache ko hoạt động
+   - "negative after expiry cache state MISS" fail -> TTL chưa expire
+   - Error message từ origin count check -> biết actual count vs expected
 ```
 
 ## 12. 4 output->decision scenarios
@@ -1354,20 +1354,20 @@ OUTPUT:
   ✓ negative after expiry cache state MISS
   Origin count: 1 (phase1) -> 2 (phase2)
 
-KET LUAN:
-  "CDN hap thu 404 traffic, origin duoc bao ve."
+KẾT LUẬN:
+  "CDN hấp thụ 404 traffic, origin được bảo vệ."
 
-  TAT CA hoat dong dung:
-  - Negative cache luu 404 voi TTL dung
-  - Cache hit tra 404 tu CDN, KHONG goi origin
-  - TTL expire dung han
-  - Origin counter xac nhan offload: 3 request -> 2 origin hits
-    (offload 33% cho 3 request, se la 99%+ voi high traffic)
+  TẤT CẢ hoạt động đúng:
+  - Negative cache lưu 404 với TTL đúng
+  - Cache hit trả 404 từ CDN, KHÔNG gọi origin
+  - TTL expire đúng hạn
+  - Origin counter xác nhận offload: 3 request -> 2 origin hits
+    (offload 33% cho 3 request, sẽ là 99%+ với high traffic)
 
-HANH DONG TIEP THEO:
+HÀNH ĐỘNG TIẾP THEO:
   - Production ready cho negative caching
-  - Co the tune TTL (tang/giam) dua vao business requirement
-  - Document lai TTL values cho tung status code
+  - Có thể tune TTL (tăng/giảm) dựa vào business requirement
+  - Document lại TTL values cho từng status code
   - Setup monitoring cho negative cache hit ratio
 ```
 
@@ -1382,33 +1382,33 @@ OUTPUT:
   ✗ negative second cache state HIT       <-- FAIL
   (expected HIT, got MISS)
 
-  Origin count: co the la 2 ngay o phase 1
-  (moi 404 deu MISS -> moi lan deu goi origin)
+  Origin count: có thể là 2 ngay ở phase 1
+  (mỗi 404 đều MISS -> mỗi lần đều gọi origin)
 
-KET LUAN:
-  "Negative caching KHONG DUOC CAU HINH trong VCL —
-   tat ca 404 deu hit origin."
+KẾT LUẬN:
+  "Negative caching KHÔNG ĐƯỢC CẤU HÌNH trong VCL —
+   tất cả 404 đều hit origin."
 
-  Nguyen nhan kha nang:
-  a) thieu logic 404 trong vcl_backend_response
-     -> Kiem tra: khong co "if (beresp.status == 404)"
-  b) 404 path khong duoc include trong cache path
-     -> vcl_recv: return (pass) thay vi return (hash)
-  c) Object bi set uncacheable = true do condition khac
-     -> Kiem tra: Set-Cookie? no-store? private?
-  d) Origin khong set Cache-Control headers
-     -> VCL default TTL = 0s, object khong duoc cache
+  Nguyên nhân khả năng:
+  a) thiếu logic 404 trong vcl_backend_response
+     -> Kiểm tra: không có "if (beresp.status == 404)"
+  b) 404 path không được include trong cache path
+     -> vcl_recv: return (pass) thay vì return (hash)
+  c) Object bị set uncacheable = true do condition khác
+     -> Kiểm tra: Set-Cookie? no-store? private?
+  d) Origin không set Cache-Control headers
+     -> VCL default TTL = 0s, object không được cache
 
-HANH DONG TIEP THEO:
-  - Kiem tra VCL: vcl_backend_response phai co dieu kien
+HÀNH ĐỘNG TIẾP THEO:
+  - Kiểm tra VCL: vcl_backend_response phải có điều kiện
     if (beresp.status == 404 || beresp.status == 410)
-  - Kiem tra vcl_recv: path cho 404 co duoc hash khong?
-  - Kiem tra response origin co Cache-Control header khong
-  - THEM VCL config cho negative caching
+  - Kiểm tra vcl_recv: path cho 404 có được hash không?
+  - Kiểm tra response origin có Cache-Control header không
+  - THÊM VCL config cho negative caching
   - Rerun case 11 -> verify PASS
 ```
 
-### Scenario C: Negative TTL qua dai
+### Scenario C: Negative TTL quá dài
 
 ```text
 OUTPUT:
@@ -1418,281 +1418,281 @@ OUTPUT:
   ✓ negative second cache state HIT
   ✗ negative after expiry status 404
   ✗ negative after expiry cache state MISS   <-- FAIL
-  (expected MISS, got HIT — van con HIT sau sleep)
+  (expected MISS, got HIT — vẫn còn HIT sau sleep)
 
-  Origin count: 1 (phase1) -> 1 (phase2) — khong tang!
+  Origin count: 1 (phase1) -> 1 (phase2) — không tăng!
 
-KET LUAN:
-  "404 duoc cache voi TTL QUA DAI —
-   resource co the duoc tao moi nhung CDN van tra 404 cu."
+KẾT LUẬN:
+  "404 được cache với TTL QUÁ DÀI —
+   resource có thể được tạo mới nhưng CDN vẫn trả 404 cũ."
 
-  Nguyen nhan kha nang:
-  a) NEGATIVE_WAIT_SECONDS < TTL thuc te
-     -> Vi du: NEGATIVE_TTL_SECONDS=5 nhung VCL set TTL=15s
-        (vì Cache-Control tu origin khong duoc ton trong?)
-  b) Grace period dang serve stale
-     -> Object het TTL nhung grace = 30s van con
-     -> CDN serve stale vi backend healthy
-        (nhung vcl_hit chi serve stale khi backend unhealthy:
+  Nguyên nhân khả năng:
+  a) NEGATIVE_WAIT_SECONDS < TTL thực tế
+     -> Ví dụ: NEGATIVE_TTL_SECONDS=5 nhưng VCL set TTL=15s
+        (vì Cache-Control từ origin không được tôn trọng?)
+  b) Grace period đang serve stale
+     -> Object hết TTL nhưng grace = 30s vẫn còn
+     -> CDN serve stale vì backend healthy
+        (nhưng vcl_hit chỉ serve stale khi backend unhealthy:
          if (!std.healthy(req.backend_hint) && obj.ttl + obj.grace > 0s))
-  c) Keep time giu object trong cache qua lau
+  c) Keep time giữ object trong cache quá lâu
 
-  Dac biet nguy hiem:
-  Neu production co TTL negative = 300s (5 phut):
-    -> Admin tao product moi
-    -> Push notification den user
-    -> User click -> 404 HIT (stale!) -> mat sale
-    -> Fix bang invalidation thu cong -> operational toil
+  Đặc biệt nguy hiểm:
+  Nếu production có TTL negative = 300s (5 phút):
+    -> Admin tạo product mới
+    -> Push notification đến user
+    -> User click -> 404 HIT (stale!) -> mất sale
+    -> Fix bằng invalidation thủ công -> operational toil
 
-HANH DONG TIEP THEO:
-  - Kiem tra TTL thuc te: VCL default 15s? Origin set bao nhieu?
-  - Giam TTL xuong: 5-15s cho 404
-  - Dam bao NEGATIVE_WAIT_SECONDS > TTL thuc te + grace (neu co)
-  - Phan biet TTL 404 (ngan) vs TTL 410 (dai)
-  - Rerun case 11 -> verify TTL expire dung han
+HÀNH ĐỘNG TIẾP THEO:
+  - Kiểm tra TTL thực tế: VCL default 15s? Origin set bao nhiêu?
+  - Giảm TTL xuống: 5-15s cho 404
+  - Đảm bảo NEGATIVE_WAIT_SECONDS > TTL thực tế + grace (nếu có)
+  - Phân biệt TTL 404 (ngắn) vs TTL 410 (dài)
+  - Rerun case 11 -> verify TTL expire đúng hạn
 ```
 
-### Scenario D: 500 responses bi negative-cached
+### Scenario D: 500 responses bị negative-cached
 
 ```text
 OUTPUT:
-  Neu VCL bi cau hinh sai, cho phep negative-cache 5xx:
+  Nếu VCL bị cấu hình sai, cho phép negative-cache 5xx:
 
-  (Neu test bang mot 500 path tuong tu 404 path...)
+  (Nếu test bằng một 500 path tương tự 404 path...)
   ✓ 500 first status 500
   ✓ 500 first cache state MISS
-  ✓ 500 second cache state HIT       <-- DANGER! 500 bi cache!
-  ✓ 500 third sau sleep: HIT hoac MISS
+  ✓ 500 second cache state HIT       <-- DANGER! 500 bị cache!
+  ✓ 500 third sau sleep: HIT hoặc MISS
 
-KET LUAN:
-  "DANGER — server errors bi negative-cached, CHE GIAU loi that su."
+KẾT LUẬN:
+  "DANGER — server errors bị negative-cached, CHE GIẤU lỗi thực sự."
 
-  Day la SAI LAM NGHIEM TRONG:
-  - 500 la server error -> origin dang gap loi THAT SU
-  - Neu cache 500, CDN tra 500 HIT thay vi goi origin
-  - Origin khong nhan duoc request -> developer khong thay error
-  - Monitoring: "CDN health = OK" (dang tra 500 HIT)
-  - Reality: origin service da crash
+  Đây là SAI LẦM NGHIÊM TRỌNG:
+  - 500 là server error -> origin đang gặp lỗi THẬT SỰ
+  - Nếu cache 500, CDN trả 500 HIT thay vì gọi origin
+  - Origin không nhận được request -> developer không thấy error
+  - Monitoring: "CDN health = OK" (đang trả 500 HIT)
+  - Reality: origin service đã crash
 
   Hậu quả:
-  - Service that su down nhung CDN van tra 500
-    -> Khong ai nhan duoc alert
-  - Origin tu recovery nhung CDN van tra 500 cu
-    -> Stale 500 keo dai, user thay service down
-  - Khi origin da up, nhung CDN van 500 HIT
-    -> Den khi 500 TTL expire, user moi thay 200 lai
+  - Service thực sự down nhưng CDN vẫn trả 500
+    -> Không ai nhận được alert
+  - Origin tự recovery nhưng CDN vẫn trả 500 cũ
+    -> Stale 500 kéo dài, user thấy service down
+  - Khi origin đã up, nhưng CDN vẫn 500 HIT
+    -> Đến khi 500 TTL expire, user mới thấy 200 lại
 
-HANH DONG TIEP THEO (KHAN CAP):
-  - KIEM TRA VCL NGAY: phai co
+HÀNH ĐỘNG TIẾP THEO (KHẨN CẤP):
+  - KIỂM TRA VCL NGAY: phải có
     if (beresp.status >= 500) {
         set beresp.ttl = 0s;
         set beresp.uncacheable = true;
     }
-  - Dieu nay PHAI o TREN dieu kien 404/410
-    (dam bao 5xx bi block truoc khi den negative cache logic)
-  - Kiem tra TAT CA cac VCL deployment
-  - Them test case: verify 500 khong bao gio HIT
-  - Them monitoring alert: "X-Cache: HIT + status >= 500"
+  - Điều này PHẢI ở TRÊN điều kiện 404/410
+    (đảm bảo 5xx bị block trước khi đến negative cache logic)
+  - Kiểm tra TẤT CẢ các VCL deployment
+  - Thêm test case: verify 500 không bao giờ HIT
+  - Thêm monitoring alert: "X-Cache: HIT + status >= 500"
 ```
 
-## 13. Nghich ly / misconceptions
+## 13. Nghịch lý / misconceptions
 
-### Nghich ly 1: "404 la loi, khong nen cache"
+### Nghịch lý 1: "404 là lỗi, không nên cache"
 
 ```text
-SAI LAM PHO BIEN NHAT:
-  "404 la HTTP error, cache error la sai."
+SAI LẦM PHỔ BIẾN NHẤT:
+  "404 là HTTP error, cache error là sai."
 
-THUC TE:
-  404 co 2 loai:
+THỰC TẾ:
+  404 có 2 loại:
 
   1. UNEXPECTED 404: URL sai format, path traversal, attack probe
-     -> Khong nen cache, nen rate-limit
+     -> Không nên cache, nên rate-limit
 
-  2. EXPECTED 404: Product ID khong ton tai, resource da bi xoa
-     -> NEN cache. Day la business response binh thuong, khong phai loi.
-     -> App da xu ly thanh cong (success=false la ket qua dung)
-     -> Cache 404 NAY giam origin load
+  2. EXPECTED 404: Product ID không tồn tại, resource đã bị xóa
+     -> NÊN cache. Đây là business response bình thường, không phải lỗi.
+     -> App đã xử lý thành công (success=false là kết quả đúng)
+     -> Cache 404 NÀY giảm origin load
 
-  "Expected 404" la khai niem quan trong:
-  - App da thuc thi day du logic: parse input, query DB, xu ly ket qua
-  - Ket qua "khong tim thay" la ket qua DUNG, khong phai exception
-  - Khong co gi "broken" o day
-  - Tieu ton tai nguyen de xu ly -> cache de tranh xu ly lai
+  "Expected 404" là khái niệm quan trọng:
+  - App đã thực thi đầy đủ logic: parse input, query DB, xử lý kết quả
+  - Kết quả "không tìm thấy" là kết quả ĐÚNG, không phải exception
+  - Không có gì "broken" ở đây
+  - Tiêu tốn tài nguyên để xử lý -> cache để tránh xử lý lại
 ```
 
-### Nghich ly 2: "Negative cache TTL = positive cache TTL"
+### Nghịch lý 2: "Negative cache TTL = positive cache TTL"
 
 ```text
-SAI LAM:
-  "404 cung la mot cache object, TTL nen giong 200."
+SAI LẦM:
+  "404 cũng là một cache object, TTL nên giống 200."
 
-THUC TE:
-  TTL cho negative cache PHAI NGAN HON RAT NHIEU:
+THỰC TẾ:
+  TTL cho negative cache PHẢI NGẮN HƠN RẤT NHIỀU:
 
   Positive cache (200): 60-300s
-    -> Data co the stale nhung user van thay noi dung cu
-    -> Stale 200 van co gia tri (product van ton tai, chi la gia thay doi)
+    -> Data có thể stale nhưng user vẫn thấy nội dung cũ
+    -> Stale 200 vẫn có giá trị (product vẫn tồn tại, chỉ là giá thay đổi)
 
   Negative cache (404): 5-15s
-    -> Neu stale 404, user thay "khong tim thay" trong khi resource DA TON TAI
-    -> Stale 404 la MAT DOANH THU (user thay 404 -> roi di)
-    -> Admin tao product, user khong thay -> mat sale
+    -> Nếu stale 404, user thấy "không tìm thấy" trong khi resource ĐÃ TỒN TẠI
+    -> Stale 404 là MẤT DOANH THU (user thấy 404 -> rời đi)
+    -> Admin tạo product, user không thấy -> mất sale
 
-  Quy tac:
-    TTL_negative <= thoi gian toi thieu giua "resource duoc tao" va
-                    "user dau tien request"
-    -> Thuong 5-15s la an toan
-    -> 410 (gone vinh vien) la ngoai le: co the cache 24h
+  Quy tắc:
+    TTL_negative <= thời gian tối thiểu giữa "resource được tạo" và
+                    "user đầu tiên request"
+    -> Thường 5-15s là an toàn
+    -> 410 (gone vĩnh viễn) là ngoại lệ: có thể cache 24h
 ```
 
-### Nghich ly 3: "Tat ca error code nen duoc negative cache"
+### Nghịch lý 3: "Tất cả error code nên được negative cache"
 
 ```text
-SAI LAM:
-  "Cache tat ca 4xx va 5xx de giam origin load."
+SAI LẦM:
+  "Cache tất cả 4xx và 5xx để giảm origin load."
 
-THUC TE:
-  CHI CACHE 4xx CO Y NGHIA BUSINESS, TUYET DOI KHONG CACHE 5xx.
+THỰC TẾ:
+  CHỈ CACHE 4xx CÓ Ý NGHĨA BUSINESS, TUYỆT ĐỐI KHÔNG CACHE 5xx.
 
   5xx (500, 502, 503, 504):
-    -> La server errors
-    -> Cache 500 = che giaU loi
-    -> Origin khong nhan request -> khong phat hien broken
-    -> Monitoring se thay "moi thu OK" nhung thuc te da chet
-    -> Dung stale-if-error (serve stale 200 khi origin 500),
-       KHONG PHAI negative cache cho 500
+    -> Là server errors
+    -> Cache 500 = che giấu lỗi
+    -> Origin không nhận request -> không phát hiện broken
+    -> Monitoring sẽ thấy "mọi thứ OK" nhưng thực tế đã chết
+    -> Dùng stale-if-error (serve stale 200 khi origin 500),
+       KHÔNG PHẢI negative cache cho 500
 
-  4xx can phan biet:
-    400 (Bad Request)   -> KHONG cache (moi bad request unique)
-    401 (Unauthorized)  -> KHONG cache (auth thay doi)
-    403 (Forbidden)     -> CAN NHAC KY (co the cache 5s)
+  4xx cần phân biệt:
+    400 (Bad Request)   -> KHÔNG cache (mỗi bad request unique)
+    401 (Unauthorized)  -> KHÔNG cache (auth thay đổi)
+    403 (Forbidden)     -> CÂN NHẮC KỸ (có thể cache 5s)
     404 (Not Found)     -> CACHE (short TTL)
     410 (Gone)          -> CACHE (long TTL)
 ```
 
-### Nghich ly 4: "Negative cache khong can observable"
+### Nghịch lý 4: "Negative cache không cần observable"
 
 ```text
-SAI LAM:
-  "404 la 404, khong can X-Negative-Cache header."
+SAI LẦM:
+  "404 là 404, không cần X-Negative-Cache header."
 
-THUC TE:
-  Khong co X-Negative-Cache, monitoring khong the phan biet:
+THỰC TẾ:
+  Không có X-Negative-Cache, monitoring không thể phân biệt:
 
-  "404 nay tu negative cache hay tu origin?"
-  -> Khong biet duoc
-  "Negative cache co dang offload origin khong?"
-  -> Khong biet duoc
-  "404 HIT ratio la bao nhieu?"
-  -> Khong biet duoc
+  "404 này từ negative cache hay từ origin?"
+  -> Không biết được
+  "Negative cache có đang offload origin không?"
+  -> Không biết được
+  "404 HIT ratio là bao nhiêu?"
+  -> Không biết được
 
-  X-Negative-Cache header la KEY cho observability:
-  - Tach biet negative cache metrics khoi positive cache
-  - Alert khi negative cache hit ratio thay doi
-  - Debug khi co van de ve 404
+  X-Negative-Cache header là KEY cho observability:
+  - Tách biệt negative cache metrics khỏi positive cache
+  - Alert khi negative cache hit ratio thay đổi
+  - Debug khi có vấn đề về 404
 ```
 
 ## 14. Checklist
 
-### Checklist chuan bi test
+### Checklist chuẩn bị test
 
 ```text
-TRUOC KHI CHAY CASE 11:
+TRƯỚC KHI CHẠY CASE 11:
 
-[ ] Topology TargetLayer=full da chay du
-[ ] Varnish, Nginx, Go app deu healthy
-    -> Kiem tra: GET http://localhost:80/health
+[ ] Topology TargetLayer=full đã chạy đủ
+[ ] Varnish, Nginx, Go app đều healthy
+    -> Kiểm tra: GET http://localhost:80/health
 [ ] Control path :8088 accessible
-    -> Kiem tra: GET http://localhost:8088/health
-[ ] OPS_AUTH_TOKEN da duoc set
-[ ] Origin counters dang hoat dong
-    -> Kiem tra: GET http://localhost:8088/ops/app/cdn/origin/request-counts
-[ ] VCL chua negative caching logic
-    -> Doc: E:/Projects/k6/k6-metrics-server/load-target/varnish/default.vcl
-    -> Phai co: if (beresp.status == 404 || beresp.status == 410) { ... }
-[ ] VCL khong cache 5xx
-    -> Phai co: if (beresp.status >= 500) { set beresp.uncacheable = true; }
-[ ] Handler GetCachedMissing hoat dong
-    -> Kiem tra: GET http://localhost:80/api/cached/missing/test?ttl_seconds=5
-    -> Phai tra 404 + X-Negative-Cache: true
+    -> Kiểm tra: GET http://localhost:8088/health
+[ ] OPS_AUTH_TOKEN đã được set
+[ ] Origin counters đang hoạt động
+    -> Kiểm tra: GET http://localhost:8088/ops/app/cdn/origin/request-counts
+[ ] VCL chứa negative caching logic
+    -> Đọc: E:/Projects/k6/k6-metrics-server/load-target/varnish/default.vcl
+    -> Phải có: if (beresp.status == 404 || beresp.status == 410) { ... }
+[ ] VCL không cache 5xx
+    -> Phải có: if (beresp.status >= 500) { set beresp.uncacheable = true; }
+[ ] Handler GetCachedMissing hoạt động
+    -> Kiểm tra: GET http://localhost:80/api/cached/missing/test?ttl_seconds=5
+    -> Phải trả 404 + X-Negative-Cache: true
 ```
 
-### Checklist kiem tra ket qua
+### Checklist kiểm tra kết quả
 
 ```text
-TRONG KHI DOC OUTPUT:
+TRONG KHI ĐỌC OUTPUT:
 
 [ ] k6 exit code = 0
-[ ] Tat ca 7 checks PASS (100%)
+[ ] Tất cả 7 checks PASS (100%)
 [ ] Sequence: 404 MISS -> 404 HIT -> sleep -> 404 MISS
-[ ] X-Negative-Cache: true tren MISS va HIT
+[ ] X-Negative-Cache: true trên MISS và HIT
 [ ] Origin count = 1 sau phase 1
 [ ] Origin count = 2 sau phase 2
-[ ] Status code luon la 404 (khong bao gio 200)
-[ ] Khong co unexpected errors trong log
+[ ] Status code luôn là 404 (không bao giờ 200)
+[ ] Không có unexpected errors trong log
 
-NEU FAIL:
+NẾU FAIL:
 
-[ ] Xac dinh check nao fail?
-[ ] "negative second cache state HIT" fail -> VCL khong cache 404
-[ ] "negative after expiry cache state MISS" fail -> TTL dai qua / sleep ngan qua
-[ ] Origin count sai -> counter logic hoac co concurrent requests
-[ ] Khong co X-Negative-Cache -> VCL khong set header nay
+[ ] Xác định check nào fail?
+[ ] "negative second cache state HIT" fail -> VCL không cache 404
+[ ] "negative after expiry cache state MISS" fail -> TTL dài quá / sleep ngắn quá
+[ ] Origin count sai -> counter logic hoặc có concurrent requests
+[ ] Không có X-Negative-Cache -> VCL không set header này
 ```
 
 ## 15. 4-5 variations
 
-### Variation 1: Negative TTL rat ngan (1-2s)
+### Variation 1: Negative TTL rất ngắn (1-2s)
 
 ```text
-MUC DICH: Test negative cache voi TTL cuc ngan de verify
-         expire chinh xac o bien duoi.
+MỤC ĐÍCH: Test negative cache với TTL cực ngắn để verify
+         expire chính xác ở biên dưới.
 
-THAY DOI:
+THAY ĐỔI:
   $env:NEGATIVE_TTL_SECONDS = "2"
   $env:NEGATIVE_WAIT_SECONDS = "3"
 
-MONG DOI:
-  - Negative cache van MISS -> HIT -> MISS
-  - Origin count van 1 -> 2
-  - Thoi gian chay nhanh hon (~5s)
+MONG ĐỢI:
+  - Negative cache vẫn MISS -> HIT -> MISS
+  - Origin count vẫn 1 -> 2
+  - Thời gian chạy nhanh hơn (~5s)
 
-Y NGHIA:
-  - Chứng minh TTL duoc ton trong ngay ca o gia tri cuc nho
-  - Phu hop cho resource co kha nang duoc tao rat nhanh
-    (vi du: auto-generated content)
+Ý NGHĨA:
+  - Chứng minh TTL được tôn trọng ngay cả ở giá trị cực nhỏ
+  - Phù hợp cho resource có khả năng được tạo rất nhanh
+    (ví dụ: auto-generated content)
 ```
 
-### Variation 2: Negative TTL dai (30s)
+### Variation 2: Negative TTL dài (30s)
 
 ```text
-MUC DICH: Test negative cache voi TTL dai hon de verify
-         offload keo dai trong production.
+MỤC ĐÍCH: Test negative cache với TTL dài hơn để verify
+         offload kéo dài trong production.
 
-THAY DOI:
+THAY ĐỔI:
   $env:NEGATIVE_TTL_SECONDS = "30"
   $env:NEGATIVE_WAIT_SECONDS = "32"
 
-MONG DOI:
+MONG ĐỢI:
   - Negative cache MISS -> HIT -> (sleep 32s) -> MISS
-  - Trong 30s, nhieu request deu HIT
-  - Origin count van 1 -> 2
+  - Trong 30s, nhiều request đều HIT
+  - Origin count vẫn 1 -> 2
 
-Y NGHIA:
-  - Phu hop cho 410 Gone (resource da bi xoa vinh vien)
-  - Cang TTL dai, cang offload tot nhung rui ro stale 404
-  - Can balance giua offload va freshness
+Ý NGHĨA:
+  - Phù hợp cho 410 Gone (resource đã bị xóa vĩnh viễn)
+  - Càng TTL dài, càng offload tốt nhưng rủi ro stale 404
+  - Cần balance giữa offload và freshness
 ```
 
-### Variation 3: Nhieu missing paths dong thoi
+### Variation 3: Nhiều missing paths đồng thời
 
 ```text
-MUC DICH: Test negative cache voi nhieu URL 404 khac nhau,
-         dam bao isolation giua cac cache keys.
+MỤC ĐÍCH: Test negative cache với nhiều URL 404 khác nhau,
+         đảm bảo isolation giữa các cache keys.
 
-THAY DOI:
-  Tao nhieu path khac nhau trong setup():
+THAY ĐỔI:
+  Tạo nhiều path khác nhau trong setup():
 
   const paths = [
     buildCachedMissingPath(`missing-a-${Date.now()}`, { ttl_seconds: 5 }),
@@ -1700,74 +1700,74 @@ THAY DOI:
     buildCachedMissingPath(`missing-c-${Date.now()}`, { ttl_seconds: 5 }),
   ];
 
-  Sau do test MISS -> HIT -> origin count cho TUNG path.
+  Sau đó test MISS -> HIT -> origin count cho TỪNG path.
 
-MONG DOI:
-  - Moi path co MISS -> HIT rieng biet
-  - Origin count rieng cho tung path
-  - Cache isolation: HIT cho path A KHONG anh huong path B
+MONG ĐỢI:
+  - Mỗi path có MISS -> HIT riêng biệt
+  - Origin count riêng cho từng path
+  - Cache isolation: HIT cho path A KHÔNG ảnh hưởng path B
 
-Y NGHIA:
+Ý NGHĨA:
   - Chứng minh cache key isolation cho negative cache
-  - Moi URL 404 la mot cache object rieng
-  - Khong bi leakage giua cac path khac nhau
+  - Mỗi URL 404 là một cache object riêng
+  - Không bị leakage giữa các path khác nhau
 ```
 
 ### Variation 4: 410 Gone test
 
 ```text
-MUC DICH: Test negative cache cho 410 Gone (resource da bi xoa vinh vien).
+MỤC ĐÍCH: Test negative cache cho 410 Gone (resource đã bị xóa vĩnh viễn).
 
-THAY DOI:
-  Tao handler cho 410 Gone response:
+THAY ĐỔI:
+  Tạo handler cho 410 Gone response:
   - Path: /api/cached/gone/{key}
-  - Tra ve 410 Gone
+  - Trả về 410 Gone
   - Cache-Control: max-age=86400 (24h)
   - X-Negative-Cache: true
 
   Script:
   - Request 1: 410 MISS
-  - Request 2: 410 HIT (ngay lap tuc)
-  - Sleep 1s: van 410 HIT (vi TTL dai)
+  - Request 2: 410 HIT (ngay lập tức)
+  - Sleep 1s: vẫn 410 HIT (vì TTL dài)
   - Origin count: 1 -> 1
 
-MONG DOI:
-  - 410 duoc cache voi TTL dai
-  - Origin count chi = 1
-  - Khac voi 404: TTL dai hon, khong can wait expire
+MONG ĐỢI:
+  - 410 được cache với TTL dài
+  - Origin count chỉ = 1
+  - Khác với 404: TTL dài hơn, không cần wait expire
 
-Y NGHIA:
-  - 410 Gone la use case hoan hao cho negative cache TTL dai
-  - Resource da bi xoa -> khong co rui ro stale 404
-  - Nen phan biet 404 vs 410 trong VCL
+Ý NGHĨA:
+  - 410 Gone là use case hoàn hảo cho negative cache TTL dài
+  - Resource đã bị xóa -> không có rủi ro stale 404
+  - Nên phân biệt 404 vs 410 trong VCL
 ```
 
-### Variation 5: Smoke — verify negative cache KHONG bi expire som
+### Variation 5: Smoke — verify negative cache KHÔNG bị expire sớm
 
 ```text
-MUC DICH: Verify negative cache giu object trong SUOT TTL window.
+MỤC ĐÍCH: Verify negative cache giữ object trong SUỐT TTL window.
 
-THAY DOI:
+THAY ĐỔI:
   - Request 1: 404 MISS
-  - Request lien tuc moi 1s trong TTL window
-  - Tat ca request giua deu phai HIT
-  - Chi MISS lai sau TTL + grace
+  - Request liên tục mỗi 1s trong TTL window
+  - Tất cả request giữa đều phải HIT
+  - Chỉ MISS lại sau TTL + grace
 
   for (let i = 0; i < NEGATIVE_TTL_SECONDS; i++) {
     const res = requestCdn('GET', path);
     assertStatus(res, 404);
-    assertCacheState(res, 'HIT');  // Van HIT trong TTL
+    assertCacheState(res, 'HIT');  // Vẫn HIT trong TTL
     sleep(1);
   }
 
-MONG DOI:
-  - Tat ca request trong TTL window deu HIT
-  - Khong co unexpected eviction
-  - Origin count van = 1
+MONG ĐỢI:
+  - Tất cả request trong TTL window đều HIT
+  - Không có unexpected eviction
+  - Origin count vẫn = 1
 
-Y NGHIA:
-  - Dam bao cache memory du lon, khong evict object som
-  - Verifies consistency cua negative cache trong suot TTL
+Ý NGHĨA:
+  - Đảm bảo cache memory đủ lớn, không evict object sớm
+  - Verifies consistency của negative cache trong suốt TTL
 ```
 
 ## 16. Anti-patterns
@@ -1780,58 +1780,58 @@ ANTI-PATTERN:
       set beresp.ttl = 10s;  // <-- SAI! Cache server error
   }
 
-TAI SAO SAI:
-  - 500 la server error, cache no = che giaU broken service
-  - Origin co the crash roi tu recover nhung CDN van tra 500 cu
-  - Monitoring se khong phat hien
+TẠI SAO SAI:
+  - 500 là server error, cache nó = che giấu broken service
+  - Origin có thể crash rồi tự recover nhưng CDN vẫn trả 500 cũ
+  - Monitoring sẽ không phát hiện
 
-CACH DUNG:
+CÁCH ĐÚNG:
   if (beresp.status >= 500) {
       set beresp.ttl = 0s;
-      set beresp.uncacheable = true;  // TUYET DOI KHONG CACHE
+      set beresp.uncacheable = true;  // TUYỆT ĐỐI KHÔNG CACHE
       return (deliver);
   }
-  // Logic cho negative caching (404, 410) o DUOI
+  // Logic cho negative caching (404, 410) ở DƯỚI
 ```
 
 ### Anti-pattern 2: Set negative TTL = positive TTL
 
 ```text
 ANTI-PATTERN:
-  // Ap dung cung TTL cho TAT CA status codes
-  set beresp.ttl = 300s;  // 5 phut cho ca 200, 404, 410...
+  // Áp dụng cùng TTL cho TẤT CẢ status codes
+  set beresp.ttl = 300s;  // 5 phút cho cả 200, 404, 410...
 
-TAI SAO SAI:
-  - 404 TTL = 5 phut -> resource moi tao trong 5 phut nay van thay 404
-  - User click push notification -> 404 -> mat sale
-  - Khong phan biet duoc expected vs stale 404
+TẠI SAO SAI:
+  - 404 TTL = 5 phút -> resource mới tạo trong 5 phút này vẫn thấy 404
+  - User click push notification -> 404 -> mất sale
+  - Không phân biệt được expected vs stale 404
 
-CACH DUNG:
+CÁCH ĐÚNG:
   if (beresp.status == 404) {
-      set beresp.ttl = 15s;   // Ngan
+      set beresp.ttl = 15s;   // Ngắn
   } else if (beresp.status == 410) {
-      set beresp.ttl = 86400s; // Dai (gone vinh vien)
+      set beresp.ttl = 86400s; // Dài (gone vĩnh viễn)
   } else {
       set beresp.ttl = 60s;   // Positive cache
   }
 ```
 
-### Anti-pattern 3: Khong phan biet 404 va 410
+### Anti-pattern 3: Không phân biệt 404 và 410
 
 ```text
 ANTI-PATTERN:
-  if (beresp.status == 404) {  // Chi cache 404, bo qua 410
+  if (beresp.status == 404) {  // Chỉ cache 404, bỏ qua 410
       set beresp.ttl = 15s;
   }
-  // 410 khong duoc cache -> MISS moi lan -> origin load
+  // 410 không được cache -> MISS mỗi lần -> origin load
 
-TAI SAO SAI:
-  - 410 Gone la resource da bi xoa VINH VIEN
-  - Khong co kha nang resource xuat hien tro lai
-  - Day la use case HOAN HAO cho negative cache TTL dai
-  - Khong cache 410 = bo phi co hoi offload
+TẠI SAO SAI:
+  - 410 Gone là resource đã bị xóa VĨNH VIỄN
+  - Không có khả năng resource xuất hiện trở lại
+  - Đây là use case HOÀN HẢO cho negative cache TTL dài
+  - Không cache 410 = bỏ phí cơ hội offload
 
-CACH DUNG:
+CÁCH ĐÚNG:
   if (beresp.status == 404 || beresp.status == 410) {
       if (beresp.ttl <= 0s) {
           set beresp.ttl = (beresp.status == 410) ? 86400s : 15s;
@@ -1841,48 +1841,48 @@ CACH DUNG:
   }
 ```
 
-### Anti-pattern 4: Khong co X-Negative-Cache header
+### Anti-pattern 4: Không có X-Negative-Cache header
 
 ```text
 ANTI-PATTERN:
   if (beresp.status == 404) {
-      set beresp.ttl = 15s;   // Cache nhung khong tag
+      set beresp.ttl = 15s;   // Cache nhưng không tag
   }
-  // Thieu: set beresp.http.X-Negative-Cache = "true";
+  // Thiếu: set beresp.http.X-Negative-Cache = "true";
 
-TAI SAO SAI:
-  - Khong the phan biet 404 tu negative cache vs 404 tu origin
-  - Monitoring khong the track negative cache hit ratio
-  - Debug: khong biet 404 nay la HIT hay MISS
-  - Khong the alert khi negative caching broken
+TẠI SAO SAI:
+  - Không thể phân biệt 404 từ negative cache vs 404 từ origin
+  - Monitoring không thể track negative cache hit ratio
+  - Debug: không biết 404 này là HIT hay MISS
+  - Không thể alert khi negative caching broken
 
-CACH DUNG:
+CÁCH ĐÚNG:
   if (beresp.status == 404 || beresp.status == 410) {
       set beresp.ttl = 15s;
-      set beresp.http.X-Negative-Cache = "true";  // <-- PHAI CO
+      set beresp.http.X-Negative-Cache = "true";  // <-- PHẢI CÓ
   }
 ```
 
-### Anti-pattern 5: Khong xu ly grace cho negative cache
+### Anti-pattern 5: Không xử lý grace cho negative cache
 
 ```text
 ANTI-PATTERN:
   if (beresp.status == 404) {
       set beresp.ttl = 15s;
-      // Thieu: khong set grace
+      // Thiếu: không set grace
   }
 
-TAI SAO KHONG TOI UU:
-  - Khong set grace -> khi origin unhealthy, 404 response khong
-    duoc serve stale
-  - Client co the nhan 503 thay vi 404
-  - Trong truong hop nay, 404 grace van co ich:
-    origin unhealthy -> serve 404 stale thay vi error
+TẠI SAO KHÔNG TỐI ƯU:
+  - Không set grace -> khi origin unhealthy, 404 response không
+    được serve stale
+  - Client có thể nhận 503 thay vì 404
+  - Trong trường hợp này, 404 grace vẫn có ích:
+    origin unhealthy -> serve 404 stale thay vì error
 
-CACH DUNG (theo VCL hien tai):
+CÁCH ĐÚNG (theo VCL hiện tại):
   if (beresp.status == 404 || beresp.status == 410) {
       set beresp.ttl = 15s;
-      set beresp.grace = 30s;   // Cho phep stale serving
+      set beresp.grace = 30s;   // Cho phép stale serving
       set beresp.keep = 120s;
       set beresp.http.X-Negative-Cache = "true";
   }
@@ -1918,7 +1918,7 @@ Env vars:
 Public path:
   /api/cached/missing/{key}?ttl_seconds={n}
   -> Handler: GetCachedMissing
-  -> Tra ve: 404 JSON, X-Negative-Cache: true
+  -> Trả về: 404 JSON, X-Negative-Cache: true
 
 Control paths:
   GET  /ops/app/cdn/origin/request-counts
@@ -1996,9 +1996,9 @@ GetCachedMissing (cdn_cached_endpoints.go lines 117-139):
 
 ---
 
-> **Mental model:** Negative caching la mot CO CHE PHONG THU. Trong khi positive cache
-> giup serve 200 nhanh hon, negative cache bao ve origin khoi bi spam boi 404 traffic
-> lap lai. CDN dung ra hứng chiu impact cua traffic xau thay cho origin. Day la
-> pure CDN-edge behavior: app chi tra ve 404, CDN la noi quyet dinh co cache 404
-> do hay khong. Origin request counters la bang chung khong the tranh cai cho
-> viec offload nay.
+> **Mental model:** Negative caching là một CƠ CHẾ PHÒNG THỦ. Trong khi positive cache
+> giúp serve 200 nhanh hơn, negative cache bảo vệ origin khỏi bị spam bởi 404 traffic
+> lặp lại. CDN đứng ra hứng chịu impact của traffic xấu thay cho origin. Đây là
+> pure CDN-edge behavior: app chỉ trả về 404, CDN là nơi quyết định có cache 404
+> đó hay không. Origin request counters là bằng chứng không thể tranh cãi cho
+> việc offload này.

@@ -1365,12 +1365,338 @@ t=0.60s  VU #2 init xong -> vào pool
 t=0.75s  có VU rảnh      -> mốc này mới có thể chạy
 ```
 
+── Phân tích chi tiết: 3 tình huống sizing ──
+
+**Bước 1 — Nhắc lại công thức capacity từ mục 3.3:**
+
+Từ mục 3.3, ta đã có hai công thức cốt lõi quyết định khả năng của pool:
+
+```text
+capacity = M / W_effective = M × (1/W)
+
+Với M = preAllocatedVUs (ban đầu) hoặc lên đến maxVUs (sau khi tạo unplanned)
+Với W_effective = thời gian 1 VU bận cho 1 iteration
+```
+
+Như đã chứng minh ở mục 3.3:
+
+```text
+capacity_initial = preAllocatedVUs / W_effective    → khả năng xử lý lúc mới chạy
+capacity_max     = maxVUs / W_effective              → khả năng xử lý tối đa có thể đạt
+```
+
+Nếu `capacity_initial < lambda` thì giây đầu có drop. Nếu `capacity_max < lambda` thì drop kéo dài suốt run.
+
+**Bước 2 — 3 tình huống sizing:**
+
+── Tình huống A: preAllocatedVUs ĐỦ (≥ required_vus_min) ──
+
+Đây là tình huống lý tưởng: pool đã có sẵn đủ VU ngay từ đầu để chịu được target rate.
+
+```text
+Điều kiện: preAllocatedVUs ≥ ceil(lambda × W_effective)
+```
+
+Phân tích từng bước với con số cụ thể:
+
+```text
+lambda        = 4 iterations/s   (mỗi giây muốn start 4 slot)
+W_effective   = 0.5s              (1 iteration giữ VU bận 0.5 giây)
+
+Bước A1 — Tính required_vus_min từ mục 3.3:
+  required_vus_min = ceil(lambda × W)
+                   = ceil(4 × 0.5)
+                   = ceil(2)
+                   = 2 VU
+
+Bước A2 — Config:
+  preAllocatedVUs: 4,
+  maxVUs: 4,
+
+Bước A3 — capacity_initial:
+  capacity_initial = 4 / 0.5 = 8 iterations/s
+  capacity_initial = 8/s > lambda = 4/s → DƯ SỨC
+
+Bước A4 — Timeline giây đầu với 4 VU sẵn:
+  t=0.00:  slot 1 → VU 1 nhận, bận đến t=0.50
+  t=0.25:  slot 2 → VU 2 nhận, bận đến t=0.75
+  t=0.50:  slot 3 → VU 1 vừa rảnh, nhận ngay, bận đến t=1.00
+  t=0.75:  slot 4 → VU 2 vừa rảnh, nhận ngay, bận đến t=1.25
+  → KHÔNG slot nào bị drop
+
+Bước A5 — Kết luận:
+  - Không drop slot nào ngay từ đầu
+  - Không cần tạo unplanned VU
+  - maxVUs có thể set = preAllocatedVUs (không cần room) hoặc cao hơn (dư an toàn)
+  - Đây là trạng thái vận hành ổn định nhất
+```
+
+Với tình huống A, `maxVUs` không đóng vai trò gì vì pool không bao giờ cần tạo thêm VU. Bạn có thể đặt `maxVUs = preAllocatedVUs` để đơn giản, hoặc đặt cao hơn một chút (vd ×1.5) để có buffer phòng khi `W_effective` thực tế cao hơn dự tính. Không nên đặt `maxVUs` quá cao vì nó có thể che giấu vấn đề sizing — nếu preAllocatedVUs đã đủ thì maxVUs cao không gây hại, nhưng cũng không mang lại lợi ích gì.
+
+── Tình huống B: preAllocatedVUs THIẾU, maxVUs ĐỦ CAO ──
+
+Đây là tình huống phổ biến nhất và quan trọng nhất cần hiểu rõ. Pool khởi đầu với ít VU, nhưng có room để tạo thêm. Drop xảy ra ở đầu run, rồi giảm dần và hết hẳn khi đủ VU.
+
+```text
+Điều kiện:
+  preAllocatedVUs < ceil(lambda × W_effective)
+  maxVUs           ≥ ceil(lambda × W_effective)
+```
+
+Phân tích chi tiết với con số cụ thể:
+
+```text
+lambda        = 5 iterations/s   (mỗi giây muốn start 5 slot)
+W_effective   = 0.8s              (1 iteration giữ VU bận 0.8 giây)
+
+Bước B1 — Tính required_vus_min:
+  required_vus_min = ceil(lambda × W)
+                   = ceil(5 × 0.8)
+                   = ceil(4.0)
+                   = 4 VU
+  → Cần ít nhất 4 VU để chịu được rate 5/s với W=0.8s
+
+Bước B2 — Config:
+  preAllocatedVUs: 2,    (chỉ có 2 VU sẵn — thiếu)
+  maxVUs: 8,             (có room tạo thêm đến 6 VU nữa)
+
+  room = maxVUs - preAllocatedVUs = 8 - 2 = 6 VU unplanned
+
+Bước B3 — Tính capacity_initial và capacity_max:
+  capacity_initial = preAllocatedVUs / W_effective
+                   = 2 / 0.8
+                   = 2.5 iterations/s
+
+  capacity_max     = maxVUs / W_effective
+                   = 8 / 0.8
+                   = 10 iterations/s
+
+  So sánh:
+    capacity_initial (2.5/s) < lambda (5/s) → GIÂY ĐẦU CÓ DROP
+    capacity_max (10/s)      > lambda (5/s) → VỀ SAU CÓ THỂ HẾT DROP
+
+  Mức thiếu ban đầu: 5 - 2.5 = 2.5 drops/s
+  → Trong giây đầu, khoảng 2-3 slot sẽ bị drop do thiếu VU
+
+Bước B4 — Timeline giây đầu tiên:
+  t=0.00:  slot 1 → VU 1 nhận, bận đến t=0.80
+  t=0.20:  slot 2 → VU 2 nhận, bận đến t=1.00
+  t=0.40:  slot 3 → KHÔNG CÓ VU RẢNH → DROP
+           → core gửi tín hiệu tạo unplanned VU #3 ở background
+  t=0.60:  slot 4 → VU #3 chưa init xong → DROP
+           → core gửi tín hiệu tạo unplanned VU #4 ở background
+  t=0.80:  slot 5 → VU 1 vừa rảnh lúc t=0.80 → NHẬN ĐƯỢC
+           → VU 1 bận đến t=1.60
+           Đồng thời VU #3 có thể đã init xong → vào pool
+  → Giây đầu: 3 slot chạy, 2 slot drop
+
+Bước B5 — Timeline giây thứ 2:
+  Lúc này đã có thêm VU #3 và VU #4 (có thể cả VU #5 đang init)
+  Pool hiện có ~4-5 VU
+
+  capacity với 4 VU = 4 / 0.8 = 5 iterations/s = lambda
+  → VỪA ĐỦ, drop giảm mạnh hoặc hết hẳn
+
+  t=1.00:  VU 2 rảnh, nhận slot mới
+  t=1.20:  VU 3 rảnh (nếu bắt đầu từ t=0.40-0.60), nhận slot mới
+  t=1.40:  VU 4 rảnh, nhận slot mới
+  t=1.60:  VU 1 rảnh, nhận slot mới
+  → Các slot được phân bổ đều, KHÔNG drop
+
+Bước B6 — Kết luận tình huống B:
+  - Drop CHỈ xảy ra lúc đầu, khi pool chưa có đủ VU
+  - Sau khi unplanned VU vào pool (sau ~vài trăm ms đến 1-2 giây), drop giảm rồi hết
+  - Tổng drop thấp, thường chỉ vài slot trong 1-2 giây đầu
+  - Đây là cách vận hành bình thường của constant-arrival-rate executor
+  - maxVUs cao cho phép executor "tự chữa" tình trạng thiếu VU ban đầu
+```
+
+Lưu ý quan trọng về unplanned VU trong tình huống B:
+
+```text
+unplanned VU mất thời gian init (vài trăm ms đến vài giây tùy môi trường)
+  → không cứu được slot đã drop
+  → nhưng cứu được các slot tương lai
+
+Thời gian init càng lâu (vd JS phức tạp, import module, kết nối DB)
+  → drop kéo dài hơn ở đầu run
+  → nên dùng preAllocatedVUs đủ cao để tránh phụ thuộc vào init time
+```
+
+── Tình huống C: CẢ preAllocatedVUs VÀ maxVUs ĐỀU THIẾU ──
+
+Đây là tình huống tệ nhất: ngay cả khi tạo hết unplanned VU đến trần maxVUs, pool vẫn không đủ sức xử lý target rate. Drop xảy ra LIÊN TỤC suốt run.
+
+```text
+Điều kiện:
+  maxVUs < ceil(lambda × W_effective)
+  → capacity_max < lambda
+```
+
+Phân tích với con số cụ thể:
+
+```text
+lambda        = 10 iterations/s
+W_effective   = 1s
+
+Bước C1 — Tính required_vus_min:
+  required_vus_min = ceil(10 × 1) = ceil(10) = 10 VU
+
+Bước C2 — Config:
+  preAllocatedVUs: 2,
+  maxVUs: 4,
+
+  capacity_initial = 2 / 1 = 2 iterations/s
+  capacity_max     = 4 / 1 = 4 iterations/s
+
+Bước C3 — So sánh capacity_max với lambda:
+  capacity_max (4/s) < lambda (10/s)
+  → Thiếu trầm trọng: chỉ xử lý được 4 trong 10 slot mỗi giây
+
+Bước C4 — Tính drop rate ổn định:
+  drop_rate = max(0, lambda - capacity_max)
+            = max(0, 10 - 4)
+            = 6 drops/s
+
+  → Mỗi giây 6 slot bị drop, liên tục không giảm
+
+Bước C5 — Timeline giây đầu:
+  t=0.00:  slot 1  → VU 1 nhận, bận đến t=1.00
+  t=0.10:  slot 2  → VU 2 nhận, bận đến t=1.10
+  t=0.20:  slot 3  → DROP, tạo unplanned VU #3
+  t=0.30:  slot 4  → DROP, tạo unplanned VU #4
+  t=0.40:  slot 5  → DROP (đã hết room, maxVUs=4)
+           → warning "Insufficient VUs" lần 1
+  t=0.50:  slot 6  → DROP + warning
+  t=0.60:  slot 7  → DROP + warning
+  t=0.70:  slot 8  → DROP + warning
+  t=0.80:  slot 9  → DROP + warning
+  t=0.90:  slot 10 → DROP + warning
+  → Giây đầu: 2 slot chạy, 8 slot drop
+
+Giây thứ 2: VU #1 rảnh lúc t=1.00, VU #2 rảnh lúc t=1.10
+  Nhưng pool chỉ có 4 VU, capacity_max vẫn = 4/s
+  → Vẫn 4 slot chạy, 6 slot drop mỗi giây
+  → Kịch bản này LẶP LẠI suốt duration
+
+Bước C6 — Tổng drop với duration = 5s:
+  expected_dropped ~= drop_rate × duration
+                   = 6 × 5
+                   = 30 drops
+  (so với 50 slot được schedule: 5s × 10/s = 50 slot)
+  → Tỉ lệ drop: 30/50 = 60% — hơn một nửa số slot bị mất
+
+Bước C7 — Dấu hiệu nhận biết trong output:
+  - dropped_iterations tăng đều theo thời gian
+  - Warning "Insufficient VUs" xuất hiện lặp lại trong log
+  - vus_max luôn ở mức maxVUs (đã dùng hết room)
+  - Tỉ lệ drop ổn định (không giảm dần như tình huống B)
+
+Bước C8 — Cách fix:
+  - Tăng maxVUs lên ít nhất ≥ ceil(lambda × W_effective) = 10 VU
+  - Tăng preAllocatedVUs lên ≥ 10 VU nếu muốn tránh drop ban đầu
+  - Hoặc giảm lambda nếu không thể tăng VU (giới hạn tài nguyên)
+```
+
+**Bước 3 — Công thức sizing preAllocatedVUs:**
+
+Từ phân tích 3 tình huống trên, ta rút ra công thức sizing thực tế:
+
+```text
+Công thức tối thiểu (dựa trên mục 3.3):
+  preAllocatedVUs_min = ceil(lambda × W_effective)
+
+  Đây là con số sàn — nếu đặt thấp hơn, bạn rơi vào tình huống B hoặc C
+```
+
+Nếu muốn an toàn (tránh tạo VU lúc đang chạy test):
+
+```text
+preAllocatedVUs >= ceil(lambda × W_effective_p95 × safety_factor)
+
+Với:
+  W_effective_p95 = thời gian bận p95 của iteration (từ test thăm dò trước)
+  safety_factor   = 1.2 ~ 1.5 tùy mức độ biến động của hệ thống
+```
+
+Ví dụ sizing an toàn:
+
+```text
+lambda            = 5 iterations/s
+W_effective_p95   = 0.9s
+safety_factor     = 1.3
+
+preAllocatedVUs_safe = ceil(5 × 0.9 × 1.3)
+                     = ceil(5.85)
+                     = 6 VU
+
+→ Đặt preAllocatedVUs: 6 để tránh drop ban đầu
+→ Nếu W_effective thực tế thấp hơn (vd 0.7s), pool dư sức → an toàn
+→ Nếu W_effective thực tế cao hơn (vd 1.1s), vẫn có room maxVUs để tạo thêm
+```
+
+Về `maxVUs`, nguyên tắc chọn:
+
+```text
+1. Bằng preAllocatedVUs:
+   - Dùng khi bạn tự tin pool đã đủ (đã tính safety_factor)
+   - Đơn giản nhất, không có biến số bất ngờ
+   - Phù hợp với test ổn định, hệ thống đã biết rõ hành vi
+
+2. Cao hơn preAllocatedVUs (vd ×1.5 hoặc ×2):
+   - Dùng khi bạn muốn có room dự phòng
+   - Hữu ích khi W_effective có thể dao động (mạng chậm, server quá tải)
+   - Cho phép executor tự điều chỉnh nếu cần thêm worker
+   - Đánh đổi: có thể che giấu vấn đề sizing (drop ít không có nghĩa là pool đủ)
+
+3. Không nên để maxVUs quá cao:
+   - Có thể che giấu vấn đề sizing — drop ít nhờ unplanned VU
+     không có nghĩa là preAllocatedVUs đã được sizing đúng
+   - Tài nguyên máy test có giới hạn (CPU, RAM, file descriptor)
+   - Mỗi unplanned VU tiêu tốn tài nguyên để init và duy trì
+```
+
+**Bước 4 — Bảng so sánh 3 tình huống:**
+
+| Tình huống | preAllocatedVUs | maxVUs | capacity_initial vs lambda | capacity_max vs lambda | Drop ban đầu | Drop kéo dài | Warning "Insufficient VUs" |
+|---|---|---|---|---|---|---|---|
+| A: Đủ | ≥ required | bất kỳ ≥ preAllocatedVUs | capacity ≥ lambda | capacity ≥ lambda | Không | Không | Không |
+| B: Thiếu trước, đủ sau | < required | ≥ required | capacity < lambda | capacity ≥ lambda | Có (tạm thời) | Hết khi đủ VU | Có thể có ở đầu |
+| C: Thiếu hẳn | < required | < required | capacity < lambda | capacity < lambda | Có (nặng) | Có (liên tục, không giảm) | Có (lặp lại) |
+
+Đọc bảng từ trái sang phải để chẩn đoán:
+
+```text
+Nếu thấy dropped_iterations > 0:
+  → Kiểm tra vus_max trong output
+  → Nếu vus_max < maxVUs: đang ở tình huống B (đang tạo thêm VU, sẽ ổn)
+  → Nếu vus_max = maxVUs và drop vẫn tăng: đang ở tình huống C (thiếu hẳn)
+
+Nếu thấy warning "Insufficient VUs" lặp lại:
+  → Gần như chắc chắn là tình huống C
+  → Tăng maxVUs (và preAllocatedVUs) lên
+```
+
 Điểm cần nhớ:
 
 ```text
 maxVUs không phải là số VU có sẵn ngay từ đầu
 maxVUs chỉ là trần cho phép tạo thêm
 preAllocatedVUs mới là số VU sẵn trước khi đo
+
+capacity quyết định bởi SỐ VU THỰC TẾ TRONG POOL, không phải maxVUs
+  → capacity_initial = preAllocatedVUs / W_effective
+  → capacity_max     = maxVUs / W_effective
+  → Nếu capacity_max < lambda: drop LIÊN TỤC, không thể cứu
+
+Tình huống B là thiết kế có chủ đích của constant-arrival-rate:
+  pool khởi đầu nhỏ, tự mở rộng khi cần
+  → drop đầu run là "chi phí khởi động", chấp nhận được nếu thấp
+
+Tình huống C là lỗi sizing:
+  maxVUs quá thấp so với lambda × W_effective
+  → drop không phải "tạm thời" mà là "mãn tính"
+  → phải tăng maxVUs, không có cách nào khác
 ```
 
 Vì vậy trong load test nghiêm túc:
@@ -1379,6 +1705,13 @@ Vì vậy trong load test nghiêm túc:
 preAllocatedVUs nên được sizing đủ cao
 maxVUs dùng làm trần an toàn
 không dựa vào unplanned VUs để đạt target đều đẹp
+
+Quy trình sizing khuyến nghị:
+  1. Chạy test thăm dò nhỏ để đo W_effective (avg và p95)
+  2. Tính required_vus_min = ceil(lambda × W_effective)
+  3. Đặt preAllocatedVUs >= ceil(lambda × W_effective_p95 × 1.2)
+  4. Đặt maxVUs = preAllocatedVUs × 1.5 (có room dự phòng)
+  5. Nếu test thật vẫn có drop: tăng preAllocatedVUs, không chỉ tăng maxVUs
 ```
 
 ### 3.5. Duration và gracefulStop
