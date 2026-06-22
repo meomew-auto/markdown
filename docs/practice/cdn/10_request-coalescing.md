@@ -1864,3 +1864,217 @@ Advanced Survival Cases (09-11)  <-- BAN DANG O DAY
 Validation (12)
   cdn-12-validation         Validation reports + chart analysis
 ```
+
+---
+
+## Phu luc L: Phan tich sau hanh vi coalescing voi varnishlog
+
+### L.1 Cau lenh varnishlog de xem coalescing
+
+```bash
+# Xem request flow (chi GET request)
+varnishlog -g request -q "ReqMethod eq 'GET'"
+
+# Xem chi cac su kien lien quan den fetch va waiting
+varnishlog -g request -i VCL_call,VCL_return,ReqStart,ReqEnd,ReqURL,BerespStatus
+
+# Loc request co waiting list
+varnishlog -g request -i Waitinglist
+
+# Xem busy object creation/removal
+varnishlog -g raw -i ExpKill -i ExpPick
+```
+
+### L.2 Doc varnishlog output
+
+```text
+# Vi du output cho 1 request duoc coalescing:
+
+*   << Request  >> 17
+-   ReqStart       127.0.0.1 54321 a0
+-   ReqMethod      GET
+-   ReqURL         /api/cached?key=coalesce-1719000000000&ttl_seconds=30&origin_delay_ms=800
+-   ReqProtocol    HTTP/1.1
+-   VCL_call       RECV
+-   VCL_return     hash
+-   VCL_call       HASH
+-   VCL_return     lookup
+-   VCL_call       MISS                           <-- Object khong co trong cache
+-   VCL_return     fetch                          <-- Dang duoc fetch (forward)
+-   Waitinglist    add <busyobj>                  <-- Them vao waiting list
+-   Waitinglist    wait                            <-- CHO
+... (dang cho origin response)
+-   Waitinglist    remove                         <-- Nhan object, xoa khoi waiting list
+-   VCL_call       DELIVER
+-   ReqEnd         17 200 801.234 0.123 0.456
+```
+
+### L.3 Cac chi so varnishstat lien quan
+
+```bash
+# Xem tat ca chi so lien quan den coalescing
+varnishstat -1 | grep -E "waitinglist|fetch|hit|miss|backend"
+
+# Cac chi so quan trong:
+# MAIN.n_waitinglist         - So request DANG trong waiting list (real-time)
+# MAIN.n_waitinglist_drop    - So request bi drop khoi waiting list (timeout, error)
+# MAIN.waitinglist_depth     - Do sau lon nhat cua waiting list (peak)
+# MAIN.cache_hit             - Tong so cache hits
+# MAIN.cache_miss            - Tong so cache misses
+# MAIN.backend_conn          - Tong so backend connections (proxy den origin)
+# MAIN.backend_reuse         - Tong so backend connection reuse (keep-alive)
+```
+
+### L.4 Phan tich pattern coalescing
+
+```text
+Pattern 1: Coalescing hoan hao
+  n_waitinglist_depth = batch_size - 1 (vi du: 11 cho batch 12)
+  cache_miss = batch_size (vi tat ca deu MISS)
+  backend_conn = 1 (chi 1 origin connection)
+  -> PASS: Coalescing hoat dong hoan hao
+
+Pattern 2: Race condition
+  n_waitinglist_depth = batch_size - 2 (vi du: 10 cho batch 12)
+  cache_miss = batch_size
+  backend_conn = 2 (2 origin connections gan cung luc)
+  -> PASS: Race condition nho, van trong nguong
+
+Pattern 3: Khong coalescing
+  n_waitinglist_depth = 0
+  cache_miss = batch_size
+  backend_conn = batch_size
+  -> FAIL: Coalescing khong hoat dong
+
+Pattern 4: Coalescing mot phan
+  n_waitinglist_depth = 3 (cho batch 12)
+  cache_miss = batch_size
+  backend_conn = 9
+  -> FAIL: Coalescing mot phan, can dieu tra
+```
+
+---
+
+## Phu luc M: Coalescing duoi goc do toan hoc
+
+### M.1 Cong thuc coalescing ratio
+
+```text
+Coalescing_Ratio = (Batch_Size - Origin_Requests) / Batch_Size
+
+Vi du:
+  Batch_Size = 12, Origin_Requests = 1
+  Coalescing_Ratio = (12 - 1) / 12 = 11/12 = 91.7%
+
+  Batch_Size = 12, Origin_Requests = 2
+  Coalescing_Ratio = (12 - 2) / 12 = 10/12 = 83.3%
+
+  Batch_Size = 100, Origin_Requests = 1
+  Coalescing_Ratio = (100 - 1) / 100 = 99%
+```
+
+### M.2 Origin load reduction
+
+```text
+Origin_Load_Reduction = Batch_Size / Origin_Requests
+
+Vi du:
+  Batch_Size = 12, Origin_Requests = 1 -> Reduction = 12x
+  Batch_Size = 100, Origin_Requests = 1 -> Reduction = 100x
+  Batch_Size = 10000, Origin_Requests = 1 -> Reduction = 10000x
+```
+
+### M.3 Thoi gian phuc vu trung binh
+
+```text
+T_coalesced = Origin_Delay (cho tat ca request)
+
+T_non_coalesced_avg = (1 * Origin_Delay + (Batch_Size - 1) * Hit_Delay) / Batch_Size
+
+Neu Origin_Delay = 800ms, Hit_Delay = 1ms, Batch_Size = 12:
+  T_coalesced = 800ms
+  T_non_coalesced_max = 12 * 800ms = 9600ms (serialized)
+  T_non_coalesced_avg = (1*800 + 1*1 + ...) / 12
+                      Gan dung = 800ms (vi request tuan tu, request 2-12 cho request 1)
+
+So sanh thuc te:
+  Co coalescing: avg 410ms (waiters cho it hon forward-er)
+  Khong coalescing: avg 4100ms (serialized qua origin)
+```
+
+### M.4 Xac suat race condition
+
+```text
+Xac suat 2 request MISS cung luc thay busy_obj chua duoc tao:
+
+P_race = Request_Arrival_Rate * Busy_Obj_Creation_Time
+
+Neu:
+  Request_Arrival_Rate = 12 request / 1ms = 12000 req/s
+  Busy_Obj_Creation_Time = 0.001ms (hash lookup + list insert)
+
+  P_race = 12000 * 0.000001 = 0.012 = 1.2%
+
+Voi batch_size = 12:
+  Expected race events = 12 * 0.012 = 0.144 events per batch
+  -> Kha nang race condition thap (< 15%)
+  -> Origin count = 1 trong ~85% lan chay
+```
+
+---
+
+## Phu luc N: References bo sung
+
+### N.1 CDN vendor docs
+
+| Vendor | Document | URL |
+| --- | --- | --- |
+| Varnish | Request coalescing | https://varnish-cache.org/docs/7.4/users-guide/vcl-request-coalescing.html |
+| Varnish | VSL query language | https://varnish-cache.org/docs/7.4/reference/vsl-query.html |
+| Fastly | Request collapsing | https://developer.fastly.com/learning/concepts/request-collapsing/ |
+| Cloudflare | Cache Reserve | https://developers.cloudflare.com/cache/advanced-configuration/cache-reserve/ |
+| AWS | Origin Shield | https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/origin-shield.html |
+| Nginx | proxy_cache_lock | https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_cache_lock |
+
+### N.2 Articles
+
+| Title | URL |
+| --- | --- |
+| "Thundering Herd" problem | https://en.wikipedia.org/wiki/Thundering_herd_problem |
+| Varnish blog: Wait for object | https://info.varnish-software.com/blog/request-coalescing |
+| Fastly: Request collapsing deep-dive | https://developer.fastly.com/learning/concepts/request-collapsing/ |
+| Cloudflare: Cache stampede prevention | https://blog.cloudflare.com/cache-stampede/ |
+
+### N.3 Case catalog reference
+
+```json
+{
+  "id": "cdn-10-request-coalescing",
+  "script": "10-request-coalescing.js",
+  "title": "Request coalescing",
+  "businessCase": "A cold popular object receives a concurrency burst; CDN should collapse origin forwarding.",
+  "whyCdn": "Proves multiple concurrent cache misses do not create an origin stampede.",
+  "run": {
+    "env": {
+      "COALESCE_CONCURRENCY": "12",
+      "COALESCE_ORIGIN_DELAY_MS": "800",
+      "COALESCE_TTL_SECONDS": "30"
+    }
+  },
+  "calls": [
+    {
+      "method": "GET",
+      "baseUrl": "publicBaseUrl",
+      "path": "/api/cached/<dynamic>",
+      "expectedStatus": 200,
+      "expected": "batched concurrent requests all succeed; follow-up request is HIT"
+    },
+    {
+      "method": "GET",
+      "baseUrl": "controlBaseUrl",
+      "path": "/ops/app/cdn/origin/request-counts",
+      "expected": "origin count for dynamic path stays <= 2"
+    }
+  ]
+}
+```
