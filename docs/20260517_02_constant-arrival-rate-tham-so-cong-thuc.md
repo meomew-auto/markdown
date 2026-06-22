@@ -1144,6 +1144,15 @@ M             = 2 VUs             (chỉ có 2 VU để nhận việc)
 
 Bước 1 — Tính capacity của pool:
   capacity = M / W_effective = 2 / 1 = 2 iterations/s
+
+  Phân tích kỹ con số 2/s:
+    W = 1s → 1 VU xong 1 iter mất 1s → tốc độ 1 VU = 1/1 = 1 iter/s
+    Có 2 VU → 2 × 1 = 2 iter/s
+
+    Viết gọn: capacity = M × (1/W) = 2 × (1/1) = 2 iter/s
+                        ↑         ↑
+                    số VU     tốc độ 1 VU (đảo từ thời gian)
+
   → 2 VU, mỗi VU xong 1 iter trong 1s → 1 giây làm được tối đa 2 iter
 
 Bước 2 — So sánh lambda với capacity:
