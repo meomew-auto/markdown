@@ -793,20 +793,23 @@ Bước 2: Liệt kê các mốc từ t=0, mỗi lần +0.25s
 
 Bước 3: Mốc t=4.00s có được schedule không?
 
-  Đọc code core thật: `lib/executor/constant_arrival_rate.go:364`
-  ```go
-  case <-regDurationCtx.Done():
-      return nil
-  ```
-  Khi `regDurationCtx` hết hạn (= startTime + duration = 4.00s), executor
-  return ngay lập tức. Slot timer tại t=4.00s cũng fire cùng thời điểm.
+  Trong core k6 (`constant_arrival_rate.go:364`), executor có 2 tín hiệu
+  cùng lúc tại t=4.00s:
 
-  Go `select` chọn ngẫu nhiên khi 2 channel cùng ready:
-    - Nếu `timer.C` thắng → slot được schedule → 17 slot
-    - Nếu `regDurationCtx.Done()` thắng → return, không schedule → 16 slot
+    Tín hiệu A: "đến giờ bắn slot tiếp theo" (timer hết hạn)
+    Tín hiệu B: "hết duration rồi, dừng lại"   (regDurationCtx hết hạn)
 
-  → Kết quả: 16 hoặc 17, không đoán trước được.
-  → `rate × duration = 16` là ước lượng LÝ THUYẾT, không phải số đếm thực tế.
+  Cả 2 cùng réo tại 4.00s. Executor chỉ nghe được 1 trong 2:
+
+    - Nghe A trước → bắn nốt slot cuối → 17 slot
+    - Nghe B trước → dừng luôn, không bắn nữa → 16 slot
+
+  Không đoán trước được vì 2 tín hiệu đến cùng lúc, executor chọn
+  ngẫu nhiên. Đây là race condition ở mức code, không phải lỗi —
+  chỉ là không thể biết trước 16 hay 17.
+
+  → Kết luận: `rate × duration = 16` là con số lý thuyết, thực tế
+    có thể 16 hoặc 17. Muốn biết chính xác → đọc metric sau khi chạy.
 
 Bước 4: Ảnh hưởng — sai số tuyệt đối luôn ≤ 1 slot (slot biên).
   Nhưng sai số TƯƠNG ĐỐI phụ thuộc độ dài run:
