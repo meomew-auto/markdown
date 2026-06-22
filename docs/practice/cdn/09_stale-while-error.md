@@ -2,7 +2,7 @@
 
 > Case ID: BLOCK91
 > Script: BLOCK92
-> *Lạc: CDN / Varnish
+> *Lac: CDN / Varnish
 > Proof: Stale object – while origin unhealthy, with headers + origin-countproof
 > Difficulty: ★★★★ (complex — involves origin healthtion, health probe timing, origin request counting, and multi-header proof chain)
 
@@ -16,10 +16,10 @@ Trường hợp điển hình: 20:00 tối thứ Sáu, flash sale bắt đầu. 
 
 Không có-while-error: CDN nhận 503 từ origin tra 503 cho user. 50,000 người thay trang lời. Flash sale thất bại. Revenue = 0.
 
-Có-while-error: CDN nhận ra origin không còn healthy (qua health probe độc lập). Object đã hết TTL nhưng vẫn nằm trong grace +-if-error window. CDN QUYET DINH serve object có thay vì forward request user vẫn thay trang sản phẩm dở d d d, chỉ có data "cơ hơn 2 giây." 50,000 người tiếp tục mua hàng. Revenue được bảo toàn. Revenue được bảo toàn. Revenue được bảo toàn. Revenue được bảo toàn.
+Có-while-error: CDN nhận ra origin không còn healthy (qua health probe độc lập). Object đã hết TTL nhưng vẫn nằm trong grace +-if-error window. CDN QUYET DINH serve object có thay vì forward request user vẫn thay trang sản phẩm đó d d d, chỉ có data "cơ hơn 2 giây." 50,000 người tiếp tục mua hàng. Revenue được bảo toàn. Revenue được bảo toàn. Revenue được bảo toàn. Revenue được bảo toàn. Revenue được bảo toàn. Revenue được bảo toàn. Revenue được bảo toàn.
 
 ```text
-                 KHONG CO stale-while-error
+KHONG CO -while-error
                  ==========================
   User -> CDN -> [object het TTL 2s truoc] -> forward den origin
                                                        |
@@ -35,7 +35,7 @@ Có-while-error: CDN nhận ra origin không còn healthy (qua health probe đ�
   User -> CDN -> [object het TTL 2s truoc, nhung origin unhealthy]
                         |
                         +--> quyet dinh: serve stale object
-                             (data cu hon 2 giay, nhung VAN LA 200)
+(đắt cụ hơn 2 giầy, nhưng VAN LÊ 200)
                         |
   User <- CDN <- 200 OK + X-Cache-Stale: true + data day du
 
@@ -60,12 +60,12 @@ Trong e-commerce, product description, price (không thay đổi trong 2 giây),
 
 ### Tại sao đây là case QUAN TRƯỜNG NHẬT trong CDN availability suite?
 
-Trong 11 case CDN, case 09 là case đòi hỏi chúng minh khả năng bảo vệ availability của CDN khi origin sap. Các case khác::
+Trong 11 case CDN, case 09 là case đòi hỏi chứng minh khả năng bảo vệ availability của CDN khi origin sap. Các case khác::
 
 ```text
   Case 01-02: caching behavior (HIT/MISS, key isolation)
   Case 03-04: bypass rules, query normalization
-  Case 05-06: invalidation (purge, ban, event)
+Case 05-06: invalidation (purge, bán, event)
   Case 07:    cache contract headers, 304
   Case 08:    TTL expiry
   Case 09:    STALE WHILE ERROR  <-- THE AVAILABILITY CASE
@@ -90,8 +90,8 @@ DNS / network partition: Origin unreachable do network — không phải origin 
 ### Câu hỏi kinh doanh
 
 ```text
-"Khi origin khong con kha dung, CDN co giu duoc nguoi dung o lai tren site
- bang cach serve stale objects thay vi tra 503 khong?"
+"Khi origin không còn khả dụng, CDN có giữ được người dùng ở lại trên site?
+bằng cách serve objects thay vì tra 503 không?"
 ```
 
 Đây là câu hỏi vềbusiness continuity, không phải về technical performance.
@@ -101,23 +101,23 @@ DNS / network partition: Origin unreachable do network — không phải origin 
 Giá sử một site e-commerce có 100,000 request/phut trong giờ cao điểm. Origin gặp sự cố 5 phút (OOM, restart, health check pass lại).
 
 ```text
-  KHONG co stale-while-error:
-    100,000 req/phut x 5 phut = 500,000 requests bi 503
+KHONG có thể-while-error:
+100,000 req/phut x 5 phút = 500,000 requests bị 503
     Neu conversion rate = 3%, AOV = $50:
-    500,000 x 3% = 15,000 don hang bi mat
+500,000 x 3% = 15,000 đơn hàng bị mất.
     15,000 x $50 = $750,000 revenue lost
 
   CO stale-while-error:
-    500,000 requests van duoc serve (data cu toi da 2-60 giay)
-    Conversion rate co the giam (data cu) nhung KHONG ve 0
-    Gia su conversion giam 20% (tu 3% xuong 2.4%):
-    500,000 x 2.4% = 12,000 don hang van duoc dat
+500,000 requests vẫn được serve (data cũ tối đa 2-60 giây)
+Conversion rate có thể giảm (đắt cực) nhưng KHONG về 0
+Giá sữa giảm 20% (từ 3% xuống 2.4%):
+500,000 x 2.4% = 12,000 đơn hàng vẫn được đặt.
     12,000 x $50 = $600,000 revenue saved
-    15,000 - 12,000 = 3,000 don hang bi mat (thay vi 15,000)
+15,000 - 12,000 = 3,000 đơn hàng bị mất (thay vì 15,000)
     $750,000 - $600,000 = $150,000 loss (thay vi $750,000)
 
   Stale-while-error da cuu $600,000 revenue.
-  Day la ROI khong lo cua 20 dong VCL config.
+Đây là ROI không lỗ của 20 đồng VCL giấu.
 ```
 
 ### Tại sao-while-error đặc biệt quan trọng cho e-commerce?
@@ -125,21 +125,21 @@ Giá sử một site e-commerce có 100,000 request/phut trong giờ cao điểm
 Trong e-commerce, có 3 loại page:
 
 ```text
-  1. Product detail (READ-heavy): user xem san pham.
+  1. Product detail (READ-heavy): user xem sản phẩm.
      -> Cacheable. Stale OK (description, images it thay doi).
      -> Neu 503: user roi khoi trang san pham -> mat sale.
 
-  2. Product listing / search (READ-heavy): user browse danh sach.
+  2. Product listing / search (READ-heavy): user browse danh sách.
      -> Cacheable. Stale OK (danh sach co the thieu san pham moi nhung van xem duoc).
      -> Neu 503: user khong tim thay gi -> roi khoi site.
 
-  3. Cart / checkout (WRITE-heavy): user mua hang.
+  3. Cart / checkout (WRITE-heavy): user mua hàng.
      -> KHONG cacheable (co cookie, auth). Stale KHONG ap dung.
      -> Neu 503: user khong the checkout. Nhung IT HON nhieu so voi browse.
      -> Cart service nen duoc protect rieng (circuit breaker, retry, queue).
 
-  Stale-while-error bao ve loai 1 va 2 — chiem 80-90% traffic.
-  10-20% con lai (cart/checkout) can chien luoc resilience khac.
+Stale-while-error bảo vệ loại 1 và 2 — chiếm 80-90% traffic.
+10-20% còn lại (cart/checkout) cần chiến lược resilience khác.
 ```
 
 ### Storm sau outage: Ly do-while-error còn quan trọng
@@ -150,7 +150,7 @@ Khi đứng sau outage, mỗi object trong CDN đều đã hết TTL. Toàn bộ
   Origin outage (5 phut):
     -> CDN serve stale -> user OK -> origin duoc bao ve
 
-  Origin recover (phut thu 6):
+Origin (phút thứ 6):
     -> 100,000 req/phut den CDN
     -> TAT CA deu MISS (object da het TTL trong 5 phut outage)
     -> CDN forward 100,000 requests den origin CUNG MOT LUC
@@ -168,9 +168,9 @@ Khi đứng sau outage, mỗi object trong CDN đều đã hết TTL. Toàn bộ
 
 Case này chứng minh 4 điều:
 
-### (a) Stale serving được kịch hoạt ĐIỂM Ý
+### (a) Stale serving được kịch hoạt DIEM Y
 
-Khi origin healthy CDN hoạt động bình thường (MISS HITHIT). Khi origin trở thành organichealthy CDN TONG DAY chuyển sang serving mode, KHONG CHAT HD. Đây là automatic circuit breaker ở cache layer.
+Khi origin healthy CDN hoạt động bình thường (MISS HITHIT). Khi origin trở thành organichealthy CDN TONG DAY chuyển sang serving mode, KHONG CHAT HD. Day là automatic circuit breaker ở cache layer.
 
 ### (b) Stale serving TRA VE ĐỨNG OBJECT
 
@@ -184,7 +184,7 @@ Không phải "tra về cái gì đó để khởi 503." CDN trả về DUNG obj
 
 Sau khi origin healthy trở lại CDN quay lại HIT/MISS bình thường. Không cần manual toggle, không cần flush cache.
 
-### Sequence chứng minh đầy đủ duyên dáng đang đàng
+### Sequence chứng minh đầy đủ sự xứng đáng đang đáng ngưỡng mộ.
 
 ```text
 Phase 1: WARMUP (origin healthy)
@@ -194,7 +194,7 @@ Phase 1: WARMUP (origin healthy)
 
 Phase 2: AGING (origin still healthy, TTL expires)
   sleep(TTL + 1 second)
-  Object da het TTL nhung van trong grace window
+Object đã hết TTL nhưng vẫn trong grace window
   -> Object is "expired but retainable"
 
 Phase 3: ORIGIN FAILURE
@@ -224,7 +224,7 @@ Case 09 có 3 lớp verification, từ nóng đến lạnh:
 ```text
   Lop 1 — SURFACE: HTTP Status
     ✓ stale probe status = 200
-    ✗ stale probe status = 503 (FAIL ngay lap tuc)
+probe status = 503 (FAIL ngày lập tức)
 
   Lop 2 — HEADERS: Cache mechanism
     ✓ X-Cache: HIT (not MISS)
@@ -245,13 +245,13 @@ Không layer nào được bỏ qua. Lyer 1 có thể pass nhưng layer 2, 3 fai
 Toàn bộ cơ chế — backend healthing, grace period calculation, serving decision — diễn ra hoàn toàn trong Varnish. Application code không tham gia vào-serving decision.
 
 ```text
-  Application chi cung cap:
+Application chỉ cung cấp:
     - Data (HTTP response body)
     - Cache-Control headers (TTL, stale-if-error directive)
     - Health endpoint (/health/cdn-origin)
 
-  Varnish QUYET DINH:
-    - Backend co healthy khong? (qua probe doc lap)
+Varnish QUYET ĐIỀN:
+    - Backend có healthy không? (qua probe độc lập)
     - Object co trong grace window khong? (obj.ttl + obj.grace > 0s)
     - Serve stale hay return error?
 ```
@@ -298,31 +298,31 @@ Neu bạn test ở application layer (direct-to-app, không qua CDN):
 ```text
   Application test:
     - Origin unhealthy -> app tra 503 -> test FAIL
-    - KHONG CO stale serving, vi stale la CDN feature
+    - KHONG CO serving, vì... là CDN feature
   
   CDN layer test:
     - Origin unhealthy -> CDN serve stale -> test PASS
-    - Day la chinh xac nhung gi xay ra trong production
+    - Đây là chính xác những gì xay ra trong production.
 ```
 
 Nếu bạn chỉ test application, bạn sẽ không bao giờ biết CDN có-while-error hay không. Đến khi origin sap that user thay 503 bạn mới biết.
 
 ### Vì sao không test ở mock environment?
 
-Stale-while-error phụ thuộc vào:
+Stale-while-error phu thuoc vao:
 
-1. Health probe timing: Varnish probe backend mới 1 giây, window, threshold
+1. Health probe timing: Varnish probe backend moi 1 giay, window, threshold
    -> can it nhat 2-3 giay de Varnish detect unhealthy. Mock khong the mo phong
-   chinh xac timing nay.
+chính xác tim này.
 
-2. 'Grace window calculation: VCL BLOCK93 là runtime calculation
-   cua Varnish. Mock khong co VCL runtime.
+2. 'Grace window calculation: VCL BLOCK93 la runtime calculation
+của Varnish. Mock không có VCL runtime.
 
-3. Backend health state transition: BLOCK94 là internal
-   state cua Varnish, bi anh huong boi probe history. Mock khong mo phong duoc.
+3. Backend health state transition: BLOCK94 la internal
+state của Varnish, bị ảnh hưởng bởi probe history. Mock không mở phòng được.
 
 4. Request : Phải chứng minh CDN KHONG gat hai origin trong serving.
-   Chi co origin request counter that su (qua control API) moi la evidence tin cay.
+Chỉ có origin request counter that sự (qua control API) mới là evidence tin cậy.
 
 ### Làm phụ thuốc
 
@@ -355,14 +355,14 @@ không thể test case này nếu thiếu bất kỳ layer nào. Đây là lý d
 ### Sổ sành: test ở layer nào thì bay nhiều evidence?
 
 ```text
-  Test o APP LAYER (direct-to-app, khong CDN):
+Test ở APP LAYER (direct-to-app, không CDN):
     ✓ Confirm: app returns correct response
-    ✗ KHONG THE: test stale serving (khong co CDN)
-    ✗ KHONG THE: test health probe interaction
-    ✗ KHONG THE: test origin isolation
+KHÔNG THẾ: test sexving (không có CDN)
+KHÔNG THẾ: test health probe
+KHÔNG THẾ: test origin
 
-  Test o CDN LAYER (qua Varnish):
-    ✓ Confirm: all of the above
+Test ở CDN LAYER (qua Varnish):
+Confirm: all of the above
     ✓ Confirm: stale serving mechanism
     ✓ Confirm: health probe -> backend sick detection
     ✓ Confirm: origin request isolation (counter proof)
@@ -370,9 +370,9 @@ không thể test case này nếu thiếu bất kỳ layer nào. Đây là lý d
 
   Test o MOCK LAYER (simulated Varnish):
     ✓ Confirm: VCL logic (syntax)
-    ✗ KHONG THE: confirm real Varnish runtime behavior
-    ✗ KHONG THE: confirm health probe timing
-    ✗ KHONG THE: confirm actual request isolation
+KHÔNG THẾ: confirm real Varnish runtime behavior
+KHÔNG THẾ: confirm health probe timing
+KHÔNG THẾ: confirm actual request
 ```
 
 Chỉ có CDN layer test mới cung cấp được 100% evidence. Mục test có giá trị cho VCL validation, nhưng không thay thế được CDN layer test.
@@ -433,23 +433,23 @@ Varnish probe backend mới 1 giây. Probe này DOC LAP với k6 test — Varnis
 
 Trước khi test bắt đầu, cần đảm bảo:
 
-1. Origin dạng healthy: Gọi BLOCK103 để mũi profile từ đây.
+1. Origin dạng healthy: Gọi BLOCK103 để mặc profile tự dạy.
    test truoc, roi `waitOriginHealthy()` de polling den khi Varnish xac nhan
    backend healthy (profile healthy + CDN healthy + status 200).
 
 2. Origin request counters reset: Gọi BLOCK105 để bắt
-   dau dem tu 0. Neu khong reset, counters tu test truoc se lam nhiem evidence.
+Đầu tiên từ 0. Nếu không reset, counters từ test trước sẽ làm nhiễm evidence.
 
-3. URL được clean: Gọi BLOCK106 để object cũ (neu có) khỏi Varnish
-   cache. Dam bao request dau tien la MISS that su.
+3. URL được clean: Gọi BLOCK106 để object cử (neu có) khỏi Varnish
+cache. Đảm bảo request đầu tiên là MISS thất sự.
 
 4. 'Object được warm với TTL ngân: TTL +iferror=120s. TTL ngan
-   de test nhanh (chi can doi 3 giay thay vi 60+ giay). Stale window dai (120s)
-   de co du thoi gian thuc hien stale probe.
+để test nhanh (chỉ cần đổi 3 giấy thay vì 60+ giấy). Stale window dài (120s)
+để có đủ thời gian thực hiện probe.
 
-5. Sequence warmup hoàn chỉnh: MISS HIT để xác nhận cách hoạt động:
-   truoc khi mo phong origin failure. Neu khong co HIT truoc, khong co object
-   de serve stale.
+5. Sequence warmup hoàn chỉnh: MISS HIT để xác nhận cách hoạt động::
+trước khi mở phòng origin failure. Nếu không có HHIT trước, không có object.
+để serve.
 
 ### Vì sao TTL = 2 giấy?
 
@@ -458,7 +458,7 @@ Trước khi test bắt đầu, cần đảm bảo:
   Post-TTL wait = TTL + 1 = 3s -> dam bao object da expired
   Stale-if-error = 120s -> object van trong stale window
   Probe wait = 4s -> du thoi gian Varnish detect unhealthy
-  Tong thoi gian test ~ 10-12 giay
+Tổng thời gian test ~ 10-12 giây
 ```
 
 Nếu TTL = 60s, test sẽ cần ít nhất 65 giây (60+1+4). Với 11 cases CDN chạy tuần từ, mỗi giấy tiết kiệm đều có ý nghĩa.
@@ -476,7 +476,7 @@ Không có BLOCK107 không gọi được control API không set được origin
 
 ## 5. Script deep-dive
 
-Case 09 là script CDN phổ cập nhất trong toàn bộ suite (93 lines). No không chỉ verify cache behavior — no còn điều khiển origin health state từ bên ngoài, theo đối tác của Varnish, và verify origin request.
+Case 09 là script CDN phổ cập nhất trong toàn bộ suite (93 lines). Nó không chỉ verify cache behavior — một con điều khiển origin health state từ bên ngoài, theo đối tác của Varnish, và verify origin request.
 
 ### 5.1 Configuration & imports
 
@@ -501,11 +501,11 @@ const STALE_PROBE_WAIT_SECONDS = envFloat('STALE_PROBE_WAIT_SECONDS', 4);
 
 - BLOCK108 (2s): TTL cached object. Căng thẳng, test càng nhanh.
 - BLOCK109 (120s): Stale window. Phải đủ lớn để test có
-  du thoi gian thuc thi (12+ giay), nhung khong duoc qua lon de tranh
-  object ton tai qua lau neu teardown fail.
+đủ thời gian thực thi (12+ giây), nhưng không được quá lớn để tránh bị phạt.
+Object ton tai quái nếu teardown fail.
 - BLOCK110 (TTL + 1 = 3s): Thời gian đợi sau khi object
-  het TTL. +1 de dam bao object DA expired, khong con fresh.
-- BLOCK111 (4s): Thời gian đội Varnish health probe phát hành
+hết TTL. +1 để đảm bảo object DA expired, không còn fresh.
+- BLOCK111 (4s): Thời gian đội Varnish health probe phát hành.
   hien origin unhealthy. Varnish probe moi 1s, window=3, threshold=2 -> can
   it nhat 2 probes fail. 4s cho phep 3-4 probes -> du margin.
 
@@ -529,7 +529,7 @@ BLOCK112: Day lasingle-VU test. Chỉ cần 1 Vòng chạy 1 lần. Tất cả c
 
 BLOCK113: 100% checks phải pass. Nếu bất kỳ assertion nào thật (vd: X-Cache không phải HIT, X-Cache-Stale không phải true), k6 exit code!= 0.
 
-BLOCK114: Không một HTTP request nào được fail (status >= 400 bị coi là thất vọng khi có LOCK115 ghi đ). Trong serving, response 200 là chuẩn — CDN KHONG trả error status.
+BLOCK114: Khong mot HTTP request nao duoc fail (status >= 400 bi coi la that vong khi co LOCK115 ghi d). Trong serving, response 200 la chuan — CDN KHONG tra error status.
 
 ### 5.3 setup() — Warming phase
 
@@ -541,7 +541,7 @@ export function setup() {
   });
 ```
 
-BLOCK116 tạo URL duy nhất: BLOCK117. BLOCK118 đảm bảo URL là duy nhất — không bị conflict với test trước. BLOCK119 được truyền như query maker; BLOCK120 sẽ set BLOCK121 trong response.
+BLOCK116 tạo URL duy nhất: BLOCK117. BLOCK118 đảm bảo URL là duy nhất — không bị conflict với test trước. BLOCK119 được truyền như querymaker; BLOCK120 sẽ set BLOCK121 trong response.
 
 ```javascript
   resetOriginProfile();
@@ -552,20 +552,20 @@ BLOCK116 tạo URL duy nhất: BLOCK117. BLOCK118 đảm bảo URL là duy nhấ
 
 Bộ 4 bước khởi tạo:
 
-1. BLOCK122: POST BLOCK123 — đặt dấu về
+1. BLOCK122: POST BLOCK123 — đặt đầu về
    `{healthy: true, error_status: 503}`. Xoa moi profile tu test truoc (co
-   the da bi set unhealthy).
+thế đã bị set unhealthy).
 
 2. `resetOriginRequestCounts()`: POST `/ops/app/cdn/origin/request-counts/reset` —
-   bat dau dem origin requests tu 0.
+bắt đầu đếm origin requests từ 0.
 
 3. BLOCK127: Polling loop — gọi BLOCK128 + probe
-   CDN public URL. Kiem tra profile healthy=true, X-Cache-Backend-Healthy=true,
+CDN public URL. Kiểm tra profile healthy=true, X-Cache-Backend-Healthy=true, X-Cache
    status=200. Phai co `stableSamples=2` lan lien tiep de xac nhan. Timeout
-   12 giay. Dam bao Varnish da nhan ra origin healthy.
+12 giày. Đêm báo Varnish đã nhận ra origin healthy.
 
-4. BLOCK130: Xoa object (nốt co) khỏi Varnish cache. Đâm bảo lăn request
-   dau tien se la MISS that su.
+4. BLOCK130: Xoa object (không có) khôi Varnish cache. Đâm bảo lăn request
+đầu tiên sẽ là MISS thật sự.
 
 ```javascript
   const first = requestCdn('GET', path, {
@@ -583,12 +583,12 @@ Bộ 4 bước khởi tạo:
 
 Hai request warming:
 
-- First: Cache MISS. CDN forward request đến origin. Origin tra 200, Origin tra 200
+- First: Cache MISS. CDN forward request đến origin. Origin tra 200, Origin tra 200.
   Varnish cache object voi TTL=2s, grace=120s (set trong `vcl_backend_response`).
   Origin request counter +1.
 
-- Second: CacheHIT. CDN serve object từ cache (con fresh, nj.ttl >= 0s).
-  Origin KHONG duoc lien lac. Origin request counter van = 1.
+- Second: CacheHIT. CDN serve object tu cache (con fresh, nj.ttl >= 0s).
+Origin KHONG được liên lạc. Origin request counter van = 1.
 
 Day laprecondition proof: Neu warming fail (không Hết sau MISS) không có object để serve test vô nghĩa. Script bảo lưu ngày lập tức.
 
@@ -608,7 +608,7 @@ export default function (data) {
   sleep(STALE_POST_TTL_WAIT_SECONDS);
 ```
 
-BLOCK135 — đối thủ hết TTL (2s) + 1s margin. Sau sleep này, object đã expired (obj.ttl < CODE395) nhưng vẫn trong grace window (obj.ttl + obj.grace > 0s vi grace=120s > 3s).
+BLOCK135 — doi thu het TTL (2s) + 1s margin. Sau sleep nay, object da expired (obj.ttl < CODE395) nhung van trong grace window (obj.ttl + obj.grace > 0s vi grace=120s > 3s).
 
 ```javascript
   setOriginProfile({
@@ -646,10 +646,10 @@ BLOCK143 — đối Varnish health probe detect origin unhealthy. Với probe in
 
 Đây là probe — bước chứng minh quan trọng nhất của toàn bộ test.
 
-5 assertions trong ống nghiệm:
+5 assertions trong ẩn nghĩa:
 
 1. BLOCK144: CĐN trả 200 (không phải 503). User thay trang bình.
-   thuong. Day la availability saved.
+Đúng. Day là availability saved.
 
 2. BLOCK145: X-Cache vẫn là HIT (không phải MISS). CDN serve
    tu cache, khong forward den origin. Neu X-Cache la MISS -> CDN da co forward
@@ -679,11 +679,11 @@ BLOCK143 — đối Varnish health probe detect origin unhealthy. Với probe in
 Neu `requestCount !== 1`:
 
 - BLOCK156: Origin chưa từng được gọi? Không thể — warming phase
-  da co MISS. Co the warming fail hoac counters chua duoc ghi nhan.
-- BLOCK157: CĐN ĐIỂM TRỌN trong probe! Stale serving
-  failed — CDN da forward request thay vi serve stale. Day la FAIL.
+Đã có MISS. Có thể warming fail hoặc counters chưa được ghi nhận.
+- BLOCK157: CĐN ĐIỂM TRON trong probe! Stale serving
+failed — CDN đã forward request thay vì serve. Đây là FAIL.
 - BLOCK158: Nghiêm trọng — CĐN gọi ầm nhiều lần. Có thể gat hai.
-  mechanism khong hoat dong, hoac health probe khong detect duoc unhealthy.
+mechanism không hoạt động, hoặc health probe không detect được oxy.
 
 BLOCK159: PASS hoàn hảo. Chỉ có request warming đầu tiên (MISS) đã gọi origin. Stale probe KHONG gọi origin. Origin được bảo vệ.
 
@@ -701,11 +701,11 @@ export function teardown() {
 
 1. BLOCK160: POST BLOCK161 — đặt dấu về
    `{healthy: true, error_status: 503}`. Neu khong lam buoc nay, origin se
-   **van unhealthy** cho cac test case tiep theo (case 10, 11). Toan bo suite
-   se fail vi origin khong the phuc vu MISS requests.
+vân nhealthy cho các test case tiếp theo (case 10, 11). Toàn bộ suite
+sẽ fail vì origin không thể phục vụ MISS requests.
 
 2. BLOCK163: Polling chờ đến khi Varnish xác nhận origin healthy
-   tro lai. Dam bao backend da duoc Varnish probe lai va danh dau HEALTHY.
+trở lại. Đảm bảo backend đã được Varnish lựa lại và đánh dấu HEALTHY.
 
 3. `resetOriginRequestCounts()`: Reset counters cho test case tiep theo.
 
@@ -726,7 +726,7 @@ Teardown là BAT BUOC. Nếu teardown fail, origin sẽ bị ăn ở trang thái
            Origin counter: /api/cached?key=stale-xxx = 1 (unchanged)
   t=1.4s   setup() returns {path}
 
-  ======== TRANSITION TO default() ========
+======== TRANSITION TO default() ========
 
   t=1.4s   default() called with {path}
   t=1.4s   sleep(STALE_POST_TTL_WAIT_SECONDS) = 3s
@@ -784,7 +784,7 @@ Teardown là BAT BUOC. Nếu teardown fail, origin sẽ bị ăn ở trang thái
 | Setup | resetOriginProfile + waitOriginHealthyy | Profile healthy + CDN healthy | Clean starting state |
 | Setup | bạnUrl | Cách cleared | Nổ xấu cache from previous run |
 | Setup | Request (MISS) | Status 200 + X-Cache: MISS | Object cacheable, origin working Object cacheable Object cacheable Object cacheable |
-| Setup | Request (HIT) | Status 200 + X-Cache: HẾT! | Cách mechanism working |
+| Setup | Request (HIT) | Status 200 + X-Cache: Hết! | Cách mechanism working |
 | Default | sleep(TTL+1) | Time passes Time Time Time Time Time Time Time Time Time Time Time Time Time Time Time Time Time Time Time Time Time Time | Object expired |
 | Default | setOriginProfile(fail) | Profile unhealthy | Origin failure simulated |
 | Default | sleep (s) | Time passes Time Time Time Time Time Time Time Time Time Time Time Time Time Time Time Time Time Time Time Time Time Time | Varnish detected unhealthy |
@@ -821,12 +821,12 @@ backend default {
 Tham số probe:
 
 - BLOCK167: Endpoint được probe. Day là endpoint độc lập,
-  khong phai public URL cua test case.
+không phải public URL của test case.
 - BLOCK168: Nếu muốn request không có đáp trong 1 giây coi là fail.
 - BLOCK169: Probe cháy mới giật. Varnish liên tục theo đuổi sức hấp dẫn.
 - BLOCK170: Xét 3 probes gan nhất để quyết định healthy/sick.
 - BLOCK171: Cần 2/3 probes thành công (return 200) để coi backend healthy.
-  Nguoc lai, can 2/3 probes fail de coi backend sick.
+Ngược lại, cần 2/3 probes fail để coi backend sick.
 - BLOCK172: Khi Varnish khởi động, giá sự backend healthy ngày lập tức (1).
 
 ### 6.2 Health probe life cycle
@@ -845,7 +845,7 @@ Tham số probe:
   Probe #3 (t=2s):  /health/cdn-origin -> 503  [FAIL]
   Probe #4 (t=3s):  /health/cdn-origin -> 503  [FAIL]
       |
-  Varnish hoat dong trong stale mode
+Varnish hoạt động trong mode
       |
   resetOriginProfile()
       |
@@ -916,7 +916,7 @@ func (h *Handler) storeCDNOriginProfile(ctx context.Context, profile cdnOriginPr
             }
         }
     }
-    // Fallback to in-memory only
+Fallback to in-memory only
     return h.cdnOriginState.setProfile(profile), "memory"
 }
 ```
@@ -924,7 +924,7 @@ func (h *Handler) storeCDNOriginProfile(ctx context.Context, profile cdnOriginPr
 Hai lớp storage:
 
 1. Redis (primary): Profile được lưu trong Redis key LOCK178.
-   Khi co Redis, day la nguon duy nhat. Health probe doc tu Redis (voi 250ms timeout).
+Khi có Redis, đây là nguồn duy nhất. Health probe độc từ Redis (với 250ms timeout).
 
 2. In-memory (fallback): Khi Redis không khả dụng, profile được lưu trong
    `localCDNOriginState.profile`. Mutex-protected.
@@ -949,7 +949,7 @@ func clampHTTPErrorStatus(status int) int {
 }
 ```
 
-BLOCK180 phải nằm trong range 400-599. Nếu set ngoài range (vd: 200 khi leo núi, hoặc 999), auto clamp về 503. Dam báo Varnish probe nhận được error status thất sự (không thể trả 200 khi LOCK181).
+BLOCK180 phải nằm trong range 400-599. Nếu set ngoài range (vd: 200 khi leo núi, hoặc 999), auto clamp về 503. Dam bảo Varnish mặc nhận được error status thất sự (không thể trả 200 khi LOCK181).
 
 ### 6.8 waitOriginHealthy: Polling loop
 
@@ -989,14 +989,14 @@ export function waitOriginHealthy(options = {}) {
 Ba điều kiện phải ĐƯỢC THỰC THỨC MÀO:
 
 1. Profile healthy: BLOCK182 trả về LOCK183. Đây là lần đầu tiên tôi thấy LOCK183.
-   application-level check — profile da duoc reset.
+application-level check — profile đã được reset.
 
 2. CDN healthy: BLOCK184. Đây là Varnish-level check —
-   Varnish da probe backend va xac nhan healthy.
+Varnish đã probe backend và xác nhận healthy.
 
 3. Status 200: Public CDN request thành công. Đây là end-to-end check.
 
-Căn BLOCK185 lần liên tiếp để xác nhận. Tranh tình hướng "false positive" khi Varnish vừa chuyển từ sick healthy nhưng chưa ổn định.
+Căn BLOCK185 lần liên tiếp để xác nhận. Tranh tình hưởng "false positive" khi Varnish vừa chuyển từ sick healthy nhưng chưa ổn định.
 
 BLOCK186 cho phép probe nhận mọi status, không bị coi là HTTP error ngay cả khi backend unhealthy. Điều này quan trọng vì probe được dùng để KIEM TRA unhealthy — nếu nó tự động fail, ta không thể đọc được kết quả.
 
@@ -1006,7 +1006,7 @@ BLOCK186 cho phép probe nhận mọi status, không bị coi là HTTP error nga
 
 ### 7.1 Grace mode
 
-Grace là cô chó của Varnish: khi object hết TTL (obj.ttl < CODE484) nhưng vẫn trong grace window (obj.ttl + obj.grace > 0s) VA backend không healthy, Varnish serve object.
+Grace la co cho cua Varnish: khi object het TTL (obj.ttl < CODE484) nhung van trong grace window (obj.ttl + obj.grace > 0s) VA backend khong healthy, Varnish serve object.
 
 ```vcl
 sub vcl_hit {
@@ -1043,7 +1043,7 @@ Mở cacheable object đều có tốc = 120s. Điều này có nghĩa: sau khi 
   Cache-Control: s-maxage=2, stale-while-error=120
 ```
 
-Nghĩa là: "chấm object này 2 giò (fresh). Sau đó, nếu origin tra error (5xx), serve object này thêm 120 giò nữa."
+Nghĩa là: "chấm object này 2 giờ (fresh). Sau đó, nếu origin tra error (5xx), serve object này thêm 120 giờ nữa."
 
 ### 7.3 Cách Varnish kết hợp cả hai
 
@@ -1053,17 +1053,17 @@ Trong VCL của chúng ta, BLOCK189 được set UNIFORM cho mọi object. Varni
   Grace = "serve stale if backend unhealthy, regardless of why"
   Stale-if-error = "serve stale if backend returns error"
   
-  Trong VCL nay: GRACE = STALE-IF-ERROR implementation
-  Vi: Varnish chi serve stale khi backend unhealthy
+Trong VCL này: GRACE = STALE-IF-ERROR implementation
+Ví: Varnish chỉ serve khi backend unhealthy
        (unhealthy = error responses tu health probe)
 ```
 
-### 7.4 Sự khác biệt tinh tế giữa Grace và Stale-if-error
+### 7.4 Sự khác biệt tình tứ giữa Grace và Stale-if-error
 
-| Đác điểm điểm nhấn | Grace mode | Stale-if-error |
+| Đác điểm điểm nhấn nhân dịp | Grace mode | Stale-if-error |
 | --- | --- | --- |
-| Điều kiện hạn chế | Backend unhealthy | Origin trả 5xx |
-| Có chê | Varnish internal | Cache-Control directive |
+| Điều kiện hạn chế rò rỉ khí thải. | Backend unhealthy | Origin trả 5xx |
+| Co che | Varnish internal | Cache-Control directive |
 | Async refresh?! | Có (trong Varnish default) | Không (chị serve) |
 | “Health probe dependency?! | Co (std.healthy) | không nhất thiết |
 | “Ai đây?! | VCL BLOCK191 | Origin BLOCK192 header |
@@ -1085,10 +1085,10 @@ if (!std.healthy(req.backend_hint) && obj.ttl + obj.grace > 0s) {
 Điều kiện KEP:
 
 1. BLOCK197: Backend phải không healthy. Day là prerequisite —
-   khong the serve stale neu backend con healthy (se forward request thay vi serve stale).
+không thể serve nếu backend còn healthy (sẽ forward request thay vì serve).
 
 2. BLOCK198: Object phải trong grace window. Nếu qua gap
-   window roi (obj da bi evict hoac keep het han), khong con stale de serve.
+window rơi (obj đã bị ép hoạt động hết hạn), không còn gì để serve.
 
 Đây là thiết kế AN TOÀN: chỉ được serve khi origin thật sự không khả dụng. Khi origin healthy, user luôn nhận fresh content.
 
@@ -1108,10 +1108,10 @@ sub vcl_deliver {
 
 Cơ chế kiểm soát chặt chẽ:
 
-- Header chỉ được set khi backend unhealthy VA object đã từng được serve (obj.hits > 0).
+- Header chi duoc set khi backend unhealthy VA object da tung duoc serve (obj.hits > 0).
 - Khi backend healthy, header bị long — test sẽ fail nếu assert có header này.
-- BLOCK199 đảm bảo object đã từng được cache — không thể "lấp" một lần
-  object chua tung fresh.
+- BLOCK199 đảm bảo object đã từng được cache — không thể "lạc" một lần
+object chưa từng fresh.
 
 ### 7.7 TTL, Grace, và Keep — ba giai đoạn của một object
 
@@ -1137,34 +1137,34 @@ Cơ chế kiểm soát chặt chẽ:
               -> request tiep theo la MISS
 ```
 
-Case 09 test trong GRACE PERIOD: TTLs đổi 3s vẫn trong dạng (3s < CODE504). Nếu đổi > 122s, object sẽ rơi vào KEEP PERIOD và không được serve.
+Case 09 test trong GRACE PERIOD: TTLs doi 3s van trong dang (3s < CODE504). Neu doi > 122s, object se roi vao KEEP PERIOD va khong duoc serve.
 
 ### 7.8 Vì sao góc=120s, keep=600s?
 
 ```text
-  grace=120s: 2 phut. Du dai de:
+grace=120s: 2 phút. Dự đoán đề:
     - Cho Varnish detect unhealthy (4s)
-    - Cho ops team detect outage + respond (vai chuc giay den 1-2 phut)
-    - Phuc vu traffic trong thoi gian origin recover
-    - KHONG qua dai de tranh serve stale qua lau neu origin that su down vinh vien
+    - Cho ops team detect outage + (vài giây đến 1-2 phút)
+    - Phương vụ traffic trong thời gian origin
+    - KHONG quá dài để tranh serve! quá lâu nếu origin thất sự bùng nổ vinh viên
 
-  keep=600s: 10 phut. Du dai de:
-    - Giu object trong cache sau khi het grace
-    - Cho phep conditional revalidation (304) khi origin recover
+keep=600s: 10 phút. Du dai dẳng:
+    - Giữ object trong cache sau khi hết grace
+    - Chó phấp conditional revalidation (304) khi origin
     - Tranh eviction som -> giam MISS storm khi origin recover
-    - 10 phut la compromise giua "giu object" va "memory pressure"
+    - 10 phút là giữa "giọng hát" và "máy pressure"
 
-  TTL=2s (trong test): chi de test nhanh
-  TTL thuc te (production): 60s - 300s tuy loai content
-    - Product detail: 60s (it thay doi)
-    - Product listing: 30s (thay doi vua phai)
-    - Search results: 15s (thay doi nhanh)
+TTLs (trong test): chỉ để test nhanh
+TTL thực tế (production): 60s - 300s tuy loại content
+    - Product detail: 60s (ít thay đổi)
+    - Product listing: 30s (thay đổi vua phải)
+    - Search results: 15s (thay đổi nhanh)
 ```
 
 ### 7.9 Grace behavior trong một số Varnish configurations phổ biến
 
 ```text
-  Config A: KHONG co grace, KHONG co health check
+Config A: KHONG có gạch, KHONG có health check
     -> Origin down -> 503 -> user sees error
     -> Day la "no protection"
 
@@ -1178,7 +1178,7 @@ Case 09 test trong GRACE PERIOD: TTLs đổi 3s vẫn trong dạng (3s < CODE504
     -> Origin down -> user gets stale (200) + origin NOT contacted
     -> Day la "full protection" — user OK, origin isolated
 
-  Config D: co grace, health check nhung stale-if-error qua ngan
+Config D: có grace, health check nhưng-if-error quá ngán ngẩm
     -> TTL=2s, grace=3s -> object expired, grace expired truoc khi probe detect
     -> Origin down -> stale khong the serve (obj.ttl + obj.grace <= 0s)
     -> Day la "misconfigured" — co co che nhung khong hoat dong
@@ -1193,30 +1193,30 @@ Config C (cũng ta) là gold standard. Config D là lời cầu hình phổ bi�
 Không có origin request counting, đây là những gì bạn CO THE sai:
 
 ```text
-  Tinh huong A: CDN tra 200 + X-Cache-Stale: true
+Tình huống A: CĐN trả 200 + X-Cache-Stale: true
   -> Ban ket luan: "STALE WORKED!"
   -> Nhung thuc te: CDN da goi origin, origin tra error,
-     CDN fallback ve stale object VAF DANH DAU la stale.
+CDN fallback về object VAF DANH DỰC là.
   -> Origin van bi ap luc, chi la user khong thay error.
   -> STALE FAILED o muc do origin protection.
 
-  Tinh huong B: CDN tra 200 + X-Cache-Stale: true
+Tình huống B: CĐN trả 200 + X-Cache-Stale: true
   -> Ban ket luan: "STALE WORKED!"
   -> Nhung thuc te: Origin da tu recover (restart pod),
-     CDN goi origin thanh cong, tra fresh response.
+CDN gọi origin thành công, tra fresh response.
   -> X-Cache-Stale duoc set do Varnish chua nhan ra origin da healthy.
   -> Ban mat evidence origin da thuc su duoc goi.
 
-  Tinh huong C: CDN tra 200 + X-Cache-Stale: true
+Tình huống C: CĐN trả 200 + X-Cache-Stale: true
   -> Ban ket luan: "STALE WORKED!"
   -> Nhung thuc te: Object chua tung duoc cache (warming fail).
-     CDN khong the serve stale vi khong co object.
+CDN không thể serve vì không có object.
   -> X-Cache-Stale la GIA? Khong — nhung object lai duoc
-     cache tu mot origin request khac (background refresh).
+cache từ một origin request khác (background refresh).
   -> Origin counting se vach tran: count > 1.
 ```
 
-Cho có origin request counting mới là irrefutable proof. Nội trả lời câu hỏi: "Lầu origin có thực sự KHONG bị gọi trong probe không?" Neu count = 1 (sau MISS đầu tiên) PASS. Neu count > 1 FAIL, bắt kè headers nói gì.
+Cho co origin request counting moi la irrefutable proof. Noi tra loi cau hoi: "Lau origin co thuc su KHONG bi goi trong probe khong?" Neu count = 1 (sau MISS dau tien) PASS. Neu count > 1 FAIL, bat ke headers noi gi.
 
 ### 8.2 Cách origin counter hoạt động
 
@@ -1261,7 +1261,7 @@ export function findOriginRequestCount(payload, requestKey) {
 ### 8.3 Counter timeline trong case 09
 
 ```text
-  Truoc setup:
+Trước setup:
     resetOriginRequestCounts() -> count = 0 (cho moi path)
 
   Setup - first request (MISS):
@@ -1282,20 +1282,20 @@ export function findOriginRequestCount(payload, requestKey) {
 
   Default - stale probe:
     CDN serve stale -> origin KHONG duoc goi -> count = 1
-    *** DAY LA DIEM MAU CHOT ***
+ĐIỂM LÀ ĐIỂM MẶT CHẾT
 
-  Neu count = 2 o day:
+Neu count = 2 ở đây:
     CDN da forward request den origin -> STALE FAILED
 ```
 
 ### 8.4 Tại sao counter không bị ảnh hưởng bởi health probe?
 
-Varnish health probe gọi BLOCK203, KHONG PHỤC BLOCK204. Health probe là request độc lập, không liên quan đến counter của URL test.
+Varnish health probe gọi BLOCK203, KHONG PHỨC BLOCK204. Health probe là request độc lập, không liên quan đến counter của URL test.
 
 `findOriginRequestCount` tim chinh xac `request_key` trung khop — khong bi
-nham lan voi health probe path.
+nhầm lẫn với health probe path.
 
-### 8.5 Counter reset và test
+### 8.5 Counter reset va test
 
 Nếu không reset counter trước mỗi test:
 
@@ -1314,11 +1314,11 @@ BLOCK207 trong setup và teardown đảm bảo mọi case bắt đầu từ 0. �
 | Signal Signal | Expected Value | Y nghĩa | Vì sao QUAN TRƯỜNG |
 | --- | --- | --- | --- |
 | HTTP Status | BLOCK208 | User thay trang bình thường. | Stale save availability. 503 = FAIL. |
-| BLOCK209 | BLOCK210 | CDN serve từ cache (không forward) | Nếu MISS CDN đã gọi origin failed failed |
-| BLOCK211 | BLOCK212 | Object được serve từ xa | THE SIGNAL. Chỉ có khi backend unhealthy + nj.hits > 0 |
+| BLOCK209 | BLOCK210 | CDN serve từ cache (không forward) | Nếu MISS CDN đã gọi origin failed failed failed |
+| BLOCK211 | BLOCK212 | Object duoc serve tu xa | THE SIGNAL. Chi co khi backend unhealthy + nj.hits > 0 |
 | BLOCK213 | BLOCK214 | Varnish xác nhận origin lhealthyy | Chứng minh điều kiện được kiện hoãn DUNG |
 | BLOCK215 | BLOCK216 | Object đã được serve ít nhất 3 lần (warming 2 + 1) | Xác nhận object đã tồn tại trong cache |
-| Origin request count | BLOCK217 | Chỉ MISS đầu tiên gọi origin | IRREFUTABLE PROOF: probe không gỉi origin |
+| Origin request count | BLOCK217 | Chỉ MISS đầu tiên gọi origin | IRREFUTABLE PROOF: probe không gii nội tạng. |
 | Response body | Product data | Data cũ nhưng đầy đủ. | User vẫn thay nội dung bình thường. |
 
 ### Cách độc X-Cache-Stale DUNG
@@ -1327,12 +1327,12 @@ BLOCK207 trong setup và teardown đảm bảo mọi case bắt đầu từ 0. �
   X-Cache-Stale co mat -> stale serving DANG DIEN RA
   X-Cache-Stale khong co -> object duoc serve fresh HOAC tu origin
   
-  X-Cache-Stale CHI CO MAT khi:
+X-Cache-Stale CHI CO MAT khi:
     1. Backend unhealthy (std.healthy = false)
     2. Object da duoc cache (obj.hits > 0)
     3. Object trong grace window (obj.ttl + obj.grace > 0s, duoc check trong vcl_hit)
     
-  Neu X-Cache-Stale co mat nhung X-Cache-Backend-Healthy = true:
+Nếu X-Cache-Stale có mặt nhưng X-Cache-Backend-Healthy = true:
     -> LOGIC ERROR trong VCL — khong the stale khi backend healthy
     -> Can investigate vcl_deliver logic
 ```
@@ -1382,11 +1382,11 @@ BLOCK207 trong setup và teardown đảm bảo mọi case bắt đầu từ 0. �
 | # |  | What failed | Impact |
 | --- | --- | --- | --- |
 | F1 | k6 exit!= 0 | Any assertion failed | Test invalid |
-| F2 | Warmup MISS MISS (nổ HẬT) | Object not cached — cần't test Object not cached | Test meaninglessless |
+| F2 | Warmup MISS MISS (nổ HẬT) | Object not cached — cần't test Object not cached Object | Test meaninglessless |
 | F3 | Stale probe = 503 | CDN error instead of error. | CDN - serving broken |
-| F4 | Stale probe = 200 but X-Cache = MISS | CDN forwarded to origin despite unhealthy drugs | Stale đột ngột kick inbox |
-| F5 | Stale probe = 200, HIGH Băng nổ X-Cache-Stale | Response fresh, not Scratch. | Origin máy bayed or not configured? |
-| F6 | X-Cache-Backend-Healthy = true during probe | Origin not unhealthy by Varnish | Health profile change didn't 'tốtete' |
+| F4 | Stale probe = 200 but X-Cache = MISS | CDN forwarded to origin despite unhealthy drugs | Stale dot ngot kick inbox |
+| F5 | Stale probe = 200, HIGH Bang no X-Cache-Stale | Response fresh, not Scratch. | Origin máy bayed or not configured? |
+| F6 | X-Cache-Backend-Healthy = true during probe | Origin not unhealthy by Varnish | Health profile change didn't 'totete' |
 | F7 | Origin request count > 1 | CDN contacted origin during probe | 'Stale origin protection FAILED® |
 | F8 | Origin request count = 0 | Warming phase may have got cache HIT from previous test. | Counters not reset. |
 | F9 | Teardown fail (waitOriginHealthy timeout) | Origin stuck unhealthy | Pollutes all subsequent cases. |
@@ -1396,7 +1396,7 @@ BLOCK207 trong setup và teardown đảm bảo mọi case bắt đầu từ 0. �
 P7 phân biệt "stale thất sự" và "stale giả":
 
 - Stale thất sự: CDN serve object cũ, KHONG liên lạc origin = 1.
-- Stale giá rẻ: CDN gọi origin (origin error/healthy), rồi serve object cũ = count > 1.
+- Stale gia re: CDN goi origin (origin error/healthy), roi serve object cu = count > 1.
 - Stale giá (background refresh): CDN serve cho client những async
   refresh tu origin -> count > 1 (co the la 2).
 
@@ -1407,14 +1407,14 @@ Chỉ có P7 mới phân biệt được ba tính hưởng này. Headers không 
 ### Prerequisites
 
 ```powershell
-# 1. Tat ca services phai chay (TargetLayer=full)
+# 1. Tất cả dịch phải chạy (TargetLayer=full)
 #    - Nginx, Varnish, App, Redis
 
-# 2. Dam bao Varnish dang probe backend
+# 2. Đảm bảo Varnish đang mặc backend
 #    Kiem tra: Varnish log hoac GET http://localhost/health/cdn-origin
 
 # 3. Co OPS_AUTH_TOKEN
-#    Case 09 BAT BUOC token vi can goi control API
+#    Case 09 BAT BUOC tống vì can thiệp control API
 ```
 
 ### Run command
@@ -1434,7 +1434,7 @@ $env:OPS_AUTH_TOKEN = "<ops-token>"
 
 ```powershell
 # Mac dinh: TTL=2s, wait=3s, probe_wait=4s -> ~10s total
-# Co the override de debug hoac performance testing:
+# Có thể override để dbug hoặc performance testing:
 
 $env:STALE_TTL_SECONDS = "5"          # TTL dai hon
 $env:STALE_POST_TTL_WAIT_SECONDS = "6" # Wait theo TTL
@@ -1465,17 +1465,17 @@ $env:STALE_PROBE_WAIT_SECONDS = "5"    # Them margin cho probe
 ### Điểm cần lưu ý trong output
 
 1. Số lượng checks = 8: 2 warmup + 4 + 2 health wait (không hiện thị).
-   trong output tren nhung waitOriginHealthy tao checks rieng). Tat ca phai pass.
+trong output trên những waitOriginHealthy tạo checks riêng). Tất cả phải pass.
 
 2. httphttpreqfailed = 0.00%: Tất cả requests đều thành công. Nếu có request
    fail, kiem tra `responseCallback` cua health probe — no cho phep 100-599,
-   nhung stale probe phai la 200.
+nhưng probe phải là 200.
 
 3. Thời gian ~10s: 3s (post-TTL wait) + 4s (probe wait) + request latency.
    Neu dai hon nhieu, co the `waitOriginHealthy` dang polling lau.
 
-4. Không có BLOCK234 assertion fail: Neu header này thất, có thể
-   Varnish chua detect unhealthy (probe wait chua du) hoac VCL thieu stale logic.
+4. Không có BLOCK234 assertion fail: Neu header này thật, có thể
+Varnish chưa detect oxyy (probe hất khí dương) hoặc VCL thiếu logic.
 
 ### Cháy trong CI pipeline
 
@@ -1487,7 +1487,7 @@ $env:STALE_PROBE_WAIT_SECONDS = "3"
 
 # Total CI time: ~5.5s (vs ~10s local)
 # Trade-off: less margin for health probe detection
-# If CI flakes: increase STALE_PROBE_WAIT_SECONDS to 5
+# If CI flakes: increase STALEPROBEWAITSECONDS to 5
 
 # CI must have OPS_AUTH_TOKEN secret
 $env:OPS_AUTH_TOKEN = $env:CI_OPS_AUTH_TOKEN
@@ -1501,11 +1501,11 @@ $env:OPS_AUTH_TOKEN = $env:CI_OPS_AUTH_TOKEN
 Ngoại k6 output, bạn có thể verify từng bước bằng curl:
 
 ```bash
-# 1. Kiem tra origin profile hien tai
+# 1. Kiểm tra origin profile hiện tại
 curl -s http://localhost:8088/ops/app/cdn/origin/profile \
   -H "Authorization: Bearer $OPS_AUTH_TOKEN" | jq .
 
-# 2. Kiem tra origin request counts
+# 2. Kiểm tra origin request counts
 curl -s http://localhost:8088/ops/app/cdn/origin/request-counts \
   -H "Authorization: Bearer $OPS_AUTH_TOKEN" | jq .
 
@@ -1549,8 +1549,8 @@ Case 09 có thời gian chạy vừa phải (~10s) — dài hơn case đơn gian
 
 Fail này có nghĩa: CDN đã gọi origin (count) VA tra 503. Stale hoàn toàn không hoạt động. Nguyên nhân có thể:
 
-- VCL BLOCK235 không có logic (thiếu LCK236)
-- BLOCK237 không được set = obj.ttl + nj.grace = 0 (grace không tồi tại)
+- VCL BLOCK235 không có logic (thiếu LCK236).
+- BLOCK237 không được set = obj.ttl + nj.grace = 0 (grace không tới tại)
 - Origin unhealthy profile không được apply (control API fail)
 - Health probe không detect được unhealthy (probe URL sai, lập quá dài)
 
@@ -1619,7 +1619,7 @@ Fail này có nghĩa: CDN đã gọi origin (count) VA tra 503. Stale hoàn toà
        GET http://localhost:8088/ops/app/cdn/origin/profile
        -> Is healthy: false? If still true -> PATCH didn't work.
 
-  Decision: DO NOT DEPLOY
+Decision: DO NOT DEPLOY
     -> No stale serving. Any origin outage = full site outage.
     -> Fix VCL or origin health configuration before proceeding.
 ```
@@ -1699,8 +1699,8 @@ Fail này có nghĩa: CDN đã gọi origin (count) VA tra 503. Stale hoàn toà
 
     A. Async refresh (Varnish grace behavior):
        Default Varnish grace includes async refresh:
-       - Serve stale to client
-       - BUT ALSO send background request to origin to refresh
+       - Serve to client
+       - BBUT ALSO send background request to origin to refresh
        -> Origin counter +1
        -> Solution: Custom VCL vcl_hit that does NOT trigger background refresh.
           Our VCL only does "return (deliver)" — no background fetch.
@@ -1729,7 +1729,7 @@ Fail này có nghĩa: CDN đã gọi origin (count) VA tra 503. Stale hoàn toà
 
   Specific VCL checklist for scenario D:
 
-    1. Open default.vcl, go to vcl_hit:
+    1. Open default.vcl, go to vcl hit:
        - Does it have the stale serving block?
        - Does stale block return (deliver) not (pass)?
        - Is the condition: !std.healthy(backend) && obj.ttl + obj.grace > 0s?
@@ -1760,58 +1760,58 @@ Fail này có nghĩa: CDN đã gọi origin (count) VA tra 503. Stale hoàn toà
 ### Misconception 1: "Stale = xấu, fresh = tốt"
 
 ```text
-  SAI. Trong bo canh origin failure:
+SAI. Trong bộ cánh origin failure:
 
   Fresh 0s old + 503 status  = user thay ERROR       = CATASTROPHE
-  Stale 4s old  + 200 status  = user thay san pham    = BUSINESS AS USUAL
+Stale 4s old + 200 status = user thay sản phẩm = BUSINESS AS USUAL
 
-  Stale trong truong hop nay LA TOT. No la safety net.
-  Stale luon luon TOT HON error.
+Stale trong trường hợp này LA TOT. Nó là safety net.
+Stale luôn luôn TOT HỢP error.
 ```
 
 ### Misconception 2: "Origin down = site down"
 
 ```text
-  SAI (neu co stale-while-error). Voi stale-while-error:
+SAI (neu có-while-error). Với-while-error:
 
   Origin down + CDN co cache + stale policy = site VAN UP (serving stale)
-  Origin down + CDN KHONG co cache = site DOWN (khong co gi de serve)
+Origin down + CDN KHONG có cache = site DOWN (không có gì để serve)
 
-  Stale-while-error bien CDN thanh "static backup" cho dynamic content.
+Stale-while-error biến CDN thành "static backup" cho dynamic content.
 ```
 
-### Misconception 3: "Stale-while-error chỉ chostatic content"
+### Misconception 3: "Stale-while-error chi chostatic content"
 
 ```text
-  SAI. Stale-while-error hoat dong cho BAT KY cacheable object nao:
+SAI. Stale-while-error hoạt động cho BAT KY cacheable object nào:
   - HTML fragments (product descriptions)
   - JSON API responses (product detail, category list)
-  - Images (da duoc cache)
-  - Search results (neu duoc cache)
+  - Images (đã được cache)
+  - Search results (neu được cache)
   
-  Dieu kien duy nhat: object phai duoc cache VA trong grace window.
-  Khong phan biet static vs dynamic.
+Điều kiện duy nhất: object phải được cache VA trong grace window.
+Không phân biệtstatic vs dynamic.
 ```
 
-### Misconception 4: "Grace vàif-error giống hết nhau"
+### Misconception 4: "Grace vaif-error giong het nhau"
 
 ```text
-  SAI. Su khac biet (xem Section 7):
+SAI. Sự khác biệt (xem Section 7):
 
-  Grace: Varnish-specific. Co the bao gom async refresh.
-  Stale-if-error: HTTP Cache-Control directive. Chi serve stale, khong refresh.
+Grace: Varnish-specific. Có thể bao gồm async refresh.
+Stale-if-error: HTTP Cache-Control directive. Chỉ serve, không refresh.
 
-  Trong VCL nay: grace DUOC SU DUNG de implement stale-if-error.
-  Nhung chung la hai khai niem khac nhau.
+Trong VCL này: GĐ ĐƯỢC SỰ DÙNG để implement-if-error.
+Nhưng chúng là hai khai niệm khác nhau.
 ```
 
 ### Misconception 5: "Nếu origin healthy, không bao giờ được serve"
 
 ```text
-  DUNG — nhung day la DIEU TOT. Stale chi nen duoc serve khi origin
-  KHONG kha dung. Khi origin healthy, user xung dang nhan fresh content.
+ĐƯỜNG — những dấu là ĐIỂM TOT. Stale chỉ nên được serve khi origin.
+KHÓNG KHỨNG. Khi origin healthy, user xung đăng nhận fresh content.
 
-  Neu stale duoc serve ngay ca khi origin healthy:
+Neu được serve ngay cả khi origin healthy:
   -> Stale policy qua aggressive -> user nhan data cu khong can thiet
   -> Can adjust: chi serve stale khi origin unhealthy, khong phai luon luon
 ```
@@ -1819,53 +1819,53 @@ Fail này có nghĩa: CDN đã gọi origin (count) VA tra 503. Stale hoàn toà
 ### Misconception 6: "Status 200 nghĩa là chết hoạt động"
 
 ```text
-  SAI. Status 200 co the den tu:
+SAI. Status 200 có thể đến từ:
   - Stale serving (WHAT WE WANT TO PROVE)
-  - Origin da recover (tuong stale nhung thuc te la fresh)
-  - CDN goi origin, origin tra 200 (stale KHONG hoat dong)
+  - Origin đã (tương đương nhưng thực tế là fresh)
+  - CĐN gọi origin, origin trả 200 (số KHONG hoạt động)
   
-  Phai verify QUA HEADERS + ORIGIN COUNT. Status 200 khong du.
+Phải verify QUA HEADERS + ORIGIN COUNT. Status 200 không đủ.
 ```
 
 ### Misconception 7: "TTL ngân + gạch đá là vô nghĩa"
 
 ```text
-  SAI. TTL ngan + grace dai la STRATEGY:
+SAI. TTL ngân + hiệu bạc là STRATEGY:
 
-  TTL = 2s: object duoc refresh thuong xuyen khi origin healthy.
-  Grace = 120s: khi origin unhealthy, object co the serve stale 120s.
+TTL = 2s: object được refresh thường xuyên khi origin healthy.
+Grace = 120s: khi origin unhealthy, object có thể serve 120s.
   
-  Day la "fresh when possible, stale when necessary."
-  Khong phai "stale luon luon."
+Đây là "fresh when possible, when necessary."
+Không phải "stale luôn luôn."
 ```
 
 ### Misconception 8: "Stale-while-error thay thế được monitoring và alerting"
 
 ```text
-  SAI. Stale-while-error la LAST LINE OF DEFENSE, khong phai replacement:
+SAI. Stale-while-error là LAST LINE OFDEFENSE, không phải replacement:
 
-  Monitoring + Alerting: PHAT HIEN outage, notify team.
-  Stale-while-error: GIU site running TRONG KHI team respond.
+Monitoring + Alerting: PHÁT HÀNH outage, notify team.
+Stale-while-error: GIU site running TRONG KỶ HỆP.
   
-  Neu chi co stale-while-error ma khong monitoring:
+Nếu chỉ có-while-error mà không monitoring:
   -> Origin co the down 10 phut, CDN serve stale, user OK
   -> Nhung team KHONG BIET origin down -> khong fix
   -> Object het grace window -> site DOWN -> user moi biet
   
-  Stale-while-error MUA THOI GIAN cho team fix. No KHONG FIX outage.
+Stale-while-error MUA THỨC GIAN cho team fix. NÓ KHỨNG FIX outage.
 ```
 
 ### Misconception 9: "Cánh cảnh tra Cache-Control:-while-error mới hoạt động"
 
 ```text
-  SAI (trong cau hinh VCL nay). VCL dat UNIFORM grace=120s cho
-  TAT CA cacheable objects. Origin KHONG CAN set stale-while-error
-  directive. Varnish tu ap dung grace policy.
+SAI (trong cấu hình VCL này). VCL đặt UNIFORM grace=120s cho
+TAT CA cacheable objects. Origin KHONG CAN set-while-error.
+directive. Varnish từ áp dụng grace policy.
 
-  Tuy nhien, trong production thuc te:
-  - Origin NEN set stale-while-error de bao hieu intent
-  - Varnish CO THE ton trong directive nay (neu duoc cau hinh)
-  - Nhung trong VCL cua chung ta: grace duoc set uniform, bat ke origin header
+Tuy nhiên, trong production thực tế:
+  - Origin NEN set-while-error để bảo hiệu
+  - Varnish CO THE ton trong directive này (neu được cấu hình)
+  - Những trong VCL của chúng ta: gạch được set uniform, bắt kẻ origin header...
 ```
 
 ## 14. Checklist
@@ -1883,7 +1883,7 @@ Fail này có nghĩa: CDN đã gọi origin (count) VA tra 503. Stale hoàn toà
 
 - [ ] Warmup sequence: MISS HIT (xác nhận cách hoạt động)
 - [ ] BLOCK242 thành công (kỳ tra hiệu)
-- [ ] Dự thời gian cho Varnish probe detect unhealthy (>= 4s với interval=1s)
+- [ ] Du thoi gian cho Varnish probe detect unhealthy (>= 4s voi interval=1s)
 - [ ] Stale probe: 200 + HIT + X-Cache-Stale: true + X-Cache-Backend-Healthy: false
 - [ ] Origin request count = 1 (chỉ MISS đầu tiên)
 - [ ] Teardown successful: origin healthy trở lại
@@ -1937,7 +1937,7 @@ const LONG_STALE = envInt('STALE_IF_ERROR_SECONDS', 3600);
 
 ```javascript
 // 09-stale-while-error-slow.js
-// Thay vi origin tra 503, origin CHAM (30s timeout)
+Thay vì origin tra 503, origin CHAM (30s timeout)
 // Varnish probe: first_byte_timeout = 30s
 // Neu probe timeout -> Varnish marks backend sick -> serve stale
 
@@ -2041,15 +2041,15 @@ const LONG_STALE = envInt('STALE_IF_ERROR_SECONDS', 3600);
   SAI: "Stale probe returns 200 -> PASS"
   DUNG: "Stale probe returns 200 + X-Cache-Stale + origin count=1 -> PASS"
   
-  Status 200 la can but KHONG du. Origin count la bang chung
+Status 200 là căn cứ KHONG dự. Origin count là bằng chứng.
   CDN KHONG lien lac origin. Thieu origin count -> khong biet
-  stale co that su hoat dong hay khong.
+! có thật sự hoạt động hay không.
 ```
 
 ### Anti-pattern 2: Too-short-if-error (or none at all)
 
 ```text
-  SAI: stale-if-error = 2s (bang TTL)
+SAI:-if-error = 2s (bảng TTL)
   -> Object vua het TTL cung het stale window
   -> Khong co thoi gian de detect unhealthy
   
@@ -2078,7 +2078,7 @@ const LONG_STALE = envInt('STALE_IF_ERROR_SECONDS', 3600);
   
   DUNG: MISS -> HIT (prove caching works) -> then test stale
   -> Neu stale fail, ta biet chac la do stale mechanism,
-     khong phai do caching co ban.
+không phải do cách cô bán.
 ```
 
 ### Anti-pattern 5: Setting probe wait too short
@@ -2164,7 +2164,7 @@ const LONG_STALE = envInt('STALE_IF_ERROR_SECONDS', 3600);
 
 : Stale probe returns 503 instead of 200 CAUSE: Object may have been evicted from cache, or grace window too short CHECK: Is obj.ttl + obj.grace > 0s? Grace must be set in VCL. CHECK: Did the second request in setup return HIT? If not, object't cached. FIX: Increase STALEIF ERRORSECONDS (ensure grace window is) Check vclbackendresponse: beresp.grace must be > 0
 
-: Stale probe returns 200 but X-Cache-Stale is CAUSE: X-Cache-Stale is only set when backend is unhealthy. If backend is still healthy serving not triggered. CHECK: curl LOCK270 healthy should be false CHECK: Wait longer: STALEPROBEWAITSECONDS may not be enough for Varnish to detect unhealthy (probe interval 2 fails) FIX: Increase STALEPROBEWAITSECONDS to 6 or 8 users (tuỳ theo từng người)
+: Stale probe returns 200 but X-Cache-Stale is CAUSE: X-Cache-Stale is only set when backend is unhealthy. If backend is still healthy serving not triggered. CHECK: curl LOCK270 healthy should be false CHECK: Wait longer: STALEPROBEWAITSECONDS may not be enough for Varnish to detect unhealthy (probe interval 2 fails) FIX: Increase STALEPROBEWAITSECONDS to 6 or 8 users (tuy theo từng người)
 
 : Origin request count = 2 (or more) CAUSE: CDN contacted origin during probe CHECK: Is vcl hit returning (deliver) or (pass)? If (pass) vcl hit returning (deliver) for
 
@@ -2183,4 +2183,4 @@ const LONG_STALE = envInt('STALE_IF_ERROR_SECONDS', 3600);
 - Lyer roadmap: BLOCK265
 - Sibling cases: cdn-01 through cdn-11 (full CDN suite)
 - RFC 5861 (HTTP Cache-Control Extensions for Stale Content): BLOCK266 directive specification
-- Varnish đặc: Grace mode and health checks: BLOCK267
+- Varnish dac: Grace mode and health checks: BLOCK267

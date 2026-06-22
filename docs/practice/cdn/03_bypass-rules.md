@@ -9,10 +9,10 @@
 
 ### Khong phai traffic nao cung nen duoc cache
 
-CDN là một shared cache — một object được dựa vào cache sẽ được phục vụ lại chờ mục đích của cache.
-Tất cả nhưng giống hết về cache key sâu này. Điều này có nghĩa là:
-Nếu một chưa dụ dụ liệu riêng từ (private data) bị cache, dụ lượng do sẽ bị mất.
-Rõ rỉ rỉ chờ ngữ khác....
+CDN là một shared cache — một object được đưa vào cache sẽ được phục vụ lại cho
+**tất cả** những request giống hệt về cache key sau này. Điều này có nghĩa là:
+nếu một request chứa dữ liệu riêng tư (private data) bị cache, dữ liệu đó sẽ bị
+**rò rỉ** cho người khác.
 
 ```text
 KHONG DUOC CACHE:
@@ -30,13 +30,13 @@ NEU CACHE NHUNG THU NAY:
  -> DATA BREACH
 ```
 
-đây là đầu hiểu trọng về 'tính thận từ và tính toàn vẹn dụ liệu'.
-Không phải là "performance issue" — đây mỗi lạsecurity issue....
+Đây là violation nghiêm trọng về **tính riêng tư** và **tính toàn vẹn dữ liệu**.
+Không phải là "performance issue" — đây là **security issue**.
 
 ### Authenticated traffic: moi nguoi dung thay noi dung khac nhau
 
-Khí một user đã login (có Author header hoặc Cookie), response: "Không.
-Từ backend phụ thuộc vào đánh tính của user do:
+Khi một user đã login (có Authorization header hoặc session Cookie), response
+từ backend **phụ thuộc vào danh tính của user đó**:
 
 ```text
 GET /api/sim/products/1 + Authorization: Bearer <token-cua-An>
@@ -61,23 +61,23 @@ Tinh huong: User VIP login, browse product detail page
 
 ### Cookie: khong chi la authentication
 
- cookie không chỉ đánh chờ "đã lượt Hãy chưa". Cookie còn được dùng để: : Để ghim vào ngôn tay....
+ cookie không chỉ đánh chờ "đã login hay chưa". Cookie còn được dùng để:
 
 ```text
- - Theo doi session state (gio hang, wishlist)
- - A/B testing assignment (variant duoc gan theo cookie, khong theo header)
- - Tracking / analytics
- - CSRF token
- - Language preference override
+  - Theo dõi session state (giỏ hàng, wishlist)
+  - A/B testing assignment (variant được gán theo cookie, không theo header)
+  - Tracking / analytics
+  - CSRF token
+  - Language preference override
 ```
 
-Bắt kỹ nào có Cookie header đều có the chưa được triệu chứng từ họ.
-Trạng thái cả nhân. Varnish không the biết cookie nào là "vô hại" và cookie này chẳng gì can trở có năng an kiêng này lâu làm rồi
-nào chưa — vì vậy toàn bộ Cookie header phải LALEBEL0 bypass....
+Bất kỳ request nào có Cookie header đều **có thể** chứa dữ liệu riêng tư hoặc
+trạng thái cá nhân. Varnish không thể biết cookie nào là "vô hại" và cookie
+nào chứa session — vì vậy toàn bộ Cookie header phải trigger bypass.
 
 ### Cache-Control: no-cache — client tu choi cache
 
-Client có the gửi `Cache-: no-cache` để yêu câu 'fresh data từ origin.
+Client có thể gửi `Cache-Control: no-cache` để yêu cầu **fresh data** từ origin:
 
 ```text
 Tinh huong:
