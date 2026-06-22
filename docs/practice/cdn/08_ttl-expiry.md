@@ -855,6 +855,116 @@ Với case 08:
 - return(pass) -> trường hợp 3 -> MISS
 - Object mới được fetch và cache -> HIT cho đến TTL tiếp theo
 
+### 6.9. Phân tích thực tế: Response header của homefeed
+
+Khi test chạy, response từ homefeed chứa các header quyết định TTL:
+
+```text
+HTTP/1.1 200 OK
+Cache-Control: public, s-maxage=20
+Content-Type: application/json
+X-Cache: HIT
+X-Cache-Hits: 1
+X-Cache-Age: 5
+X-Cache-Backend-Healthy: true
+X-Cache-Key-Language: vi
+X-Cache-Key-Geo: VN
+X-Cache-Key-Device: mobile
+X-Cache-Key-AB: control
+X-Cache-Key-Segment: guest
+X-Served-By: varnish
+```
+
+Từng header và ý nghĩa cho TTL:
+
+```text
+Cache-Control: public, s-maxage=20
+  -> ĐÂY LÀ DÒNG QUYẾT ĐỊNH
+  -> s-maxage=20: CDN cache object này 20 giây
+  -> public: object cache được bởi mọi cache (kể cả browser)
+  -> Nếu dòng này KHÔNG có: Varnish dùng VCL default (20s cho homefeed)
+  -> Nếu dòng này là s-maxage=60: Varnish cache 60s -> test fail với TTL_WAIT_SECONDS=21
+
+X-Cache-Age: 5
+  -> Object đã sống trong cache 5 giây
+  -> 20 - 5 = 15 giây nữa sẽ hết hạn
+  -> Nếu Age >= s-maxage: object đang được serve từ grace (hiếm, chỉ khi backend unhealthy)
+
+X-Cache-Hits: 1
+  -> Object đã phục vụ 1 request từ cache trước request này
+  -> Nếu hits=0: object vừa được fetch -> đây là request MISS đầu tiên
+  -> Sau sleep: hits bắt đầu lại từ 0 (object mới)
+```
+
+### 6.10. Công thức tính TTL hiệu quả trong hệ thống thực tế
+
+```text
+TTL_hiệu_quả = MIN(
+    TTL từ CDN-Cache-Control header,     (nếu có)
+    TTL từ Cache-Control: s-maxage,      (nếu có)
+    TTL từ Cache-Control: max-age,       (nếu có, fallback)
+    TTL từ VCL default,                  (nếu có)
+    TTL từ Varnish built-in default      (120s, fallback cuối cùng)
+)
+
+TUY NHIÊN, VCL CÓ THỂ GHI ĐÈ:
+  if (some_condition) {
+      set beresp.ttl = Xs;  // GHI ĐÈ tất cả các nguồn trên
+  }
+
+Ngoài ra, VCL có thể set beresp.uncacheable = true:
+  -> Object KHÔNG được cache, bất kể TTL là bao nhiêu
+  -> Xảy ra khi: Cache-Control: no-store|private, Set-Cookie, status >= 500
+
+ĐIỂM TINH TẾ: Thứ tự thực thi
+  1. Varnish parse response headers -> tính beresp.ttl tự động
+  2. VCL vcl_backend_response chạy -> CÓ THỂ ghi đè beresp.ttl
+  3. Nếu sau VCL, beresp.ttl > 0s -> object được cache
+  4. Nếu sau VCL, beresp.ttl <= 0s hoặc beresp.uncacheable = true -> không cache
+  5. Nếu object được cache: set grace và keep từ VCL
+
+Trong case 08:
+  App trả về Cache-Control: s-maxage=20 (bước 1)
+  -> beresp.ttl = 20s
+  -> VCL check: if (beresp.ttl <= 0s) -> FALSE (20s > 0s)
+  -> VCL default TTL KHÔNG được áp dụng
+  -> if (beresp.ttl > 0s) -> TRUE -> set grace=120s, keep=600s
+  -> Object cache với TTL=20s, grace=120s, keep=600s
+```
+
+### 6.11. TTL và hit ratio: Toán học đằng sau
+
+```text
+Với TTL=20s và traffic đều:
+
+  MISS rate mỗi variant = 1 / TTL = 1/20 = 0.05 req/s
+  HIT rate mỗi variant = arrival_rate - 0.05 req/s
+
+  Với 1000 req/s tổng, 5 variant (đều nhau):
+    Mỗi variant: 200 req/s
+    MISS: 0.05 req/s (1 request mỗi 20 giây)
+    HIT:  199.95 req/s
+    Hit ratio: 99.975%
+
+  Với 1000 req/s, 100 variant (không đều):
+    Mỗi variant trung bình: 10 req/s
+    MISS: 0.05 req/s mỗi variant -> 5 req/s tổng
+    HIT:  995 req/s tổng
+    Hit ratio: 99.5%
+
+Tăng TTL lên 60s:
+    MISS mỗi variant: 1/60 = 0.017 req/s -> 1.7 req/s tổng (100 variant)
+    Hit ratio: 99.83% (cải thiện 0.33%, nhưng data cũ hơn 3x)
+
+Giảm TTL xuống 5s:
+    MISS mỗi variant: 1/5 = 0.2 req/s -> 20 req/s tổng (100 variant)
+    Hit ratio: 98% (giảm 1.5%, nhưng data tươi hơn 4x)
+
+Công thức tổng quát:
+  Hit ratio = 1 - (N_variants / (arrival_rate * TTL))
+  với điều kiện arrival_rate * TTL > N_variants (nếu không, hit ratio = 0)
+```
+
 ---
 
 ## 7. Timing precision caveats -- Những cạm bẫy về độ chính xác thời gian
@@ -1367,6 +1477,99 @@ QUYẾT ĐỊNH:
   🚫 Kiểm tra: có background process nào liên tục fetch object này không?
 ```
 
+### 11.5. Bảng so sánh nhanh 4 scenarios
+
+```text
++------------------+--------+--------+--------+-----------+
+| SCENARIO         | Req #1 | Req #2 | Req #3 | KẾT LUẬN  |
+|                  |        |        |(sau    |           |
+|                  |        |        | sleep) |           |
++------------------+--------+--------+--------+-----------+
+| A: PASS hoàn hảo | MISS   | HIT    | MISS   | ✅ TTL    |
+|                  |        |        |        | hoạt động |
+|                  |        |        |        | đúng      |
++------------------+--------+--------+--------+-----------+
+| B: HIT sau TTL   | MISS   | HIT    | HIT    | ⚠️ TTL    |
+|    +wait          |        |        |        | dài hơn   |
+|                  |        |        |        | dự kiến   |
++------------------+--------+--------+--------+-----------+
+| C: MISS trước    | MISS   | HIT    | MISS   | ⚠️ Object |
+|    TTL            |        |   HOẶC  | (sớm)  | bị evict  |
+|                  |        |   MISS  |        | hoặc key  |
+|                  |        |         |        | thay đổi  |
++------------------+--------+--------+--------+-----------+
+| D: HIT mãi mãi   | MISS   | HIT    | HIT    | 🚫 TTL=∞  |
+|                  |        |        | (mãi)  | Data      |
+|                  |        |        |        | stale     |
+|                  |        |        |        | vĩnh viễn |
++------------------+--------+--------+--------+-----------+
+```
+
+### 11.6. Quy trình debug cho từng scenario
+
+```text
+KHI GẶP SCENARIO B (HIT sau TTL+wait):
+
+  STEP 1: Kiểm tra response header thực tế
+    curl -sI http://localhost:80/api/sim/products/homefeed \
+      -H 'Accept-Language: vi' -H 'X-Geo-Country: VN' \
+      -H 'X-Device-Class: mobile'
+    -> Đọc: Cache-Control, CDN-Cache-Control
+    -> TTL thực tế = s-maxage (hoặc max-age nếu không có s-maxage)
+
+  STEP 2: So sánh TTL thực tế với TTL_WAIT_SECONDS
+    -> Nếu TTL=60, TTL_WAIT_SECONDS=21 -> FAIL là đúng (chưa hết hạn)
+    -> Cập nhật TTL_WAIT_SECONDS = TTL + 1 = 61
+
+  STEP 3: Kiểm tra VCL có ghi đè TTL không
+    -> varnishlog -g request -q "ReqUrl ~ 'homefeed'"
+    -> Tìm dòng: "TTL" trong vcl_backend_response
+    -> Xác nhận beresp.ttl cuối cùng
+
+  STEP 4: Rerun với TTL_WAIT_SECONDS mới
+    -> $env:TTL_WAIT_SECONDS = "61"
+    -> ./scripts/run-cdn-capabilities.ps1 -Scenarios 08-ttl-expiry
+
+KHI GẶP SCENARIO C (MISS trước TTL):
+
+  STEP 1: Kiểm tra cache key có nhất quán không
+    -> So sánh X-Cache-Key-* giữa các request
+    -> Nếu khác nhau -> profile hoặc URL thay đổi
+
+  STEP 2: Kiểm tra Varnish storage
+    -> varnishstat -1 | grep MAIN.n_object
+    -> varnishstat -1 | grep MAIN.n_lru_nuked
+    -> Nếu n_lru_nuked > 0: object bị evict do memory pressure
+
+  STEP 3: Kiểm tra có BAN/PURGE không
+    -> varnishlog -g request -q "ReqMethod eq 'BAN' or ReqMethod eq 'PURGE'"
+    -> Tìm BAN/PURGE xảy ra trong khoảng thời gian test
+
+  STEP 4: Tăng TTL_WAIT_SECONDS và kiểm tra lại
+    -> Nếu object bị evict sau 5s: TTL hiệu quả = 5s
+    -> Cần tăng cache storage hoặc giảm traffic
+
+KHI GẶP SCENARIO D (HIT mãi mãi):
+
+  STEP 1: Kiểm tra obj.ttl trong Varnish
+    -> varnishlog -g request -q "ReqUrl ~ 'homefeed'"
+    -> Tìm: "Hit" hoặc "HitPass" header
+    -> Tìm obj.ttl value
+
+  STEP 2: Kiểm tra VCL hit logic
+    -> Có phải obj.ttl không bao giờ giảm?
+    -> Có phải luôn return(deliver) bất kể TTL?
+
+  STEP 3: Kiểm tra grace mode
+    -> X-Cache-Stale có luôn true không?
+    -> Backend có thực sự healthy không?
+    -> Nếu backend unhealthy + grace=120s: serve stale trong 120s
+
+  STEP 4: Kiểm tra Varnish version
+    -> varnishd -V
+    -> Nếu version cũ (< 6.0): có thể có bug liên quan đến TTL
+```
+
 ---
 
 ## 12. Nghịch lý và misconceptions -- Những hiểu lầm phổ biến
@@ -1502,6 +1705,96 @@ Khi backend healthy TRỞ LẠI:
 
 Case 08 yêu cầu backend HEALTHY -> grace mode không kích hoạt.
 Case 09 (stale-while-error) test grace mode khi backend UNHEALTHY.
+```
+
+### 12.6. "Chỉ cần test TTL một lần là đủ"
+
+```text
+SAI.
+
+TTL là hành vi PHỤ THUỘC THỜI GIAN và PHỤ THUỘC MÔI TRƯỜNG:
+
+1. TTL phụ thuộc vào response header từ origin:
+   -> App deploy version mới -> có thể thay đổi Cache-Control header
+   -> Test pass hôm nay không đảm bảo pass ngày mai
+   -> CI nên chạy case 08 trong regression suite
+
+2. TTL phụ thuộc vào Varnish config:
+   -> Ai đó update VCL -> thay đổi default TTL hoặc grace
+   -> Case 08 fail -> phát hiện sớm config drift
+
+3. TTL phụ thuộc vào clock synchronization:
+   -> NTP drift giữa k6 host và Varnish container
+   -> Có thể pass hôm nay, fail ngày mai nếu clock drift > 1s
+
+4. TTL phụ thuộc vào memory pressure:
+   -> Bình thường: object sống đủ 20s
+   -> Traffic spike: memory đầy -> object bị evict sau 5s
+   -> Vẫn "TTL=20s" trên config, nhưng thực tế là 5s
+
+KHUYẾN NGHỊ:
+  - Chạy case 08 trong CI pipeline (mỗi lần deploy app hoặc VCL)
+  - Chạy định kỳ (daily) để phát hiện clock drift
+  - Chạy khi có thay đổi infrastructure (tăng/giảm Varnish memory)
+```
+
+### 12.7. "Keep period không quan trọng"
+
+```text
+SAI.
+
+obj.keep quyết định object tồn tại trong cache BAO LÂU sau khi hết TTL
+và grace. Keep period quan trọng cho:
+
+1. Conditional requests (If-Modified-Since / If-None-Match):
+   -> Client gửi request với ETag hoặc Last-Modified
+   -> Varnish tìm thấy object trong keep period (dù đã hết TTL + grace)
+   -> Varnish gửi 304 Not Modified nếu object không thay đổi
+   -> TIẾT KIỆM BANDWIDTH: không cần gửi full response body
+   -> Vẫn cần 1 request đến client, nhưng response body = 0 bytes
+
+2. Grace extension:
+   -> obj.ttl + obj.grace <= 0 -> object không serve được
+   -> NHƯNG obj.ttl + obj.keep > 0 -> object vẫn tồn tại
+   -> Dùng cho conditional requests (304)
+
+3. Cache warming:
+   -> Object trong keep period có thể được dùng để warm cache mới
+   -> Một số Varnish module dùng keep period để pre-fetch
+
+Trong default.vcl: keep = 600s cho object cacheable.
+Tổng thời gian object tồn tại: TTL + grace + keep = 20 + 120 + 600 = 740s
+Sau 740s: object bị xóa HOÀN TOÀN khỏi cache.
+```
+
+### 12.8. "Age header và TTL là một"
+
+```text
+SAI.
+
+Age header (từ response) cho biết object đã sống trong cache bao lâu.
+Đây là ESTIMATE tại thời điểm response được tạo.
+
+TTL (trong Varnish) là thời gian object CÒN LẠI trước khi hết hạn.
+
+Mối quan hệ:
+  Age + obj.ttl = TTL ban đầu (xấp xỉ)
+
+Ví dụ:
+  Object cache lúc t=0, TTL=20s
+  t=5s: request HIT -> Age=5, obj.ttl=15 -> 5 + 15 = 20 ✅
+  t=19s: request HIT -> Age=19, obj.ttl=1 -> 19 + 1 = 20 ✅
+  t=21s: request HIT (nếu grace) -> Age=21, obj.ttl=-1 -> 21 + (-1) = 20 ✅
+
+Tại sao "xấp xỉ"?
+  - Network latency giữa Varnish và client
+  - Clock granularity (Varnish dùng giây, Age cũng là giây)
+  - Làm tròn: Age=5 có thể là 4.5-5.4 giây
+
+Age header hữu ích để:
+  - Debug: nếu Age=500 mà TTL=20 -> object đang ở keep period
+  - Monitor: Age distribution -> biết cache có hoạt động hiệu quả không
+  - Xác nhận: Age reset về 0 sau MISS -> object mới đã vào cache
 ```
 
 ---
@@ -1771,6 +2064,63 @@ CÁCH ĐÚNG:
   // Script chuẩn đã làm đúng thứ tự này
 ```
 
+### 15.6. Dùng chung cache key cho test và production traffic
+
+```text
+SAI LẦM:
+  Test case 08 dùng homefeed path /api/sim/products/homefeed
+  Cùng lúc production traffic CŨNG đang gọi homefeed
+  -> Request #2 có thể HIT từ production warm (không phải từ test)
+  -> Request #3 MISS có thể do production BAN (không phải do TTL)
+  -> Kết quả test bị nhiễu, không biết pass là do test hay do production
+
+CÁCH ĐÚNG:
+  - Test trên môi trường STAGING riêng (không có production traffic)
+  - HOẶC: dùng cache key riêng cho test (thêm header hoặc path prefix)
+  - HOẶC: chạy test vào giờ thấp điểm, cô lập cache key
+```
+
+### 15.7. Không reset cache giữa các lần chạy
+
+```text
+SAI LẦM:
+  Chạy case 08 lần 1 -> PASS (MISS->HIT->sleep->MISS)
+  Chạy case 08 lần 2 -> Request #1 là HIT (object còn từ lần 1)
+  -> Test fail ngay bước 1 vì setup() ban-url nhưng object đã được
+     warm lại bởi ai đó giữa 2 lần chạy
+
+CÁCH ĐÚNG:
+  - setup() luôn ban-url trước khi test
+  - Nếu vẫn fail: kiểm tra xem có process nào khác đang warm homefeed không
+  - Thêm delay giữa ban-url và request #1 để đảm bảo ban đã có hiệu lực
+  - Dùng varnishlog để xác nhận ban đã được áp dụng
+```
+
+### 15.8. TTL_WAIT_SECONDS cứng trong script thay vì env var
+
+```text
+SAI LẦM:
+  Hardcode TTL_WAIT_SECONDS = 21 trong script
+  -> Khi app thay đổi Cache-Control: s-maxage=30
+  -> Script vẫn dùng 21s -> object chưa hết hạn -> test FAIL
+  -> Developer phải sửa code script -> chậm, dễ sai
+
+CÁCH ĐÚNG:
+  TTL_WAIT_SECONDS = envFloat('TTL_WAIT_SECONDS', 21)
+  -> Có thể override qua biến môi trường
+  -> $env:TTL_WAIT_SECONDS = "31" -> chạy lại không cần sửa code
+  -> Default 21s hoạt động cho TTL=20s
+
+  TỐT HƠN NỮA: script có thể tự động detect TTL từ response header:
+    const first = requestCdn(...);
+    const cc = getHeader(first, 'Cache-Control');
+    const sMaxAge = extractSMaxAge(cc);
+    const waitSeconds = (sMaxAge || DEFAULT_TTL) + BUFFER_SECONDS;
+    sleep(waitSeconds);
+  -> Tự động thích nghi với TTL thực tế
+  -> Không cần config thủ công
+```
+
 ---
 
 ## 16. Real validation data -- Dữ liệu xác nhận thực tế
@@ -1830,6 +2180,66 @@ Tốc độ HIT vs MISS:
   -> Cache offload giảm latency ~94% cho end user
   -> Với 1000 req/s: tiết kiệm ~45ms x 1000 = 45 giây processing mỗi giây
      (nếu tất cả đều là HIT)
+```
+
+### 16.3. Phân tích hit ratio từ dữ liệu thực tế
+
+```text
+Từ lần chạy thực tế, ta có thể tính toán hit ratio:
+
+  MISS requests: 2 (request #1 + request #3)
+  HIT requests:  1 (request #2)
+  Hit ratio mẫu: 1/3 = 33% (mẫu nhỏ, không đại diện)
+
+Trong production với 1000 req/s ổn định:
+  MISS rate mỗi variant = 1/TTL = 1/20 = 0.05 req/s
+  Tổng MISS rate = 0.05 * 5 variant = 0.25 req/s
+  HIT rate = 1000 - 0.25 = 999.75 req/s
+  Hit ratio = 99.975%
+
+Đây là sức mạnh của CDN cache: với TTL=20s, chỉ 0.025% request
+phải về origin. 99.975% được phục vụ từ cache với latency ~3ms.
+
+Khi TTL giảm còn 5s:
+  MISS rate = 1/5 = 0.2 req/s mỗi variant
+  Tổng MISS rate = 1 req/s
+  Hit ratio = 99.9% (vẫn rất cao, nhưng origin load tăng 4x)
+
+Khi TTL tăng lên 60s:
+  MISS rate = 1/60 = 0.017 req/s mỗi variant
+  Tổng MISS rate = 0.083 req/s
+  Hit ratio = 99.992% (cải thiện không đáng kể, nhưng data cũ 3x)
+```
+
+### 16.4. Cross-reference với các case CDN khác
+
+```text
+Case 08 (TTL expiry) liên quan mật thiết đến các case khác:
+
+VỚI CASE 01 (hit-smoke):
+  - Case 01 chứng minh: object CÓ THỂ được cache (MISS->HIT)
+  - Case 08 chứng minh: object cache CÓ THỜI HẠN (HIT->MISS)
+  - Case 01 là prerequisite cho case 08
+  - Nếu case 01 fail (không HIT) -> case 08 cũng sẽ fail
+
+VỚI CASE 09 (stale-while-error):
+  - Case 08: backend healthy -> object hết TTL -> MISS
+  - Case 09: backend unhealthy -> object hết TTL -> serve stale (HIT+stale)
+  - Cả hai case kiểm tra vcl_hit, nhưng ở hai trạng thái backend khác nhau
+  - Case 08 là "happy path" của TTL, case 09 là "degraded path"
+
+VỚI CASE 11 (negative-caching):
+  - Case 11: 404 response cũng có TTL (15s default)
+  - Cùng cơ chế TTL, nhưng cho error responses
+  - Case 08 chứng minh TTL cho 200 OK
+  - Case 11 chứng minh TTL cho 404 Not Found
+
+VỚI CASE 05/06 (invalidation):
+  - Case 05/06: invalidate CHỦ ĐỘNG -> MISS
+  - Case 08: TTL hết hạn THỤ ĐỘNG -> MISS
+  - Cả hai đều dẫn đến MISS, nhưng cơ chế khác nhau
+  - Nếu case 05 pass nhưng case 08 fail: TTL config sai
+  - Nếu case 08 pass nhưng case 05 fail: invalidation mechanism sai
 ```
 
 ---

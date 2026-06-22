@@ -806,6 +806,100 @@ Total checks trong script:
   Neu chi 1 check fail -> threshold checks['rate==1'] bi vi pham -> k6 exit 1
 ```
 
+### Vi sao shared-iterations, khong phai executor khac?
+
+```text
+Case 01 dung shared-iterations (vus=4, duration=18s) -- executor mac dinh
+cua k6 khi khong chi dinh executor name. Day la lua chon co chu dich:
+
+  SO SÁNH CÁC EXECUTOR CHO CDN CORRECTNESS TEST:
+
+  shared-iterations (DANG DUNG):
+    - Iterations duoc chia se giua VUs
+    - Khong gioi han iteration count
+    - Thich hop: correctness check, sustained lightweight traffic
+    - VUs: 4 -- du de tao parallel reads
+    - Duration: 18s -- du de verify sustained HIT
+
+  per-vu-iterations (KHONG DUNG):
+    - Moi VU chay co dinh N iterations
+    - Can biet truoc so iteration can thiet -> khong phu hop
+      (ta muon chay trong 18s, khong quan tam so iteration)
+    - Neu set iterations qua thap -> khong du sustained proof
+    - Neu set iterations qua cao -> lng phi thoi gian
+
+  constant-vus (CO THE DUNG):
+    - Giu co dinh so VUs, chay trong duration
+    - Tuong tu shared-iterations nhung kem linh hoat hon
+      cho correctness test
+
+  constant-arrival-rate (KHONG PHU HOP):
+    - Open model, iteration doc lap voi VU completion
+    - Phu hop: LOAD test, kiem tra throughput
+    - KHONG phu hop: correctness test (ta khong can tao ap luc)
+    - Se tao dropped_iterations neu VUs khong du -> gay nhiu
+
+  ramping-arrival-rate (KHONG PHU HOP):
+    - Open model, rate curve
+    - Phu hop: campaign ingress test
+    - Qua phuc tap cho MISS->HIT smoke test
+
+  LY DO CHON shared-iterations:
+    1. Don gian nhat cho correctness test
+    2. Setup phase chay deterministic (1 VU, sequential)
+    3. Default phase: 4 VUs parallel reads -> kiem tra cache
+       isolation under concurrency
+    4. Khong can cau hinh phuc tap (preAllocatedVUs,
+       maxVUs, timeUnit, rate)
+    5. K6 tu dong phan phoi iterations giua VUs deu dan
+
+  Dieu can luu y:
+    - shared-iterations la CLOSED model (VUs wait for completion)
+    - Neu sleep = 0 -> VUs loop cang nhanh cang tot -> tao throughput
+      tuy y -> khong deterministic
+    - Voi sleep(0.025) -> pace gan deterministic (~40 iterations/s/VU)
+    - Day la mot trong nhung ly do tai sao sleep la QUAN TRONG
+```
+
+### Env knobs: dieu chinh test behavior
+
+```text
+3 environment variables cho phep dieu chinh test ma khong can
+sua script:
+
+  HIT_SMOKE_VUS (default: 4):
+    - So Virtual Users chay default() loop
+    - Tang: kiem tra cache isolation under higher concurrency
+    - Giam: CI-optimized run (1-2 VUs)
+    - Override: $env:HIT_SMOKE_VUS = "10"
+
+  HIT_SMOKE_DURATION (default: "18s"):
+    - Duration cua test (k6 format: 18s, 30s, 1m, ...)
+    - Tang: kiem tra cache stability lau dai (duration < TTL)
+    - Giam: CI-optimized run ("5s" hoac "10s")
+    - LUON PHAI < 90s (TTL) de tranh expire giua test
+    - Override: $env:HIT_SMOKE_DURATION = "30s"
+
+  HIT_SMOKE_SLEEP_SECONDS (default: 0.025):
+    - Sleep giua cac iteration trong default() loop
+    - Tang: tao throughput thap hon (nhe nhang hon)
+    - Giam: tao throughput cao hon (stress hon)
+    - 0 = khong sleep -> VU loop fastest possible -> co the
+      tao ~800 req/s voi 4 VUs
+    - Override: $env:HIT_SMOKE_SLEEP_SECONDS = "0.05"
+
+  Vi du ket hop:
+    # CI fast: 2 VUs, 10s, 0.05s sleep -> ~200 requests total -> ~12s
+    $env:HIT_SMOKE_VUS = "2"
+    $env:HIT_SMOKE_DURATION = "10s"
+    $env:HIT_SMOKE_SLEEP_SECONDS = "0.05"
+
+    # Stress HIT: 20 VUs, 30s, 0.005s sleep -> ~120,000 requests
+    $env:HIT_SMOKE_VUS = "20"
+    $env:HIT_SMOKE_DURATION = "30s"
+    $env:HIT_SMOKE_SLEEP_SECONDS = "0.005"
+```
+
 ## 6. Cache key model
 
 ### Cach Varnish xay dung cache key cho product detail
