@@ -1,16 +1,16 @@
-# Case 02: variant cache keys -- cách ly nội dung theo tung phân khúc người dùng
+# Case 02: variant cache keys -- cách ly nội dung theo từng phân khúc người dùng
 
 > **Case ID:** `cdn-02-variant-keys`
 > **Script:** `02-variant-keys.js`
 > **Layer:** CDN / Varnish
-> **Proof:** Language/geo/device/AB/segment không bi leak variant -- cach ly tiet dinh giua cac phân khúc người dùng
+> **Proof:** Language/geo/device/AB/segment không bi leak variant -- cách ly tiet dinh giua cac phân khúc người dùng
 
 ## 1. tình huống thực tế
 
-### E-commerce phuc vu noi dung khac nhau theo phân khúc thị trường
+### E-commerce phuc vu nội dung khac nhau theo phân khúc thị trường
 
-Mot san thương mại điện tử (e-commerce) phuc vu nhiều phân khúc người dùng khac nhau
-cung luc. cung mot URL `/api/sim/products/1` (chi tiết sản phẩm), những noi dung
+mot sàn thương mại điện tử (e-commerce) phuc vu nhieu phân khúc người dùng khac nhau
+cung luc. cung mot URL `/api/sim/products/1` (chi tiết sản phẩm), nhung nội dung
 tra ve thay đổi theo:
 
 ```text
@@ -60,13 +60,13 @@ Client VN -----|         |--------->| Cart     |--- DB (cart data)
                                     +----------+
 ```
 
-cung mot request `GET /api/sim/products/1` den Varnish, những:
+cung mot request `GET /api/sim/products/1` den Varnish, nhung:
 
 - `Accept-Language: vi` + `X-Geo-Country: VN` + `X-Device-Class: mobile` -> variant A
 - `Accept-Language: en` + `X-Geo-Country: US` + `X-Device-Class: desktop` -> variant B
-- Hai variant phải la hai cache object doc lap trong Varnish
+- hai variant phải la hai cache object doc lap trong Varnish
 
-### ví dụ cụ thể ve hậu quả nếu variant bi leak
+### ví dụ cụ thể về hậu quả neu variant bi leak
 
 ```text
 Tinh huong that: 9h sang, CDN da cache san pham #1 cho nguoi dung VN mobile.
@@ -98,7 +98,7 @@ Khong phai ve throughput.
 Day la: "CDN co phan biet duoc cac phan khuc nguoi dung khac nhau khong?"
 ```
 
-### vi sao day la mot lop CDN problem, không phải application problem
+### vì sao đây là một lớp CDN problem, không phải application problem
 
 ```text
 Nhieu team nghi rang: "Application tra dung noi dung -> CDN chi can cache lai."
@@ -124,7 +124,7 @@ CDN cache lai:
 -> Can test CDN layer RIENG de phat hien.
 ```
 
-### trường hợp thật sự da xảy ra (war story)
+### trường hợp thật sự đã xảy ra (war story)
 
 ```text
 Nam 2023, mot e-commerce platform gap su co:
@@ -182,9 +182,9 @@ Kich ban 5: SAI SEGMENT
 
 ## 2. CDN capability being proven
 
-### 5 chieu variant doc lap trong cache key
+### 5 chiều variant độc lập trong cache key
 
-CDN dang được chứng minh có khả năng **cach ly variant** (variant isolation) tren
+CDN đang được chứng minh có khả năng **cách ly variant** (variant isolation) tren
 5 chieu doc lap:
 
 ```text
@@ -195,10 +195,10 @@ Chieu thu 4: AB         (X-Ab-Variant header)
 Chieu thu 5: SEGMENT    (X-User-Segment header)
 ```
 
-cung URL + khac header = khac cache object. moi variant co mot **slot cache doc lap**
-voi vong doi MISS -> HIT rieng.
+cung URL + khac header = khác cache object. moi variant co mot **slot cache độc lập**
+voi vòng đời MISS -> HIT riêng.
 
-### dieu gi dang được chứng minh
+### điều gì đang được chứng minh
 
 ```text
 (a) SAME PROFILE -> SAME CACHE KEY -> HIT
@@ -230,7 +230,7 @@ HIT ratio cao la tot nhung:
 Day la CORRECTNESS PROOF, khong phai PERFORMANCE BENCHMARK.
 ```
 
-### mục tiêu kỹ thuật cua case
+### mục tiêu kỹ thuật của case
 
 ```text
 Case nay tra loi 3 cau hoi ky thuat:
@@ -292,7 +292,7 @@ Khi slot A MISS -> fetch tu origin -> object duoc luu vao slot A
 
 ## 3. vì sao test ở CDN layer
 
-### Application có thể sai, CDN có thể sai, status 200 không bao gio noi len sự thật
+### application có thể sai, CDN có thể sai, status 200 không bao gio noi len sự thật
 
 ```text
 CA HAI LOP DEU CO THE GAY RA VARIANT LEAKAGE:
@@ -314,7 +314,7 @@ CA HAI FAILURE MODE DEU:
   -> NGUY HIEM: monitoring thong thuong KHONG the phat hien
 ```
 
-### tai sao không thể trust status code
+### tại sao không thể trust status code
 
 ```text
 Monitoring truyen thong:
@@ -363,7 +363,7 @@ Event path:    http://localhost:9091 -- khong dung trong case nay
 7. Profile headers duoc gan DUNG voi expectedCacheKey trong shared.js
 ```
 
-### vi sao single-vu
+### vì sao single-VU
 
 ```text
 Sequence can duoc deterministic:
@@ -378,7 +378,7 @@ Neu 2 VU cung chay:
 Single-VU dam bao: moi request chay TUAN TU, cache state CO THE DU DOAN.
 ```
 
-### cac profile được test
+### các profile được test
 
 ```text
 Profile                  Language  Geo  Device   AB          Segment
@@ -391,11 +391,11 @@ returningVNMobileVariantA vi       VN   mobile   variant-a   returning
 ```
 
 moi cap profile khac nhau dung 1 chieu -- cac chieu con lai giu nguyen.
-dieu nay cho phép chứng minh isolation theo tung chieu MOT.
+dieu nay cho phép chứng minh isolation theo tung chieu mot.
 
 ## 5. Script deep-dive
 
-### cấu trúc tong the
+### cấu trúc tổng thể
 
 Script `02-variant-keys.js` co 2 phan chinh:
 
@@ -407,7 +407,7 @@ Script `02-variant-keys.js` co 2 phan chinh:
    -> Goi exerciseVariant 5 lan, moi lan test 1 chieu variant
 ```
 
-### Ham exerciseVariant -- chứng minh isolation cho 1 cap
+### hàm exerciseVariant -- chứng minh isolation cho 1 cặp
 
 ```javascript
 function exerciseVariant(path, label, baseProfile, variantProfile, options = {}) {
@@ -458,7 +458,7 @@ function exerciseVariant(path, label, baseProfile, variantProfile, options = {})
 }
 ```
 
-### Chuoi assertion cho moi request
+### chuỗi assertion cho MỖI request
 
 moi request (4 request / cap variant) deu bi kiểm tra:
 
@@ -498,7 +498,7 @@ export default function () {
 }
 ```
 
-### vi sao segment chi test tren homefeed path
+### vì sao segment chỉ test trên homefeed path
 
 ```text
 Trong VCL vcl_hash:
@@ -516,7 +516,7 @@ Trong VCL vcl_hash:
 -> Segment chi co y nghia cache key tren homefeed
 ```
 
-### Tags de trace back
+### tags để trace back
 
 moi request được gan tags co cấu trúc:
 
@@ -528,9 +528,9 @@ moi request được gan tags co cấu trúc:
 ...
 ```
 
-Tags cho phép filter theo tung variant pair trong dashboard va summary.
+Tags cho phép filter theo tung variant pair trong dashboard và summary.
 
-### Iterations tinh toan
+### iterations tính toán
 
 ```text
 Moi exerciseVariant goi 4 request (base_first + base_second + variant_first + variant_second)
@@ -543,11 +543,11 @@ VARIANT_KEYS_ITERATIONS = 24 (mac dinh)
    Total: 24 x 20 = 480 requests
 ```
 
-## 6. cache key model deep-dive
+## 6. Cache key model deep-dive
 
-### STAR SECTION -- day la troi tim cua case nay
+### STAR SECTION -- đây là trái tim của case này
 
-cache key la **identity cua mot object trong CDN**. neu 2 request co cung cache key,
+cache key la **identity của một object trong CDN**. neu 2 request co cung cache key,
 chung se nhan cung object tu cache. neu khac cache key, chung la 2 object doc lap.
 
 ### VCL hash construction (tu default.vcl)
@@ -579,7 +579,7 @@ sub vcl_hash {
 }
 ```
 
-### mô hình khai niem
+### mô hình khái niệm
 
 ```text
 Cache key = req.url + "|" + host + "|" + [dimensions theo path]
@@ -759,7 +759,7 @@ Shared.js normalizeSegment:
   - Con lai -> "guest"
 ```
 
-### Dimension nao ALWAYS trong key, dimension nao CONDITIONAL
+### dimension nào ALWAYS trong key, dimension nào CONDITIONAL
 
 ```text
 CONDITIONAL DIMENSIONS -- chi co mat trong cache key neu path PHAI CO:
@@ -785,7 +785,7 @@ CONDITIONAL:
   - segment: CHI co trong homefeed
 ```
 
-### X-Cache-Key-* response headers nhu verification
+### X-Cache-Key-* response headers như verification
 
 ```text
 VCL vcl_deliver echo lai normalized values nhu response headers:
@@ -810,7 +810,7 @@ Cac header nay cho phep k6 script VERIFY:
   - KHONG CAN inspect internal Varnish state
 ```
 
-### Edge case: header absent -- default values
+### edge case: header absent -- default values
 
 ```text
 Khi header KHONG duoc gui, VCL se dung default:
@@ -841,7 +841,7 @@ Default values CO CHU DICH:
   - Tranh cache key thay doi giua cac request thieu header
 ```
 
-### Edge case: User-Agent fallback cho device detection
+### edge case: User-Agent fallback cho device detection
 
 ```text
 Khi X-Device-Class absent nhung User-Agent co mat:
@@ -865,7 +865,7 @@ Khi X-Device-Class absent nhung User-Agent co mat:
     Request: X-Device-Class=tablet + User-Agent chua iPhone -> "tablet" (uu tien header)
 ```
 
-### Edge case: header co nhiều giá trị (Accept-Language)
+### edge case: header có nhiều giá trị (Accept-Language)
 
 ```text
 Accept-Language co the chua nhieu ngon ngu voi quality values:
@@ -887,7 +887,7 @@ Accept-Language co the chua nhieu ngon ngu voi quality values:
   -> Neu can ho tro tieng Phap -> them "fr" vao whitelist
 ```
 
-### tai sao whitelist quan trong
+### tại sao whitelist quan trọng
 
 ```text
 WHITELIST HUU HAN GIA TRI:
@@ -943,7 +943,7 @@ BUOC 4: WARM & VERIFY VARIANT HIT
   Y nghia: Variant da duoc cache doc lap, request lai -> HIT
 ```
 
-### tai sao buoc 3 la quan trọng nhất
+### tại sao bước 3 là quan trọng nhất
 
 ```text
 Buoc 3 la "linh hon" cua toan bo case:
@@ -959,7 +959,7 @@ Buoc 3 la "linh hon" cua toan bo case:
     -> ISOLATION CONFIRMED
 ```
 
-### chứng minh doc lap (independence), không chi khac biet (differentiation)
+### chứng minh độc lập (independence), không chỉ khác biệt (differentiation)
 
 ```text
 DIFFERENTIATION (yeu hon):
@@ -974,7 +974,7 @@ ISOLATION (manh hon):
   - Request variant LAN NUA -> PHAI VAN LA HIT (variant khong bi base overwrite)
 ```
 
-### vi sao isolation quan trong trong thuc te
+### vì sao isolation quan trọng trong thực tế
 
 ```text
 Tinh huong: Traffic den tu ca VN mobile VA US desktop CUNG LUC
@@ -996,7 +996,7 @@ Neu co isolation:
 ISOLATION dam bao: object A khong bi anh huong boi object B va nguoc lai
 ```
 
-### Cardinality cua không gian variant
+### cardinality của không gian variant
 
 ```text
 So luong variant toi da co the ton tai:
@@ -1031,7 +1031,7 @@ X-Cache-Key-Segment      User segment da normalize        "guest", "new_user", "
                          (CHI co tren homefeed path)
 ```
 
-### Headers khac can doc
+### headers khác cần đọc
 
 ```text
 Header               Y nghia                            Gia tri can doc
@@ -1044,7 +1044,7 @@ CDN-Cache-Control    Cache directive tu CDN             (neu co override)
 Age                  Thoi gian object da trong cache    so giay
 ```
 
-### cach doc X-Cache-Key-* để verify normalization
+### cách đọc X-Cache-Key-* để verify normalization
 
 ```text
 Vi du: Varnish normalize X-Geo-Country tu "VIETNAM" thanh "VN"
@@ -1062,7 +1062,7 @@ Vi du sai normalization:
   -> Script expected "VN", actual "VIETNAM" -> MISMATCH -> FAIL
 ```
 
-### bang mapping normalization day du
+### bảng mapping normalization đầy đủ
 
 ```text
 DIMENSION: LANGUAGE (Accept-Language)
@@ -1116,7 +1116,7 @@ DIMENSION: SEGMENT (X-User-Segment)
   "" (absent)            "guest"          Default
 ```
 
-## 9. Pass/fail criteria
+## 9. Pass/FAIL criteria
 
 ### PASS criteria
 
@@ -1137,7 +1137,7 @@ DIMENSION: SEGMENT (X-User-Segment)
 4. KHONG co variant nao HIT ngay lan dau tien (vi pham isolation)
 ```
 
-### FAIL criteria -- cảnh báo do
+### FAIL criteria -- cảnh báo đỏ
 
 ```text
 FAIL-1: VARIANT LEAKAGE (nghiem trong nhat)
@@ -1171,7 +1171,7 @@ FAIL-5: NON-DETERMINISTIC (concurrency noise)
   Hậu qua: Khong the assertion -> test khong co gia tri
 ```
 
-### Thresholds trong script
+### thresholds trong script
 
 ```javascript
 thresholds: {
@@ -1214,7 +1214,7 @@ $env:VARIANT_KEYS_ITERATIONS = "48"
 ./scripts/run-cdn-capabilities.ps1 -Scenarios 02-variant-keys
 ```
 
-### Output chinh can doc
+### output chính cần đọc
 
 ```text
 K6 CONSOLE OUTPUT:
@@ -1256,7 +1256,7 @@ PATTERN FAIL - KEY MISMATCH:
 
 ## 11. 4 output -> decision scenarios
 
-### Scenario 1: TAT CA PASS -- cache key dung, isolation hoan hao
+### Scenario 1: tất cả PASS -- cache key đúng, isolation hoàn hảo
 
 ```text
 OUTPUT:
@@ -1284,7 +1284,7 @@ neu test FAIL, dung quy trình nay de tim root cause:
 buoc 1: xác định DIMENSION NAO FAIL
   - xem case tags: language, geo, device, ab_variant, segment
   - Dimension nao co check FAIL -> dimension do la root cause
-  - neu nhiều dimension fail -> có thể la VCL hash thieu nhiều hash_data()
+  - neu nhieu dimension fail -> có thể la VCL hash thieu nhieu hash_data()
   - neu chi 1 dimension fail -> chi dimension do co van de
 
 buoc 2: xác định KIEU FAIL
@@ -1305,7 +1305,7 @@ buoc 4: so sánh VCL NORMALIZE VS SHARED.JS
   - VCL default: co khop shared.js default không?
   - Case-sensitivity: uppercase vs lowercase co dong nhất không?
 
-buoc 5: RUN SINGLE-PAIR để verify FIX
+buoc 5: RUN SINGLE-PAIR de verify FIX
   - sau khi fix VCL: reload Varnish
   - chay test chi voi dimension bi fail
   - neu pass -> chay full 5-pair test
@@ -1317,7 +1317,7 @@ buoc 5: RUN SINGLE-PAIR để verify FIX
 ```text
 ngoai X-Cache-Key-*, Varnish con tra ve cac debug headers huu ich:
 
-  X-Cache: HIT hoac MISS
+  X-Cache: HIT hoặc MISS
     -> xác định object được serve tu cache hay fetch tu origin
 
   X-Cache-Hits: so lan object da được hit
@@ -1332,30 +1332,30 @@ ngoai X-Cache-Key-*, Varnish con tra ve cac debug headers huu ich:
     -> Age < TTL -> object con fresh
 
   X-Cache-Stale: true (neu co)
-    -> Object het TTL những được serve vi origin unhealthy
-    -> không liên quan đến variant keys những có thể xuat hien
+    -> Object het TTL nhung được serve vi origin unhealthy
+    -> không liên quan đến variant keys nhung có thể xuat hien
 ```
 
 ### Phan biet LEAKAGE vs FRAGMENTATION
 
 ```text
 LEAKAGE (variant collisions):
-  - 2 profile KHAC NHAU -> cung cache key -> cung object
+  - 2 profile khac NHAU -> cung cache key -> cung object
   - Bieu hien: variant_first = HIT (sai!)
   - nguyên nhân: VCL hash thieu dimension
   - Fix: them hash_data vao vcl_hash
   - hậu quả: nguy hiem -- sai audience
 
 FRAGMENTATION (unnecessary cache slots):
-  - 2 request GIONG NHAU những KHAC cache key -> 2 object
+  - 2 request giong NHAU nhung khac cache key -> 2 object
   - Bieu hien: base_second = MISS (sai!)
   - nguyên nhân: cache key chua data hay thay đổi (timestamp, session ID)
-    HOAC normalization không on dinh
+    hoặc normalization không on dinh
   - Fix: bo data hay thay đổi ra khoi cache key, cải thiện normalize
-  - hậu quả: it nguy hiem những lang phi cache memory, HIT ratio thap
+  - hậu quả: it nguy hiem nhung lang phi cache memory, HIT ratio thap
 
 Case nay chu yeu TEST LEAKAGE (variant_first must MISS).
-Fragmentation thường được test trong case 04 (query normalization).
+Fragmentation thuong được test trong case 04 (query normalization).
 ```
 
 ### Scenario 2: VARIANT LEAKAGE DETECTED -- Cung cache key cho profile khac nhau
@@ -1365,18 +1365,18 @@ OUTPUT (ví dụ LEAKAGE LANGUAGE):
   language_base_first:  200 MISS language=vi
   language_base_second: 200 HIT  language=vi
   language_variant_first: 200 HIT  language=vi  <-- loi! phải la MISS
-  language_variant_second: 200 HIT language=vi  <-- van HIT (những sai variant!)
+  language_variant_second: 200 HIT language=vi  <-- van HIT (nhung sai variant!)
 
 phân tích:
   - variant_first request tra HIT thay vi MISS
   - X-Cache-Key-Language = "vi" (dang le phải la "en" cho variant)
   - nghia la: VCL hash không sử dụng language dimension
-  - Base (vi) va variant (en) dung chung cache object
+  - Base (vi) và variant (en) dung chung cache object
 
 nguyên nhân GOC:
   - VCL vcl_hash không co hash_data(req.http.X-Cache-Language)
-  - Hoac: X-Cache-Language không được set trong normalize_cache_variants
-  - Hoac: normalize_cache_variants không được goi truoc khi hash
+  - hoặc: X-Cache-Language không được set trong normalize_cache_variants
+  - hoặc: normalize_cache_variants không được goi truoc khi hash
 
 DECISION:
   -> FAIL -- không thể deploy
@@ -1384,7 +1384,7 @@ DECISION:
   -> Rerun: toan bo 5 variant pairs phải pass
   -> kiểm tra: tat ca cac path products deu hash language
 
-ROOT CAUSE CHECKLIST:
+ROOT CAUSE Checklist:
   [ ] vcl_hash co hash_data(req.http.X-Cache-Language) không?
   [ ] normalize_cache_variants được goi truoc return(hash) không?
   [ ] X-Cache-Language được set trong normalize_cache_variants không?
@@ -1403,10 +1403,10 @@ OUTPUT (ví dụ):
 phân tích:
   - Tat ca request deu MISS -> cache không hoạt động
   - có thể vi: object không được cache (uncacheable)
-  - Hoac: cache key thay đổi giua cac request (key instability)
+  - hoặc: cache key thay đổi giua cac request (key instability)
 
 nguyên nhân có thể:
-  1. backend tra Cache-control: no-store hoac private -> VCL set uncacheable
+  1. backend tra Cache-control: no-store hoặc private -> VCL set uncacheable
   2. backend tra Set-Cookie -> VCL set uncacheable
   3. cache key bao gồm session-specific data (ví dụ: user token, session ID)
      -> moi request co cache key khac nhau -> không bao gio HIT
@@ -1421,7 +1421,7 @@ DECISION:
   -> kiểm tra VCL vcl_recv: co header nao trigger return(pass) không?
   -> kiểm tra TTL fallback: beresp.ttl co > 0s không?
 
-ROOT CAUSE CHECKLIST:
+ROOT CAUSE Checklist:
   [ ] backend co tra Cache-control: public không?
   [ ] backend co tra Set-Cookie không? (neu co -> uncacheable)
   [ ] req.http.Cookie co được gui kem không? (neu co -> bypass)
@@ -1439,25 +1439,25 @@ OUTPUT (ví dụ GEO NORMALIZATION sai):
 
 phân tích:
   - cache key co dimension geo -> HIT/MISS sequence dung
-  - những giá trị bi sai: "vn" thay vi "VN" -> không match expected
-  - nguyên nhân: VCL normalize không uppercase, hoac JS normalize sai
-  - hậu quả nhe hon leakage những van gay cache fragmentation:
-    neu mot hệ thống gui "VN" va hệ thống khac gui "vn"
+  - nhung giá trị bi sai: "vn" thay vi "VN" -> không match expected
+  - nguyên nhân: VCL normalize không uppercase, hoặc JS normalize sai
+  - hậu quả nhe hon leakage nhung van gay cache fragmentation:
+    neu mot hệ thống gui "VN" và hệ thống khac gui "vn"
     -> 2 object khac nhau cho cung quốc gia -> lang phi cache
 
 nguyên nhân có thể:
   1. VCL dung std.tolower() thay vi uppercase cho geo
   2. VCL không áp dụng normalization cho geo (giu nguyen input)
-  3. Shared.js normalizeGeo sai whitelist hoac case
-  4. Mismatch giua VCL normalization va expectedCacheKey
+  3. Shared.js normalizeGeo sai whitelist hoặc case
+  4. Mismatch giua VCL normalization và expectedCacheKey
 
 DECISION:
   -> FAIL (checks fail vi expectedCacheKey không khop)
-  -> Fix normalization logic trong VCL HOAC shared.js
+  -> Fix normalization logic trong VCL hoặc shared.js
   -> đảm bảo VCL normalization === shared.js normalize*()
   -> Rerun: expectedCacheKey phải khop headers thuc te
 
-ROOT CAUSE CHECKLIST:
+ROOT CAUSE Checklist:
   [ ] VCL normalize co uppercased geo? (VN, US, SG, JP)
   [ ] VCL normalize co lowercased language? (vi, en, ja)
   [ ] VCL normalize co lowercased device? (mobile, desktop, tablet)
@@ -1473,7 +1473,7 @@ ROOT CAUSE CHECKLIST:
 sai: "them cache key dimension de linh hoat hon -> tot hon"
 
 sự thật:
-  moi dimension them vao cache key -> nhan so lượng object có thể cache
+  moi dimension them vao cache key -> nhan so luong object có thể cache
 
   ví dụ: chi co language (3 values):
     /api/sim/products/1 -> 3 cache objects
@@ -1507,17 +1507,17 @@ sự thật:
   moi dimension:
     - tang bo nho cache (RAM)
     - tang CPU hash computation
-    - tang so lượng MISS (vi it overlap giua audience)
-    - Giam HIT ratio (vi cache bi fragment qua nhiều)
+    - tang so luong MISS (vi it overlap giua audience)
+    - Giam HIT ratio (vi cache bi fragment qua nhieu)
 
   ví dụ: them X-User-ID vao cache key (moi user co cache rieng)
     -> 1 million users -> 1 million cache objects / URL
     -> HIT ratio ~ 0% (vi user hiem khi request lai cung URL)
     -> Cache vo dung
 
-  -> chi them dimension khi co su KHAC biet noi dung thật sự
-  -> neu noi dung giong nhau giua cac phan khuc -> dung chung cache key
-  -> "cache key dung" tot hon "cache key nhiều"
+  -> chi them dimension khi co su khac biet nội dung thật sự
+  -> neu nội dung giong nhau giua cac phân khúc -> dung chung cache key
+  -> "cache key dung" tot hon "cache key nhieu"
 ```
 
 ### Nghich ly 3: "HIT ratio 99% la tot -- nhung HIT co the la sai audience"
@@ -1528,30 +1528,30 @@ sai: "HIT ratio cao -> cache hoạt động tot -> PASS"
 sự thật (nhu da lap lai trong case nay):
   HIT ratio 99% có thể la:
     - 99% request được serve tu cache -> nhanh
-    - những 50% trong so do có thể sai audience
+    - nhung 50% trong so do có thể sai audience
 
   ví dụ:
     - 1000 requests: 990 HIT, 10 MISS -> HIT ratio 99%
-    - những 500 HIT la user US desktop nhan noi dung VN mobile
-    -> HIT ratio 99% những 50% sai -> THAM HOA
+    - nhung 500 HIT la user US desktop nhan nội dung VN mobile
+    -> HIT ratio 99% nhung 50% sai -> THAM HOA
 
   -> Case nay không quan tam den HIT ratio
   -> Case nay quan tam den: HIT co dung PROFILE không?
-  -> Mot HIT sai audience = 1 bug, không phải 1 win
+  -> mot HIT sai audience = 1 bug, không phải 1 win
 ```
 
 ### Nghich ly 4: "Normalization lam mat thong tin -- nhung giam cache fragmentation"
 
 ```text
-sai: "Normalize 'vi-VN;q=0.9,en;q=0.8' thanh 'vi' -> mat thống tin ve preference"
+sai: "Normalize 'vi-VN;q=0.9,en;q=0.8' thanh 'vi' -> mat thong tin ve preference"
 
 sự thật:
   Normalization la co chu dich de giam fragmentation:
 
   không normalize:
     "vi-VN;q=0.9"            -> cache key chua raw string
-    "vi-VN;q=0.9,en;q=0.8"   -> cache key KHAC (co them en fallback)
-    "vi"                      -> cache key KHAC (thieu quality)
+    "vi-VN;q=0.9,en;q=0.8"   -> cache key khac (co them en fallback)
+    "vi"                      -> cache key khac (thieu quality)
     -> 3 cache objects cho cung ngôn ngữ "vi"!
 
   co normalize:
@@ -1571,12 +1571,12 @@ sự thật:
   day la quyết định thiết kế co chu dich:
 
   Products detail:
-    - noi dung sản phẩm (gia, ten, mô tả) phụ thuộc language + geo + device + AB
+    - nội dung sản phẩm (gia, ten, mô tả) phụ thuộc language + geo + device + AB
     - không phụ thuộc segment (guest vs returning xem cung sản phẩm)
     -> Segment không can trong cache key -> tiet kiem cache slots
 
   Homefeed:
-    - noi dung cá nhân hóa (recommendations) phụ thuộc segment
+    - nội dung cá nhân hóa (recommendations) phụ thuộc segment
     - Returning user thay "goi y dựa trên lịch sử mua hàng"
     - Guest user thay "sản phẩm phổ biến"
     -> Segment can trong cache key -> tranh leak goi y cá nhân
@@ -1623,7 +1623,7 @@ sự thật:
 [ ] Tat ca variant_second deu HIT
 [ ] Tat ca base_second deu HIT
 [ ] không co check FAIL nao xuat hien
-[ ] không co vu exception hoac script error
+[ ] không co vu exception hoặc script error
 ```
 
 ### Post-run (sau khi chay)
@@ -1701,7 +1701,7 @@ exerciseVariant(paths.productDetail, 'currency',
 
 ```text
 y nghia:
-  - chứng minh có thể mở rộng cache key cho tung DIMENSION MOT
+  - chứng minh có thể mở rộng cache key cho tung DIMENSION mot
   - moi dimension them vao -> test isolation doc lap
   - không test tat ca dimension cung luc (se kho xác định root cause neu fail)
   - moi dimension can co:
@@ -1739,9 +1739,9 @@ exerciseVariant(paths.productDetail, 'lang_geo', profiles.viVN, profiles.enUS);
 ```text
 y nghia:
   - it dimension -> it cache objects -> HIT ratio cao hon
-  - những mat khả năng phân biệt device, AB, segment
-  - phù hợp cho những service không can device/AB/segment
-  - van phải test isolation cho những dimension con lai
+  - nhung mat khả năng phân biệt device, AB, segment
+  - phù hợp cho nhung service không can device/AB/segment
+  - van phải test isolation cho nhung dimension con lai
 ```
 
 ### Variation 3: Custom header khong duoc normalize
@@ -1764,14 +1764,14 @@ profiles.unknownLanguage: {
 // guestVNMobileEnglish (language='en') vs unknownLanguage (language='fr'->'en')
 // -> Ca 2 deu "en" -> cung cache object -> HIT
 
-// những: guestVNMobileControl (language='vi') vs unknownLanguage (language='en')
-// -> Khac cache object -> MISS
+// nhung: guestVNMobileControl (language='vi') vs unknownLanguage (language='en')
+// -> khác cache object -> MISS
 ```
 
 ```text
 y nghia:
   - Fallback behavior: giá trị không được whitelist -> default
-  - nhiều header value khac nhau có thể map ve cung normalized value
+  - nhieu header value khac nhau có thể map ve cung normalized value
   - ví dụ: "fr", "de", "zh", (absent) deu -> "en"
   -> chi can 1 test pair để xác nhận fallback hoạt động
 ```
@@ -1805,14 +1805,14 @@ for (let i = 0; i < randomProfiles.length - 1; i++) {
 
 ```text
 y nghia:
-  - High cardinality: 50+ profiles -> nhiều cache objects
+  - High cardinality: 50+ profiles -> nhieu cache objects
   - đảm bảo không co hash collision (2 profiles khac nhau -> cung key)
-  - Stress test Varnish memory: nhiều cache objects ton tai cung luc
-  - phat hien key collision som (truoc khi production co nhiều variants)
+  - Stress test Varnish memory: nhieu cache objects ton tai cung luc
+  - phat hien key collision som (truoc khi production co nhieu variants)
 
 luu y:
-  - Test nay có thể can nhiều vu hon để đảm bảo performance
-  - những van giu single-vu cho isolation proof (tuan tu)
+  - Test nay có thể can nhieu vu hon để đảm bảo performance
+  - nhung van giu single-vu cho isolation proof (tuan tu)
   - tang TTL_WAIT_SECONDS để đảm bảo object không bi expire giua cac request
 ```
 
@@ -1821,10 +1821,10 @@ luu y:
 **Muc dich**: Xac nhan nhanh cache key hoat dong ma khong can test het 5 chieu.
 
 ```javascript
-// Giam VARIANT_KEYS_ITERATIONS xuống 1:
+// Giam VARIANT_KEYS_ITERATIONS xuong 1:
 $env:VARIANT_KEYS_ITERATIONS = "1"
 
-// Hoac: script chi test 1 pair:
+// hoặc: script chi test 1 pair:
 export default function () {
   // chi test language isolation
   exerciseVariant(paths.productDetail, 'language',
@@ -1856,7 +1856,7 @@ vi SAO sai:
   - không phải la "cache cho người dùng" -> day la "origin cho tung người dùng"
 
 dung: Traffic co Cookie -> bypass cache (return(pass))
-  Hoac: strip cookie truoc khi hash (chi hash public content)
+  hoặc: strip cookie truoc khi hash (chi hash public content)
 ```
 
 ### Anti-pattern 2: Khong normalize header values truoc khi hash
@@ -1865,9 +1865,9 @@ dung: Traffic co Cookie -> bypass cache (return(pass))
 sai: hash_data(req.http.Accept-Language) -- dung raw header
 
 vi SAO sai:
-  - "vi-VN;q=0.9" va "vi" la hai cache key KHAC nhau
-  - những cung la tiếng Việt -> cung noi dung
-  -> Cache fragmentation: nhiều object giong nhau những key khac
+  - "vi-VN;q=0.9" và "vi" la hai cache key khac nhau
+  - nhung cung la tiếng Việt -> cung nội dung
+  -> Cache fragmentation: nhieu object giong nhau nhung key khac
   -> HIT ratio thap do fragmentation
 
 dung: normalize truoc khi hash:
@@ -1878,22 +1878,22 @@ dung: normalize truoc khi hash:
 ### Anti-pattern 3: Quen Vary header khi dung cache key variant
 
 ```text
-sai: CDN hash variant headers những không set Vary header
+sai: CDN hash variant headers nhung không set Vary header
 
 vi SAO sai:
-  - Vary header bao cho browser/proxy biet: "noi dung thay đổi theo header X"
+  - Vary header bao cho browser/proxy biet: "nội dung thay đổi theo header X"
   - Browser cache cung phải phân biệt variant
-  - neu không Vary: browser có thể cache variant A va serve cho request B
+  - neu không Vary: browser có thể cache variant A và serve cho request B
   -> LEAKAGE O BROWSER LAYER (không phải CDN layer)
 
 dung: backend tra Vary: Accept-Language, X-Geo-Country, ...
-  Hoac: VCL set Vary header trong vcl_deliver
+  hoặc: VCL set Vary header trong vcl_deliver
 ```
 
 ### Anti-pattern 4: Dung session ID hoac user ID thay vi segment
 
 ```text
-sai: dung X-User-ID trong cache key de cá nhân hóa noi dung
+sai: dung X-User-ID trong cache key de cá nhân hóa nội dung
 
 vi SAO sai:
   - moi user co cache object rieng -> HIT ratio 0%
@@ -1901,7 +1901,7 @@ vi SAO sai:
   - không phải la CACHE -- day la origin serve
 
 dung: Gom user thanh SEGMENT (guest, returning, vip, new_user)
-  - Segment co y nghia kinh doanh -> noi dung khac biet thật sự
+  - Segment co y nghia kinh doanh -> nội dung khac biet thật sự
   - so segment nho (4-10) -> cache van scale
   - cá nhân hóa thật sự -> dung AJAX/ESI edge-side include
 ```
@@ -1912,7 +1912,7 @@ dung: Gom user thanh SEGMENT (guest, returning, vip, new_user)
 sai: "Segment chi la 1 trong 5 chieu -> không can test ky"
 
 vi SAO sai:
-  - Segment có thể la chieu quan trọng nhất cho business
+  - Segment có thể la chieu quan trong nhất cho business
   - Homefeed la entry point chinh -> segment leakage o day la THAM HOA
   - Returning user thay guest content -> mat personalization -> rời đi
   - VIP user thay guest content -> mat uu dai -> phan no
@@ -2005,7 +2005,7 @@ PASS -- variant isolation được chứng minh cho ca 5 chieu:
 
 => CDN cache key bao gồm day du 5 variant dimensions.
    variant isolation được chứng minh cho tung dimension mot cach doc lap.
-   sẵn sàng phuc vu nhiều phân khúc người dùng khac nhau cung luc.
+   sẵn sàng phuc vu nhieu phân khúc người dùng khac nhau cung luc.
 ```
 
 ## Reference

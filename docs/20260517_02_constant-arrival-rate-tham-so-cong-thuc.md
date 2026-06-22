@@ -1751,25 +1751,99 @@ preAllocatedVUs_safe = ceil(5 × 0.9 × 1.3)
 → Nếu W_effective thực tế cao hơn (vd 1.1s), vẫn có room maxVUs để tạo thêm
 ```
 
-Về `maxVUs`, nguyên tắc chọn:
+**Suy ra maxVUs từ preAllocatedVUs:**
+
+Đã có công thức tính `preAllocatedVUs` từ mục 3.3. Giờ cần công thức cho `maxVUs`.
+
+`maxVUs` không có công thức độc lập — nó được SUY RA từ `preAllocatedVUs` và chiến lược phòng hờ:
 
 ```text
-1. Bằng preAllocatedVUs:
-   - Dùng khi bạn tự tin pool đã đủ (đã tính safety_factor)
-   - Đơn giản nhất, không có biến số bất ngờ
-   - Phù hợp với test ổn định, hệ thống đã biết rõ hành vi
+maxVUs = preAllocatedVUs × k
 
-2. Cao hơn preAllocatedVUs (vd ×1.5 hoặc ×2):
-   - Dùng khi bạn muốn có room dự phòng
-   - Hữu ích khi W_effective có thể dao động (mạng chậm, server quá tải)
-   - Cho phép executor tự điều chỉnh nếu cần thêm worker
-   - Đánh đổi: có thể che giấu vấn đề sizing (drop ít không có nghĩa là pool đủ)
+Với k là hệ số phòng hờ (headroom factor), chọn theo mức độ tin cậy vào W_effective:
+```
 
-3. Không nên để maxVUs quá cao:
-   - Có thể che giấu vấn đề sizing — drop ít nhờ unplanned VU
-     không có nghĩa là preAllocatedVUs đã được sizing đúng
-   - Tài nguyên máy test có giới hạn (CPU, RAM, file descriptor)
-   - Mỗi unplanned VU tiêu tốn tài nguyên để init và duy trì
+Ba mức `k` và cách chọn:
+
+```text
+k = 1.0 (maxVUs = preAllocatedVUs):
+  → Không có room tạo thêm VU
+  → Dùng khi: đã đo W_effective chính xác từ test thăm dò,
+    hệ thống ổn định, không biến động latency
+  → Rủi ro: nếu W_effective thực tế cao hơn dự tính, drop mà không có đường lui
+  → Phù hợp: test trong môi trường kiểm soát, CI pipeline
+
+k = 1.5 (maxVUs = preAllocatedVUs × 1.5):
+  → Có room dự phòng 50%
+  → Dùng khi: W_effective có thể dao động nhẹ (mạng nội bộ, server quen)
+  → Đây là mức khuyến nghị mặc định cho hầu hết test
+  → Ví dụ: preAllocatedVUs = 6 → maxVUs = 9
+
+k = 2.0 (maxVUs = preAllocatedVUs × 2):
+  → Có room dự phòng 100%
+  → Dùng khi: W_effective chưa đo được chính xác, hoặc hệ thống
+    có biến động lớn (cloud, shared environment, cold start)
+  → Đánh đổi: tài nguyên máy test dự trữ nhiều hơn
+  → Ví dụ: preAllocatedVUs = 6 → maxVUs = 12
+```
+
+**Công thức đầy đủ để điền vào config từ đầu:**
+
+```text
+Cho trước:
+  lambda       = rate / timeUnit           (target iteration rate)
+  W_effective  = thời gian bận 1 iter      (từ test thăm dò 1 VU)
+  k            = hệ số phòng hờ            (1.0 / 1.5 / 2.0)
+
+Bước 1 — Tính preAllocatedVUs:
+  preAllocatedVUs = ceil(lambda × W_effective × safety_factor)
+  (safety_factor = 1.2 ~ 1.5, từ mục 3.3)
+
+Bước 2 — Suy ra maxVUs:
+  maxVUs = preAllocatedVUs × k
+  (k = 1.5 là mặc định khuyến nghị)
+
+Bước 3 — Điền vào config:
+  preAllocatedVUs: <kết quả bước 1>,
+  maxVUs:          <kết quả bước 2>,
+```
+
+Ví dụ toàn bộ quy trình với con số:
+
+```text
+lambda       = 5 iterations/s
+W_avg        = 0.8s
+W_p95        = 1.1s
+safety_factor = 1.3
+k            = 1.5
+
+Bước 1:
+  preAllocatedVUs = ceil(5 × 1.1 × 1.3)
+                  = ceil(7.15)
+                  = 8 VU
+
+Bước 2:
+  maxVUs = 8 × 1.5 = 12 VU
+
+Bước 3 — Config:
+  preAllocatedVUs: 8,
+  maxVUs: 12,
+
+Kiểm tra capacity:
+  capacity_initial = 8 / 0.8 = 10/s   ≥ lambda=5/s ✓ (không drop ban đầu)
+  capacity_max     = 12 / 0.8 = 15/s  ≥ lambda=5/s ✓ (có room dư)
+  → An toàn cả hai chiều
+```
+
+**Lưu ý khi chọn k:**
+
+```text
+- k càng cao, room càng nhiều, nhưng cũng dễ che giấu lỗi sizing
+- Nếu test thật có drop dù maxVUs đã = preAllocatedVUs × 2:
+  → Vấn đề không phải maxVUs, mà là preAllocatedVUs chưa đủ
+  → Tăng preAllocatedVUs, không chỉ tăng k
+- Mỗi unplanned VU tiêu tốn tài nguyên máy test (CPU, RAM, fd)
+  → Không nên đặt maxVUs quá cao nếu máy test có giới hạn
 ```
 
 **Bước 4 — Bảng so sánh 3 tình huống:**
@@ -4402,8 +4476,77 @@ config: rate=10, timeUnit="1s", duration="30s"
 **Khi nào dùng**: ước lượng số iter scenario sẽ có, đối chiếu với metric
 `iterations` + `dropped_iterations` sau test.
 
-**Lưu ý**: với `constant-arrival-rate`, công thức này ĐƠN GIẢN hơn ramping
-(không cần tính trung bình rate đầu/cuối stage).
+**── Mở rộng: Từ hình chữ nhật sang hình thang (ramping) ──**
+
+Với `constant-arrival-rate`, rate cố định nên công thức là **diện tích hình chữ nhật**:
+
+```text
+N_sched = rate × duration
+
+Trên đồ thị rate(t):
+  rate
+  4 |──────────────────|    ← đường rate nằm ngang (cố định)
+    |                   |
+  0 +---0s------10s-----+
+    ←─── duration ─────→
+
+  Diện tích = rate × duration = 4 × 10 = 40 slot
+```
+
+Nhưng với **ramping-arrival-rate**, rate thay đổi tuyến tính theo thời gian,
+công thức trở thành **diện tích hình thang**:
+
+```text
+N_sched_stage = duration × (rate_đầu + rate_cuối) / 2
+
+Trên đồ thị rate(t), 1 stage ramp từ 2/s lên 4/s trong 2 giây:
+  rate
+  4 |           /|
+  3 |          / |    ← diện tích phần gạch = tổng slot
+  2 |_________/  |
+  0 +---0s-------2s
+
+  = hình thang có:
+      đáy nhỏ  = rate_đầu  = 2/s
+      đáy lớn  = rate_cuối = 4/s
+      chiều cao = duration  = 2s
+
+  Diện tích = (đáy nhỏ + đáy lớn) / 2 × chiều cao
+            = (2 + 4) / 2 × 2
+            = 6 slot
+```
+
+So sánh hai công thức:
+
+```text
+                    Constant (hình chữ nhật)       Ramping (hình thang)
+                    ─────────────────────────       ────────────────────
+Công thức           N = rate × duration             N = d × (λ_đầu + λ_cuối) / 2
+Rate                cố định                        tuyến tính (ramp)
+Hình dạng đồ thị    ─── nằm ngang                   / hoặc \ (dốc lên/xuống)
+
+Trường hợp đặc biệt: nếu rate_đầu = rate_cuối = rate (ramp 0%)
+  → (rate + rate) / 2 × duration = rate × duration
+  → Hình thang SUY BIẾN thành hình chữ nhật
+  → Công thức ramping trở về công thức constant
+```
+
+Nếu scenario có nhiều stage (vd: ramp-up 5s, steady 10s, ramp-down 5s),
+tổng slot = tổng diện tích từng stage:
+
+```text
+N_sched_total = Σ d_i × (λ_prev + λ_next) / 2
+
+Ví dụ:
+  Stage 1 (ramp-up):  0 → 10/s trong 5s  → 5 × (0+10)/2  = 25 slot
+  Stage 2 (steady):   10/s     trong 10s → 10 × 10       = 100 slot
+  Stage 3 (ramp-down): 10 → 0/s trong 5s → 5 × (10+0)/2  = 25 slot
+  ─────────────────────────────────────────────────────────────
+  Tổng                                          150 slot
+```
+
+**Khi nào cần công thức hình thang**: khi dùng executor `ramping-arrival-rate`
+hoặc `ramping-vus`. Với `constant-arrival-rate`, chỉ cần công thức hình chữ nhật.
 
 #### Công thức 3: "Cần bao nhiêu nhân viên?" (Sizing VU bằng Little's Law)
 

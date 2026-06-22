@@ -3,23 +3,23 @@
 > **Case ID:** `cdn-05-invalidation-ops`
 > **Script:** `05-invalidation-ops.js`
 > **Layer:** CDN / Varnish
-> **Proof:** purge, bản-url, and bản-tag invalidate expected objects
-> **Primitives:** 3 — PURGE (exact object), BẢN-URL (all variants of one URL), BẢN-TAG (all objects with Surrogate-Key tag)
+> **Proof:** purge, ban-url, and ban-tag invalidate expected objects
+> **Primitives:** 3 — PURGE (exact object), BAN-URL (all variants of one URL), BAN-TAG (all objects with Surrogate-Key tag)
 > **Pattern:** warmUntilHit --> invalidate --> verify MISS
-> **Control path:** `:8088` (POST /ops/app/cdn/cache/purge | /bản-url | /bản-tag)
+> **Control path:** `:8088` (POST /ops/app/cdn/cache/purge | /ban-url | /ban-tag)
 > **Public path:** `:80` (GET /api/cached | /api/sim/products/1 | /api/sim/products/1/recommendations)
 
 ---
 
-## 1. Tình huống thực tế
+## 1. Tính huống thực tế
 
-### Bài toàn: cache đã cũ, content đã mới
+### Bài toán: cache đã cũ, content đã mới
 
-Một sản phẩm thấy đổi giá. Một bài viết được chính sửa. Một ảnh banner được cập
-nhất. Content mới đã được đây lên origin — nhưng CDN vẫn còn giữ bản cũ trong
+Một sản phẩm thay đổi giá. Một bài viết được chỉnh sửa. Một ảnh banner được cập
+nhật. Content mới đã được đẩy lên origin — nhưng CDN vẫn còn giữ bản cũ trong
 cache. Người dùng cuối cùng vẫn nhìn thấy giá sai, bài viết lỗi, banner cũ.
 
-Đây là tình huống xảy ra **hàng ngày** trong mới hệ thống có CDN:
+Đây là tình huống xảy ra **hàng ngày** trong mọi hệ thống có CDN:
 
 ```text
 Timeline cua mot su co "gia sai":
@@ -52,19 +52,19 @@ Timeline cua mot su co "gia sai":
            Neu 90s do la thoi diem flash sale -> thiet hai nghiem trong.
 ```
 
-Cache là còn đảo hai lưỡi. No tăng toc đó, giảm tại origin — nhưng no cùng là
-nguyên nhân khiến content cũ tồn tại quá lâu sau khi origin đã được cập nhất.
+Cache là con dao hai lưỡi. Nó tăng tốc độ, giảm tải origin — nhưng nó cũng là
+nguyên nhân khiến content cũ tồn tại quá lâu sau khi origin đã được cập nhật.
 **Cache TTL càng dài, thời gian "content sai" càng lâu** nếu không có cơ chế
 invalidation.
 
 ### Ba primitive invalidation và khi nào dùng cái nào
 
-CDN layer cùng cấp **3 primitive invalidation**, mới cái cho một mục đích
+CDN layer cung cấp **3 primitive invalidation**, mỗi cái cho một mục đích
 khác nhau:
 
 ```text
 PRIMITIVE 1: PURGE — Xoa EXACT object (mot URL + mot variant)
-  - Dung khi: chi mot URL cu the bi sai, va ban BAN BIET variant nao dang
+  - Dung khi: chi mot URL cu the bi sai, va ban BIET variant nao dang
     duoc cache (language, geo, device, AB variant).
   - Co che: Varnish purge xoa object trung khop CHINH XAC cache key.
   - Rui ro: Neu purge thieu variant headers -> co the purge sai object
@@ -78,7 +78,7 @@ PRIMITIVE 2: BAN-URL — Xoa TAT CA VARIANT cua mot URL
   - Co che: Varnish ban("req.url == " + url) — xoa toan bo object
     co cung URL, khong phan biet variant headers.
   - Rui ro: It rui ro ve "thieu variant" — day la diem MANH cua ban-url.
-    Nhung neu co nhieu URL can xoa -> phai goi nhieu lan, khong kha mo.
+    Nhung neu co nhieu URL can xoa -> phai goi nhieu lan, khong kha thi.
   - Vi du: "San pham #1 bi sai CHUNG cho tat ca nguoi dung.
             Toi muon xoa toan bo variant cua no."
 
@@ -101,7 +101,7 @@ SO SANH NHANH:
   - BAN-TAG: bao phu nhieu URL cung tag, nhung phu thuoc Surrogate-Key
 ```
 
-### Chọn sai primitive = hậu quá thực tế
+### Chọn sai primitive = hậu quả thực tế
 
 ```text
 SCENARIO A: Chon PURGE thay vi BAN-TAG
@@ -128,14 +128,14 @@ SCENARIO D: Chon BAN-URL thay vi BAN-TAG
   -> BAN-TAG chi can MOT LAN cho tag "product-1"
 ```
 
-Bài học cốt lõi: **không có primitive nào là "tot nhất"**. Mới primitive có
-một mục đích riêng. Operator cần hiểu rõ 3 primitive để chọn dùng công cụ
+Bài học cốt lõi: **không có primitive nào là "tốt nhất"**. Mỗi primitive có
+một mục đích riêng. Operator cần hiểu rõ 3 primitive để chọn đúng công cụ
 cho từng tình huống cụ thể.
 
 ### Phân biệt các loại content change
 
-Không phải mới content change deu cần invalidation. Phân biệt dùng loại
-change sẽ giup chọn dùng primitive và tránh invalidation không cần thiet:
+Không phải mọi content change đều cần invalidation. Phân biệt đúng loại
+change sẽ giúp chọn đúng primitive và tránh invalidation không cần thiết:
 
 ```text
 LOAI 1: DATA CHANGE — Thay doi du lieu goc (gia, mo ta, ton kho)
@@ -286,12 +286,12 @@ NEU KHONG CO INVALIDATION MECHANISM:
 
 ## 2. CDN capability being proved
 
-### Mục tiêu chứng
+### Mục tiêu chung
 
-Case này chứng mình rằng **cả 3 primitive invalidation deu hoạt động dùng**:
-chứng thực sự xóa object khoi cache, không chỉ trả về HTTP 200 "đã nhận lệnh".
+Case này chứng minh rằng **cả 3 primitive invalidation đều hoạt động đúng**:
+chúng thực sự xóa object khỏi cache, không chỉ trả về HTTP 200 "đã nhận lệnh".
 
-### Pattern chứng mình
+### Pattern chứng minh
 
 ```text
 BUOC 1: WARM — Dua object vao cache
@@ -319,8 +319,8 @@ Pattern: WARM (MISS->HIT) -> INVALIDATE -> VERIFY (MISS)
 | Primitive | Object được warm | Invalidation command | Object được verify |
 |-----------|-----------------|---------------------|--------------------|
 | PURGE | `/api/cached` (không variant) | `purgeUrl(paths.cached)` | `/api/cached` -> MISS |
-| BẢN-URL | `/api/sim/products/1` (2 profiles) | `banUrl(paths.productDetail)` | Cả 2 profiles -> MISS |
-| BẢN-TAG | `/api/sim/products/1` + `/api/sim/products/1/recommendations` (cùng tag `product-1`) | `banTag('product-1')` | Cả 2 endpoints -> MISS |
+| BAN-URL | `/api/sim/products/1` (2 profiles) | `banUrl(paths.productDetail)` | Cả 2 profiles -> MISS |
+| BAN-TAG | `/api/sim/products/1` + `/api/sim/products/1/recommendations` (cùng tag `product-1`) | `banTag('product-1')` | Cả 2 endpoints -> MISS |
 
 ### Ý nghĩa của bước WARM
 
@@ -345,19 +345,19 @@ NEU CO WARM:
 
 Không phải test "API purge có trả 200 không". Đây là test:
 
-1. **Control path (ops)** tiếp nhận lệnh purge/bản/tag
-2. **VCL logic** thực thì đúng hạnh vì (purge exact key, bản match prefix/URL/tag)
-3. **Data path (public)** phần ảnh kết quá: object đã bị xóa thật
+1. **Control path (ops)** tiếp nhận lệnh purge/ban/tag
+2. **VCL logic** thực thi đúng hành vi (purge exact key, ban match prefix/URL/tag)
+3. **Data path (public)** phản ánh kết quả: object đã bị xóa thật
 
-Chỉ khi cả 3 deu dùng -> case pass. Control API 200 một mình là KHÔNG ĐỦ.
+Chỉ khi cả 3 đều đúng -> case pass. Control API 200 một mình là KHÔNG ĐỦ.
 
 ---
 
-## 3. Vì sao test o CDN layer
+## 3. Vì sao test ở CDN layer
 
 ### Control plane vs Data plane
 
-Hệ thống invalidation có 2 mất phang:
+Hệ thống invalidation có 2 mặt phẳng:
 
 ```text
 CONTROL PLANE (:8088)                  DATA PLANE (:80)
@@ -409,7 +409,7 @@ BUG PATTERN 3: BAN-URL tra 200 nhung URL bi normalize khac nhau
   -> Neu test data plane co variant khac -> van HIT -> FAIL
 ```
 
-### Lợi ích của end-tổ-end verification
+### Lợi ích của end-to-end verification
 
 ```text
 Khong end-to-end:
@@ -424,18 +424,18 @@ Co end-to-end:
   -> Khong can user bao moi biet co loi
 ```
 
-### Phạm vì của CDN-layer test
+### Phạm vi của CDN-layer test
 
 CDN-layer test không test:
 
-- Origin có update content dùng không (đó app layer test)
-- Database đã được update chưa (đó DB layer test)
-- User có thấy content mới không (đó E2E test)
+- Origin có update content đúng không (do app layer test)
+- Database đã được update chưa (do DB layer test)
+- User có thấy content mới không (do E2E test)
 
 CDN-layer test CHỈ test:
 
-- Sau khi gọi purge/bản/tag -> object có bị xóa khoi cache thật không
-- Đây là contract của CDN layer: "tối nhận lệnh xóa -> tối xóa"
+- Sau khi gọi purge/ban/tag -> object có bị xóa khỏi cache thật không
+- Đây là contract của CDN layer: "tôi nhận lệnh xóa -> tôi xóa"
 
 ---
 
@@ -464,14 +464,14 @@ CDN-layer test CHỈ test:
 ```
 
 - **Public path** (`:80`): k6 -> Varnish -> Nginx -> app services
-  - Dùng để warm object (dựa vào cache)
+  - Dùng để warm object (đưa vào cache)
   - Dùng để verify sau invalidation (phải là MISS)
   - `X-Cache` header trên response cho biết HIT hay MISS
 
-- **Control path** (`:8088`): k6 -> Varnish (trực tiếp, không quá Nginx)
+- **Control path** (`:8088`): k6 -> Varnish (trực tiếp, không qua Nginx)
   - Dùng để gọi lệnh invalidation
   - Yêu cầu `OPS_AUTH_TOKEN` (X-Ops-Token header)
-  - Response 200 = Varnish đã chấp nhận bản/purge lệnh
+  - Response 200 = Varnish đã chấp nhận ban/purge lệnh
 
 - **Event path** (`:9091`): không sử dụng trong case này
 
@@ -479,7 +479,7 @@ CDN-layer test CHỈ test:
 
 Trước khi chạy case, cần đảm bảo:
 
-1. **Target layer = full** (Varnish + Nginx + app deu running)
+1. **Target layer = full** (Varnish + Nginx + app đều running)
 
 2. **OPS_AUTH_TOKEN** phải được set:
    ```powershell
@@ -490,9 +490,9 @@ Trước khi chạy case, cần đảm bảo:
 
 3. **Test paths được clear** trước khi test:
    Script tự động gọi `purgeUrl` và `banUrl` trong `setup()` để xóa sạch
-   các path sẽ được test, đảm bảo không có object cũ tồn tại tự trước.
+   các path sẽ được test, đảm bảo không có object cũ tồn tại từ trước.
 
-4. **Origin healthy**: Varnish backend probe phải bảo healthy
+4. **Origin healthy**: Varnish backend probe phải báo healthy
    (`X-Cache-Backend-Healthy: true`)
 
 5. **Chạy tuần tự**: Không chạy song song với các CDN case khác
@@ -542,12 +542,12 @@ function warmUntilHit(path, profile, label) {
 ```
 
 Pattern này được dùng 4 lần trong script:
-- 2 lần cho BẢN-URL (warm productDetail với 2 profiles)
-- 2 lần cho BẢN-TAG (warm productDetail + recommendations)
+- 2 lần cho BAN-URL (warm productDetail với 2 profiles)
+- 2 lần cho BAN-TAG (warm productDetail + recommendations)
 
 Ý nghĩa của `assertUpstream(first, 'products-service', ...)`:
-Xác nhận request MISS thực sự đi quá origin (products-service),
-không phải là trường hợp bypass hay lỗi. Chỉ khi đã quá origin
+Xác nhận request MISS thực sự đi qua origin (products-service),
+không phải là trường hợp bypass hay lỗi. Chỉ khi đã qua origin
 và được cache thì HIT mới có ý nghĩa.
 
 ### setup(): Clear test paths
@@ -560,15 +560,15 @@ export function setup() {
 }
 ```
 
-- `purgeUrl` gọi POST /ops/app/cdn/cache/purge quá control path
-- `banUrl` gọi POST /ops/app/cdn/cache/bản-url quá control path
+- `purgeUrl` gọi POST /ops/app/cdn/cache/purge qua control path
+- `banUrl` gọi POST /ops/app/cdn/cache/ban-url qua control path
 - Các lệnh này không được assert trong setup — chỉ dọn dẹp
-- Nếu có object cũ tồn tại tự lần chạy trước -> bị xóa sạch
+- Nếu có object cũ tồn tại từ lần chạy trước -> bị xóa sạch
 
-Tại sao dùng `banUrl` cho productDetail và recommendations thấy vì `purgeUrl`?
+Tại sao dùng `banUrl` cho productDetail và recommendations thay vì `purgeUrl`?
 Vì `banUrl` xóa TẤT CẢ variant, đảm bảo không còn variant nào sót lại.
 `purgeUrl` không có profile argument -> chỉ purge object không có variant
-headers, có thể bỏ sót variant đã cache tự lần chạy trước.
+headers, có thể bỏ sót variant đã cache từ lần chạy trước.
 
 ### Block 1: PURGE test
 
@@ -600,12 +600,12 @@ assertCacheState(cachedAfterPurge, 'MISS', 'cached after purge');
 
 Điểm đặc biệt của block này:
 - Path `/api/cached` là path đơn giản, không có variant headers trong cache key
-- VCL cùng không gọi `normalize_cache_variants` cho path này -> cache key chỉ
+- VCL cũng không gọi `normalize_cache_variants` cho path này -> cache key chỉ
   là `req.url + host`
 - PURGE không cần gửi variant headers vì không có variant để phân biệt
 - Đây là trường hợp đơn giản nhất của PURGE
 
-### Block 2: BẢN-URL test
+### Block 2: BAN-URL test
 
 ```javascript
 // BAN-URL test: /api/sim/products/1
@@ -644,18 +644,18 @@ assertCacheState(variantAfterBanUrl, 'MISS', 'variant after ban-url');
 ```
 
 Điểm đặc biệt của block này:
-- Đây là mình chứng QUAN TRỌNG: bản-url xóa TẤT CẢ variant, không chỉ variant
-  được dùng để gọi lệnh bản
-- Nếu chỉ verify 1 profile -> có thể bản-url chỉ xóa variant đó, còn variant
+- Đây là minh chứng QUAN TRỌNG: ban-url xóa TẤT CẢ variant, không chỉ variant
+  được dùng để gọi lệnh ban
+- Nếu chỉ verify 1 profile -> có thể ban-url chỉ xóa variant đó, còn variant
   kia vẫn HIT -> không đủ mạnh
-- Verify CẢ 2 profiles -> chứng mình bản-url thật sự là "xóa URL, bỏ quá variant"
+- Verify CẢ 2 profiles -> chứng minh ban-url thật sự là "xóa URL, bỏ qua variant"
 
-Tại sao Không đúng PURGE cho block này?
-- PURGE cần biết variant headers để purge dùng key
+Tại sao KHÔNG dùng PURGE cho block này?
+- PURGE cần biết variant headers để purge đúng key
 - Nếu purge thiếu variant headers -> có thể purge sai key hoặc không purge được
-- BẢN-URL đơn giản hơn: không cần biết variant, chỉ cần biết URL
+- BAN-URL đơn giản hơn: không cần biết variant, chỉ cần biết URL
 
-### Block 3: BẢN-TAG test
+### Block 3: BAN-TAG test
 
 ```javascript
 // BAN-TAG test: 2 endpoints cung tag "product-1"
@@ -692,19 +692,19 @@ assertCacheState(recsAfterTag, 'MISS', 'recs after ban-tag');
 ```
 
 Điểm đặc biệt của block này:
-- Đây là block MẠNH NHẤT: một lệnh bản-tag xóa nhiều URL khác nhau
+- Đây là block MẠNH NHẤT: một lệnh ban-tag xóa nhiều URL khác nhau
 - 2 endpoint hoàn toàn khác nhau (detail + recommendations)
-- Nhưng cùng chứng một Surrogate-Key "product-1"
-- Bản-tag thành công -> cả 2 deu MISS
+- Nhưng cùng chung một Surrogate-Key "product-1"
+- Ban-tag thành công -> cả 2 đều MISS
 - Nếu 1 trong 2 vẫn HIT -> có nghĩa endpoint đó KHÔNG CÓ Surrogate-Key
-  "product-1" -> origin không set dùng tag
+  "product-1" -> origin không set đúng tag
 
-Tại sao cần `banUrl` trước khi warm cho block BẢN-TAG?
+Tại sao cần `banUrl` trước khi warm cho block BAN-TAG?
 Block 2 đã cache productDetail. Block 3 cần clean state để warm lại.
-Nếu không clean -> warmUntilHit có thể thấy HIT ngày lần đầu tiên (vì
-vẫn còn cache tự block 2) -> assertCacheState MISS sẽ fail.
+Nếu không clean -> warmUntilHit có thể thấy HIT ngay lần đầu tiên (vì
+vẫn còn cache từ block 2) -> assertCacheState MISS sẽ fail.
 
-### Thứ tự thực thì
+### Thứ tự thực thi
 
 ```text
 setup():
@@ -808,27 +808,27 @@ request GET thong thuong. Dieu nay co nghia:
 ```
 
 **Khi nào dùng PURGE:**
-- Bản BẢN BIẾT chính xác variant nào dang được cache
+- Bạn BIẾT chính xác variant nào đang được cache
 - Muốn xóa MỘT variant cụ thể, không ảnh hưởng variant khác
 - Ví dụ: chỉ có người dùng VN/mobile/variant-a bị lỗi, variant control
   không bị lỗi -> chỉ purge variant-a
 
-**Khi nào Không nên dùng PURGE:**
-- Không biết variant nào dang được cache
-- Muốn xóa tất cả variant của một URL (dùng BẢN-URL thấy vì)
-- Có nhiều URL cần xóa (dùng BẢN-TAG thấy vì)
+**Khi nào KHÔNG nên dùng PURGE:**
+- Không biết variant nào đang được cache
+- Muốn xóa tất cả variant của một URL (dùng BAN-URL thay vì)
+- Có nhiều URL cần xóa (dùng BAN-TAG thay vì)
 
-### Primitive 2: BẢN — Xóa theo điều kiện
+### Primitive 2: BAN — Xóa theo điều kiện
 
 **HTTP method:** `BAN` (method đặc biệt của Varnish)
 
-BẢN là primitive TỔNG QUAT HƠN PURGE. Thấy vì xóa exact key, BẢN thêm một
-"bản lurker expression" vào bản list. Varnish sẽ match expression này với
+BAN là primitive TỔNG QUÁT HƠN PURGE. Thay vì xóa exact key, BAN thêm một
+"ban lurker expression" vào ban list. Varnish sẽ match expression này với
 TỪNG REQUEST ĐẾN, và xóa object nếu expression match.
 
-Có 3 bien thể của BẢN:
+Có 3 biến thể của BAN:
 
-#### 2a: BẢN-URL — Xóa exact URL, tất cả variant
+#### 2a: BAN-URL — Xóa exact URL, tất cả variant
 
 **Control path call:**
 ```javascript
@@ -867,16 +867,16 @@ BAN-URL match CHINH XAC URL, khong quan tam variant headers.
  -> Day la diem MANH nhat cua ban-url.
 ```
 
-**Khi nào dùng BẢN-URL:**
+**Khi nào dùng BAN-URL:**
 - Content sai ảnh hưởng đến TẤT CẢ người dùng (tất cả variant)
-- Muốn xóa một URL nhưng không biết nhưng variant nào dang được cache
+- Muốn xóa một URL nhưng không biết những variant nào đang được cache
 - Đơn giản, không cần biết variant headers
 
-**Khi nào Không nên dùng BẢN-URL:**
-- Chỉ một variant bị lỗi -> dùng PURGE để tránh xóa cả variant tot
-- Nhiều URL cần xóa -> dùng BẢN-TAG (nếu có tag) hoặc BẢN-PREFIX
+**Khi nào KHÔNG nên dùng BAN-URL:**
+- Chỉ một variant bị lỗi -> dùng PURGE để tránh xóa cả variant tốt
+- Nhiều URL cần xóa -> dùng BAN-TAG (nếu có tag) hoặc BAN-PREFIX
 
-#### 2b: BẢN-PREFIX — Xóa theo URL prefix
+#### 2b: BAN-PREFIX — Xóa theo URL prefix
 
 **Control path call:**
 ```javascript
@@ -914,15 +914,15 @@ Bieu thuc nay match TAT CA URL bat dau bang "/api/sim/products/":
   /api/cached                       -> KHONG MATCH -> giu
 ```
 
-**Khi nào dùng BẢN-PREFIX:**
+**Khi nào dùng BAN-PREFIX:**
 - Muốn xóa toàn bộ một "namespace" URL (vd: tất cả products)
 - Không có Surrogate-Key hoặc tag không đủ tin cậy
 - Cần xóa nhiều URL cùng một prefix
 
-**Cảnh báo:** BẢN-PREFIX có thể QUÁ RỘNG. Nếu bản prefix "/api/" ->
+**Cảnh báo:** BAN-PREFIX có thể QUÁ RỘNG. Nếu ban prefix "/api/" ->
 xóa TOÀN BỘ cache. Luôn cẩn thận với prefix.
 
-#### 2c: BẢN-TAG — Xóa theo Surrogate-Key tag
+#### 2c: BAN-TAG — Xóa theo Surrogate-Key tag
 
 **Control path call:**
 ```javascript
@@ -967,7 +967,7 @@ CHUA tag "product-1":
 Cẩn thận với tên tag: "product-1" sẽ match "product-10".
 Tag nên có format rõ ràng như `product:1` hoặc `product-00001`.
 
-### Số sanh 3 primitive
+### So sánh 3 primitive
 
 ```text
 +------------------+----------------+------------------+------------------+
@@ -1006,7 +1006,7 @@ Tag nên có format rõ ràng như `product:1` hoặc `product-00001`.
 ### Surrogate-Key là gì?
 
 Surrogate-Key là một HTTP response header được **origin** (backend app)
-set để gần "tags" cho object được cache. Varnish lưu Surrogate-Key cùng
+set để gán "tags" cho object được cache. Varnish lưu Surrogate-Key cùng
 với object trong cache (`obj.http.Surrogate-Key`).
 
 ```text
@@ -1048,7 +1048,7 @@ Varnish cache storage:
    Vi du: homefeed product-1 product-3 product-7
 ```
 
-### Mới quan hệ giữa object và tag
+### Mối quan hệ giữa object và tag
 
 ```text
 Object A: /api/sim/products/1
@@ -1120,7 +1120,7 @@ CO SURROGATE-KEY:
 
 ## 8. Request sequence flow
 
-### Flow 1: PURGE — chỉ tiết từng bước
+### Flow 1: PURGE — chi tiết từng bước
 
 ```text
 +------+                    +----------+                 +-------+
@@ -1158,7 +1158,7 @@ CO SURROGATE-KEY:
    |                             |                           |
 ```
 
-### Flow 2: BẢN-URL — nhiều variant
+### Flow 2: BAN-URL — nhiều variant
 
 ```text
 +------+                    +----------+
@@ -1201,7 +1201,7 @@ CO SURROGATE-KEY:
    |  => BAN-URL xoa CA 2 variant
 ```
 
-### Flow 3: BẢN-TAG — nhiều endpoint
+### Flow 3: BAN-TAG — nhiều endpoint
 
 ```text
 +------+                    +----------+
@@ -1420,7 +1420,7 @@ FAIL-8: Warm second request khong phai HIT
 
 ## 11. Cách chạy + output
 
-### Điều kiện tiến quyết
+### Điều kiện tiên quyết
 
 ```powershell
 # 1. CDN runtime dang chay (TargetLayer=full)
@@ -1514,19 +1514,19 @@ $env:OPS_AUTH_TOKEN = "<ops-token>"
 
 ### Cách đọc output
 
-1. **Kiểm trả checks:** Tất cả 36 checks phải pass (100.00%)
-2. **Kiểm trả warm blocks:** Tất cả warm_first = MISS, warm_second = HIT
+1. **Kiểm tra checks:** Tất cả 36 checks phải pass (100.00%)
+2. **Kiểm tra warm blocks:** Tất cả warm_first = MISS, warm_second = HIT
    Nếu warm đã fail -> các bước sau không có ý nghĩa
-3. **Kiểm trả vềrify blocks:** Tất cả "after purge/bản-url/bản-tag" = MISS
+3. **Kiểm tra verify blocks:** Tất cả "after purge/ban-url/ban-tag" = MISS
    Nếu bất kỳ cái nào vẫn HIT -> FAIL
-4. **Kiểm trả control calls:** Tất cả purge/bản-url/bản-tag = 200
-   Nếu 401/403 -> kiểm trả token hoặc config
+4. **Kiểm tra control calls:** Tất cả purge/ban-url/ban-tag = 200
+   Nếu 401/403 -> kiểm tra token hoặc config
 
 ---
 
 ## 12. 4 output -> decision scenarios
 
-### Scenario 1: ALL PASS — Hệ thống invalidation hoạt động dùng
+### Scenario 1: ALL PASS — Hệ thống invalidation hoạt động đúng
 
 ```text
 TAT CA 36 checks PASS.
@@ -1578,7 +1578,7 @@ Hanh dong:
   -> THEM TEST: purge voi nhieu variant khac nhau de dam bao.
 ```
 
-### Scenario 3: BẢN-TAG misses related objects — Surrogate-Key không được set
+### Scenario 3: BAN-TAG misses related objects — Surrogate-Key không được set
 
 ```text
 ✓ ban-tag product-1 status 200
@@ -1613,7 +1613,7 @@ Hanh dong:
      recommendations rieng.
 ```
 
-### Scenario 4: BẢN-URL too broad — xóa nhiều hơn dự kiến
+### Scenario 4: BAN-URL too broad — xóa nhiều hơn dự kiến
 
 ```text
 Tat ca checks PASS (tat ca deu MISS sau ban-url).
@@ -1630,7 +1630,7 @@ Nhung...
 Dien giai:
   -> Ban-url KHONG co hien tuong "xoa recommendations" nhu tren
      (vi BAN-URL dung "==" khong phai prefix match).
-  -> NHUNG neu operator goi SAI URL -> hậu qua co the nghiem trong.
+  -> NHUNG neu operator goi SAI URL -> hau qua co the nghiem trong.
   -> Dac biet BAN-PREFIX co the rat rong neu prefix qua ngan.
 
 Hanh dong:
@@ -1644,7 +1644,7 @@ Hanh dong:
 
 ---
 
-## 13. Nghich lý / misconceptions
+## 13. Nghịch lý / misconceptions
 
 ### Misconception 1: "Purge xong là xong"
 
@@ -1664,7 +1664,7 @@ HE QUA NEU TIN SAI:
   -> Debug mat thoi gian vi khong ai ngo "purge 200 nhung khong xoa".
 ```
 
-### Misconception 2: "BẢN-URL xóa tất cả variants" — DÙNG, và đó là ĐIỂM MẠNH
+### Misconception 2: "BAN-URL xóa tất cả variants" — ĐÚNG, và đó là ĐIỂM MẠNH
 
 ```text
 SUY NGHI: "Ban-url xoa tat ca variant -> co the xoa qua nhieu."
@@ -1682,7 +1682,7 @@ CHIEN LUOC DUNG:
   -> Nhieu URL bi loi (cung thuc the)? -> BAN-TAG (neu co tag).
 ```
 
-### Misconception 3: "BẢN-TAG là ăn toàn nhất"
+### Misconception 3: "BAN-TAG là an toàn nhất"
 
 ```text
 SUY NGHI SAI: "Ban-tag chi xoa dung nhung object co tag -> khong
@@ -1814,7 +1814,7 @@ Canh bao:
      -> purge xoa object KHONG variant -> tat ca variant bi anh huong
 ```
 
-### Variation 2: BẢN-PREFIX (broader thần bản-url)
+### Variation 2: BAN-PREFIX (broader than ban-url)
 
 ```text
 Muc tieu: Kiem tra BAN-PREFIX xoa nhieu URL cung prefix
@@ -1953,7 +1953,7 @@ LY DO:
   -> Hai thu KHONG tuong duong
 ```
 
-### Anti-pattern 3: BẢN-URL for tag-based invalidation (too narrow or too broad)
+### Anti-pattern 3: BAN-URL for tag-based invalidation (too narrow or too broad)
 
 ```text
 SAI:
@@ -1976,7 +1976,7 @@ LY DO:
   -> Tag-based la cach DUY NHAT de invalidation theo thuc the
 ```
 
-### Anti-pattern 4: Không verify cross-variant cho bản-url
+### Anti-pattern 4: Không verify cross-variant cho ban-url
 
 ```text
 SAI:
@@ -2003,7 +2003,7 @@ LY DO:
   -> Verify 2+ variant -> chung minh claim DUNG
 ```
 
-### Anti-pattern 5: Không verify cross-endpoint cho bản-tag
+### Anti-pattern 5: Không verify cross-endpoint cho ban-tag
 
 ```text
 SAI:
@@ -2102,10 +2102,10 @@ FAIL MODE 3: Control unauthorized
 - Shared helpers: `E:/Projects/k6/k6-metrics-server/load-target/k6/cdn/shared.js`
 - VCL invalidation logic: `E:/Projects/k6/k6-metrics-server/load-target/varnish/default.vcl`
   - PURGE handler: lines 78-89 (`vcl_recv`), line 260-262 (`vcl_purge`)
-  - BẢN handler: lines 92-118 (`vcl_recv`)
-  - BẢN-URL: `ban("req.url == " + req.http.X-Ban-URL)` at line 100
-  - BẢN-TAG: `ban("obj.http.Surrogate-Key ~ " + req.http.X-Ban-Tag)` at line 107
-  - BẢN-PREFIX: `ban("req.url ~ ^" + req.http.X-Ban-Prefix)` at line 116
+  - BAN handler: lines 92-118 (`vcl_recv`)
+  - BAN-URL: `ban("req.url == " + req.http.X-Ban-URL)` at line 100
+  - BAN-TAG: `ban("obj.http.Surrogate-Key ~ " + req.http.X-Ban-Tag)` at line 107
+  - BAN-PREFIX: `ban("req.url ~ ^" + req.http.X-Ban-Prefix)` at line 116
   - Cache key normalization: lines 21-72 (`normalize_cache_variants`)
   - Cache key construction: lines 167-188 (`vcl_hash`)
 - Series overview: `./00_overview.md`
