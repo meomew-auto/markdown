@@ -661,6 +661,173 @@ export function banTag(tag) {
 | **Use case chính** | Static asset, non-variant content | Variant-heavy endpoint cần xóa toàn bộ | Entity thay đổi ảnh hưởng nhiều endpoint |
 | **Rủi ro nếu dùng sai** | Không xóa hết variant → còn sót object cũ | Xóa quá rộng → cache hit ratio tụt | Quên gắn Surrogate-Key ở origin → không có tác dụng |
 
+### 6.6 VCL implementation chi tiết (Varnish)
+
+Để hiểu sâu hơn về cách ba cơ chế hoạt động, hãy xem xét VCL (Varnish Configuration Language) — ngôn ngữ cấu hình của Varnish quyết định cache behavior.
+
+#### Purge trong VCL
+
+```vcl
+# VCL cho phép PURGE request từ internal network
+acl purgers {
+  "localhost";
+  "10.0.0.0"/8;
+  "172.16.0.0"/12;
+}
+
+sub vcl_recv {
+  if (req.method == "PURGE") {
+    if (!client.ip ~ purgers) {
+      return (synth(405, "Not allowed"));
+    }
+    # Purge object với cache key hiện tại
+    return (purge);
+  }
+}
+```
+
+Purge trong Varnish dùng HTTP method `PURGE` (không phải POST như trong case này — control plane đóng vai trò proxy). Khi `return(purge)` được gọi, Varnish:
+
+1. Tính hash của request hiện tại dựa trên `vcl_hash`
+2. Tìm object có hash đó trong cache
+3. Nếu tìm thấy: giải phóng object (free memory)
+4. Nếu không: vẫn trả về 200 (idempotent)
+
+**Purge chỉ xóa 1 object** vì mỗi cache key hash là duy nhất cho 1 variant.
+
+#### Ban trong VCL
+
+```vcl
+# VCL cho ban expression
+sub vcl_recv {
+  if (req.method == "BAN") {
+    if (!client.ip ~ purgers) {
+      return (synth(405, "Not allowed"));
+    }
+    # Thêm ban expression vào ban list
+    ban("req.url ~ " + req.http.X-Ban-Expression);
+    return (synth(200, "Ban added"));
+  }
+}
+
+# VCL kiểm tra ban list trước khi serve từ cache
+sub vcl_hit {
+  if (obj.ban) {
+    return (pass);  // Object bị ban → bypass cache, fetch từ origin
+  }
+}
+```
+
+Khi một ban expression được thêm vào ban list:
+
+1. Varnish thêm expression vào danh sách active bans
+2. Mỗi lần object được request, Varnish kiểm tra: object có match expression nào không?
+3. Nếu match → `obj.ban = true` → object bị "đánh dấu" là banned
+4. Request tiếp theo cho object đó sẽ thấy `obj.ban = true` → `return(pass)` → MISS
+5. Object bị banned sẽ bị xóa khỏi cache khi Varnish dọn dẹp (có thể không ngay lập tức)
+
+**Ban expression mạnh hơn purge** vì nó match nhiều object cùng lúc. Ví dụ:
+
+```text
+Ban expression: req.url ~ "^/api/sim/products/1"
+→ Match tất cả variant của /api/sim/products/1 (vì URL prefix match)
+→ Match /api/sim/products/1 (mọi Accept-Language, Geo, Device, AB, Segment)
+→ Nhưng KHÔNG match /api/sim/products/10 hoặc /api/sim/products/100
+```
+
+**Lưu ý về performance:** Với hàng triệu object, mỗi lần object được request, Varnish phải kiểm tra tất cả active ban expressions. Nếu có quá nhiều bans (hàng nghìn), performance có thể giảm. Best practice: định kỳ dọn dẹp ban list (Varnish tự làm khi object cũ bị xóa).
+
+#### Surrogate Key (ban-tag) trong VCL
+
+```vcl
+import xkey;  // VMOD cho soft purge bằng surrogate keys
+
+sub vcl_backend_response {
+  // Lưu Surrogate-Key từ origin response vào object
+  if (beresp.http.Surrogate-Key) {
+    // xkey VMOD tự động lưu mapping: tag → object ID
+  }
+}
+
+sub vcl_recv {
+  if (req.method == "PURGE" && req.http.X-Purge-By-Key) {
+    // Soft purge bằng surrogate key
+    set req.http.XKey-RegExp = req.http.X-Purge-By-Key;
+    return (hash);  // xkey VMOD sẽ xử lý trong vcl_hash
+  }
+}
+```
+
+`xkey` VMOD mở rộng Varnish để hỗ trợ soft purge bằng surrogate keys. Cách hoạt động:
+
+1. Khi object được cache, `xkey` parse `Surrogate-Key` header và lưu mapping: `"product-1" → [obj_id1, obj_id2, ...]`
+2. Khi có lệnh soft purge với key `"product-1"`:
+   - Tìm tất cả object ID có tag đó
+   - Đánh dấu các object đó là "stale" (soft purge)
+   - Request tiếp theo: nếu object còn trong grace period → serve stale; nếu hết grace → fetch từ origin
+3. Soft purge khác với hard purge: object không bị xóa ngay mà được giữ lại để serve stale trong grace period
+
+**Trong case này:** `banTag('product-1')` gọi control plane, control plane forward đến Varnish với lệnh tương ứng (có thể là ban expression hoặc xkey soft purge, tùy implementation).
+
+### 6.7 Các edge case của invalidation
+
+#### Edge case 1: Invalidate object đang được request
+
+```text
+Timeline:
+  T1: Client A gửi GET /api/cached → MISS → Varnish forward origin
+  T2: Ops gửi PURGE /api/cached
+  T3: Origin phản hồi response cho Client A → Varnish lưu cache
+
+Kết quả: Client A nhận response từ origin (MISS), nhưng object vẫn
+được cache sau T3. PURGE ở T2 có thể không có tác dụng vì object chưa
+tồn tại trong cache tại thời điểm đó.
+
+Giải pháp: Sau purge, gửi request verify. Nếu verify thấy HIT (race condition),
+thực hiện purge lại.
+```
+
+#### Edge case 2: Ban trong khi đang có nhiều request concurrent
+
+```text
+Khi ban-url được thêm vào ban list, các request ĐANG ĐƯỢC XỬ LÝ có thể
+vẫn nhận HIT nếu Varnish check ban expression TRƯỚC KHI lookup cache.
+
+Varnish thông thường:
+  1. vcl_recv: check ban expression → nếu match, return(pass)
+  2. vcl_hash: lookup cache → nếu HIT, serve; nếu MISS, fetch
+
+Nhưng nếu request đã vượt qua bước 1 TRƯỚC KHI ban expression được thêm:
+  → Request vẫn HIT với object cũ
+  → Ban expression chỉ có hiệu lực với request MỚI sau đó
+
+Đây là lý do grace period quan trọng trong production (xem Variation 7).
+```
+
+#### Edge case 3: Ban-tag khi object chưa có Surrogate-Key
+
+```text
+Nếu origin không gửi Surrogate-Key header (hoặc VCL không cấu hình xkey),
+ban-tag hoàn toàn vô tác dụng.
+
+Kiểm tra: curl -sI http://localhost:8080/api/sim/products/1 | grep -i surrogate
+Nếu không thấy Surrogate-Key → app consumer logic phải dùng banUrl thay vì banTag.
+```
+
+#### Edge case 4: Collateral invalidation (invalidate nhầm object khác)
+
+```text
+Tình huống: banUrl('/api/sim/products/1') cũng xóa /api/sim/products/10
+vì prefix match. Điều này gọi là "collateral invalidation".
+
+Nguyên nhân: VCL ban expression dùng regex quá rộng:
+  SAI:   ban("req.url ~ /api/sim/products/1")
+  ĐÚNG:  ban("req.url == /api/sim/products/1")
+
+Để tránh: dùng exact match hoặc carefully crafted regex với anchor $.
+Test bằng cách: ban URL A, verify URL B không bị ảnh hưởng (Variation 2).
+```
+
 ---
 
 ## 7. Request sequence flow
