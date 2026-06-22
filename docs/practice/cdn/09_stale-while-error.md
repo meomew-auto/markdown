@@ -50,12 +50,11 @@ Revenue duoc bao toan.
   -> User van thay trang san pham -> tiep tuc mua -> revenue SAVED
 ```
 
-Day la **availability feature**, khong phai performance feature. Stale-while-error
-khong lam site nhanh hon. No lam site **ton tai** khi origin khong con ton tai.
+Đây làavailability feature, không phải performance feature. Stale-while-error không làm site nhanh hơn. No làm site tốn tài khi origin không còn tồn tại.
 
 ### Khong phai "stale = xau"
 
-Mot trong nhung hieu lam lon nhat ve CDN la "stale content = bad." Thuc te:
+Một trong những hiểu lầm lớn nhất về CDN là "stale content = bad." Thực tế:
 
 ```text
   Fresh content (origin healthy):   data cach day 0-2 giay -> PERFECT
@@ -86,25 +85,21 @@ availability cua CDN khi origin sap. Cac case khac:
 ```
 
 Case 09 tra loi cau hoi: "Khi origin sap, CDN co tiep tuc phuc vu user khong?"
-Day la cau hoi quan trong nhat cho moi business truc tuyen. Khong co stale-while-error,
+Day la cau hoi quan trong nhat cho moi business truc tuyen. khong co stale-while-error,
 moi outage cua origin la outage cua toan bo site.
 
 ### Cac tinh huong thuc te can stale-while-error
 
-**Flash sale / campaign launch**: Origin pressure cao nhat -> origin de sap nhat ->
-stale-while-error la defense line CUOI CUNG.
+'Flash sale / campaign launch: Origin pressure cao nhất origin dễ sập nhất-while-error là defense line CUOI CUNG.
 
 **Database failover**: Primary DB mat ket noi -> app services bat dau tra 503 ->
 CDN van serve stale HTML/JSON products -> user khong thay gi.
 
-**Deploy that bai**: Rollout version moi -> bug -> app crash -> origin unhealthy ->
-CDN serve stale tu version cu -> user khong bi anh huong -> team co thoi gian rollback.
+'Deploy thất bại]: Rollout version mới bug app crash origin unhealthy CDN serve từ version cũ user không bị ảnh hưởng team có thời gian rollback.
 
-**DDoS vao origin**: Attacker target truc tiep origin -> origin qua tai -> CDN
-(dung origin address khac, hoac IP allowlist) van serve tu cache + stale.
+DDoS vào origin: Attacker target trực tiếp origin origin qua tài CDN (dung origin address khác, hoặc IP allowlist) và serve từ cache +.
 
-**DNS / network partition**: Origin unreachable do network — khong phai origin
-code fail. Stale van hoat dong.
+DNS / network partition: Origin unreachable do network — không phải origin code fail. Stale vẫn hoạt động.
 
 ### Cau hoi kinh doanh
 
@@ -113,7 +108,7 @@ code fail. Stale van hoat dong.
  bang cach serve stale objects thay vi tra 503 khong?"
 ```
 
-Day la cau hoi ve **business continuity**, khong phai ve technical performance.
+Đây là câu hỏi vềbusiness continuity, không phải về technical performance.
 
 ### Phan tich so hoc: Gia tri cua stale-while-error
 
@@ -164,8 +159,7 @@ Trong e-commerce, co 3 loai page:
 
 ### Storm sau outage: Ly do stale-while-error con quan trong HON
 
-Khi origin recover sau outage, moi object trong CDN deu da het TTL. Toan bo
-traffic tro thanh MISS. Day la **cache stampede thu cap**:
+Khi origin sau outage, mọi object trong CDN đều đã hết TTL. Toàn bộ traffic trở thành MISS. Đây là cách stampede thu cấp:
 
 ```text
   Origin outage (5 phut):
@@ -192,9 +186,7 @@ Case nay chung minh 4 dieu:
 
 ### (a) Stale serving duoc kich hoat DUNG LUC
 
-Khi origin healthy -> CDN hoat dong binh thuong (MISS -> HIT -> HIT). Khi origin
-tro thanh unhealthy -> CDN TU DONG chuyen sang stale serving mode, KHONG CAN
-human intervention. Day la automatic circuit breaker o cache layer.
+Khi origin healthy CDN hoạt động bình thường (MISS HITHIT). Khi origin trở thành organichealthy CDN TỔ ĐÂY chuyển sang serving mode, KHONG CAN human. Đây là automatic circuit breaker ở cache layer.
 
 ### (b) Stale serving TRA VE DUNG OBJECT
 
@@ -203,14 +195,11 @@ truoc do, chi la data cu hon. User van thay dung san pham, dung mo ta, dung hinh
 
 ### (c) Stale serving KHONG LIEN LAC DEN ORIGIN
 
-Day la diem MAU CHOT. Origin da unhealthy — neu CDN van co gang goi origin
-trong khi serve stale, thi origin van bi ap luc va co the collapse hoan toan.
-Stale serving phai la "origin isolation" — zero additional origin requests.
+Đây là điểm MAU CHOT. Origin đã unhealthy — nếu CDN vẫn có màu gọi origin trong khi serve, thì origin vẫn bị áp lực và có thể collapse hoàn toàn. Stale serving phải là "origin " — zero additional origin requests.
 
 ### (d) Khi origin recover, CDN tu dong quay lai normal
 
-Sau khi origin healthy tro lai -> CDN quay lai HIT/MISS binh thuong. Khong can
-manual toggle, khong can flush cache.
+Sau khi origin healthy trở lại CDN quay lại HIT/MISS bình thường. Không cần manual toggle, không cần flush cache.
 
 ### Sequence chung minh day du
 
@@ -243,8 +232,7 @@ Phase 5: RECOVERY
   -> Ready for next test
 ```
 
-Moi phase deu co evidence rieng. Khong phase nao duoc "assume" — tat ca deu
-duoc verify qua HTTP headers va origin counters.
+Mỗi phase đều có evidence riêng. Không phase nào được "assume" — tất cả đều được verify qua HTTP headers và origin counters.
 
 ### Mat danh sach kiem tra (taxonomy of checks)
 
@@ -272,9 +260,7 @@ van FAIL. Day la "defense in depth" trong CDN testing.
 
 ### Day la test CDN-specific NHAT trong toan bo suite
 
-Toan bo co che — backend health probing, grace period calculation, stale serving
-decision — dien ra **hoan toan trong Varnish**. Application code khong tham gia
-vao stale-serving decision.
+Toàn bộ cơ chế — backend healthing, grace period calculation, serving decision — diễn ra hoàn toàn trong Varnish. Application code không tham gia vào-serving decision.
 
 ```text
   Application chi cung cap:
@@ -290,7 +276,7 @@ vao stale-serving decision.
 
 ### So do ra quyet dinh serve stale (VCL execution path)
 
-Day la CHINH XAC nhung gi xay ra trong Varnish khi mot request den:
+Đây là CHÍNH XỨC những gì xảy ra trong Varnish khi một request đến:
 
 ```text
   Client request -> vcl_recv
@@ -321,12 +307,11 @@ Day la CHINH XAC nhung gi xay ra trong Varnish khi mot request den:
                -> if origin unhealthy -> origin error -> client gets error
 ```
 
-Quyet dinh "serve stale" chi xay ra trong vcl_hit, chi khi object expired + backend
-unhealthy + object trong grace window. Tat ca cac path khac deu dan den origin.
+Quy định "serve" chỉ xay ra trong vcl hút, chỉ khi object expired + backend unhealthy + object trong grace window. Tất cả các path khác đều dẫn đến origin.
 
-### Application KHONG THE test stale-while-error
+### Application khong the test stale-while-error
 
-Neu ban test o application layer (direct-to-app, khong qua CDN):
+Neu bạn test ở application layer (direct-to-app, không qua CDN):
 
 ```text
   Application test:
@@ -384,7 +369,7 @@ Test case 09 (stale-while-error) YEU CAU:
               +--> Origin request counter (increments on every origin hit)
 ```
 
-Khong the test case nay neu thieu bat ky layer nao. Day la ly do `TargetLayer=full`
+khong the test case nay neu thieu bat ky layer nao. Day la ly do `TargetLayer=full`
 la bat buoc cho toan bo CDN suite.
 
 ### So sanh: test o layer nao thi bay nhieu evidence?
@@ -442,9 +427,7 @@ VCL validation, nhung khong thay the duoc CDN layer test.
         -> Varnish -> Nginx -> App -> /api/cached handler
 ```
 
-Day la path de verify cache behavior: HIT/MISS, stale headers, backend health
-headers, response body. Moi request di qua path nay deu duoc Varnish xu ly
-day du (vcl_recv -> vcl_hash -> vcl_hit/vcl_miss -> vcl_deliver).
+Đây là path để verify cache behavior: HIT/MISS, headers, backend health headers, response body. Mọi request đi qua path này đều được Varnish xử lý đầy đủ (vclrecv vclhash vclhit/vclmiss vcl deliver).
 
 ### Path 2: Control API (:8088) — Origin manipulation path
 
@@ -473,7 +456,7 @@ tu chay probe, k6 chi thay doi origin profile va doi Varnish nhan thay su thay d
 
 ### Precondition chi tiet
 
-Truoc khi test bat dau, can dam bao:
+Trước khi test bắt đầu, cần đảm bảo:
 
 1. **Origin dang healthy**: Goi `resetOriginProfile()` de xoa moi profile tu
    test truoc, roi `waitOriginHealthy()` de polling den khi Varnish xac nhan
@@ -646,8 +629,7 @@ Hai request warming:
 - **Second**: Cache HIT. CDN serve object tu cache (con fresh, obj.ttl >= 0s).
   Origin KHONG duoc lien lac. Origin request counter van = 1.
 
-Day la **precondition proof**: Neu warming fail (khong HIT sau MISS) -> khong
-co object de serve stale -> test vo nghia. Script bao loi ngay lap tuc.
+Đây làprecondition proof: Neu warming fail (không HIT sau MISS) không có object để serve test võ nghia. Script bảo lưu ngày lập tức.
 
 ```javascript
   return { path };
@@ -667,7 +649,7 @@ export default function (data) {
 ```
 
 `sleep(3)` — doi object het TTL (2s) + 1s margin. Sau sleep nay, object da
-expired (obj.ttl < 0) nhung van trong grace window (obj.ttl + obj.grace > 0s
+expired (obj.ttl <  CODE395 ) nhung van trong grace window (obj.ttl + obj.grace > 0s
 vi grace=120s > 3s).
 
 ```javascript
@@ -680,7 +662,7 @@ vi grace=120s > 3s).
 **Day la buoc TRONG YEU NHAT.** Goi `PATCH /ops/app/cdn/origin/profile` voi
 payload `{healthy: false, error_status: 503}`.
 
-Dieu gi xay ra sau buoc nay:
+Điều gì xảy ra sau buổi này:
 
 1. Go handler cap nhat `cdnOriginProfile` trong memory + Redis.
 2. Endpoint `/health/cdn-origin` bat dau tra 503 thay vi 200.
@@ -706,7 +688,7 @@ interval=1s, window=3, threshold=2, Varnish can toi thieu 2 probes fail
   assertHeaderEquals(stale, 'X-Cache-Backend-Healthy', 'false', 'stale after origin unhealthy');
 ```
 
-**Day la stale probe — buoc chung minh quan trong nhat cua toan bo test.**
+Day là probe — bước chứng minh quan trọng nhất của toàn bộ test.
 
 5 assertions trong stale probe:
 
@@ -843,8 +825,7 @@ truyen. Day la "test pollution" — test A lam hong test B.
   Stale served: YES (the third request)
 ```
 
-Day la toan bo hanh trinh cua mot stale-while-error test. Moi buoc deu duoc
-chung minh — khong co gi la "assume."
+Đây là toàn bộ hành trình của một-while-error test. Mọi bước đều được chúng minh — không có gì là "assume."
 
 ### 5.7 Bang tom tat: moi phase chung minh dieu gi
 
@@ -864,8 +845,7 @@ chung minh — khong co gi la "assume."
 Moi hang trong bang la mot "micro-assertion." Tat ca 10 micro-assertion deu
 phai pass de toan bo case pass. 9/10 la FAIL.
 
-Day la toan bo hanh trinh cua mot stale-while-error test. Moi buoc deu duoc
-chung minh — khong co gi la "assume."
+Đây là toàn bộ hành trình của một-while-error test. Mọi bước đều được chúng minh — không có gì là "assume."
 
 ## 6. Origin health model deep-dive
 
@@ -898,7 +878,7 @@ Tham so probe:
 - `.window = 3`: Xet 3 probes gan nhat de quyet dinh healthy/sick.
 - `.threshold = 2`: Can 2/3 probes thanh cong (return 200) de coi backend healthy.
   Nguoc lai, can 2/3 probes fail de coi backend sick.
-- `.initial = 1`: Khi Varnish khoi dong, giả su backend healthy ngay lap tuc (1).
+- `.initial = 1`: Khi Varnish khoi dong, gia su backend healthy ngay lap tuc (1).
 
 ### 6.2 Health probe life cycle
 
@@ -953,7 +933,7 @@ func (h *Handler) CDNOriginHealth(c *gin.Context) {
 }
 ```
 
-Logic don gian nhung CHINH XAC:
+Logic đơn giản nhưng CHINH XÀC:
 
 - Neu `profile.Healthy == true` -> tra 200 (healthy).
 - Neu `profile.Healthy == false` -> tra `profile.ErrorStatus` (mac dinh 503).
@@ -1003,10 +983,7 @@ Hai lop storage:
 
 ### 6.6 Tai sao can ca in-memory + Redis?
 
-- **Redis**: Cho phep nhieu instance cua app cung chia se origin profile.
-  Khi API server scale ngang, tat ca instance deu doc cung profile tu Redis.
-- **In-memory**: Fallback khi Redis down. Origin health probe van hoat dong
-  ngay ca khi Redis khong kha dung — profile duoc doc tu memory.
+-Redis: Cho phép nhiều instance của app cùng chia sẻ origin profile. Khi API server scale ngang, tất cả instance đều đặn cung profile từ Redis. -In-memory: Fallback khi Redis down. Origin health probe vẫn hoạt động ngay cả khi Redis không sử dụng — profile được dồn từ memory.
 
 ### 6.7 Sanitization
 
@@ -1063,7 +1040,7 @@ export function waitOriginHealthy(options = {}) {
 }
 ```
 
-Ba dieu kien phai DONG THOI thoa man:
+Ba điều kiện phải ĐƯỢC THỨC THỰC MÃO:
 
 1. **Profile healthy**: `getOriginProfile()` tra ve `healthy: true`. Day la
    application-level check — profile da duoc reset.
@@ -1083,12 +1060,11 @@ fail, ta khong the doc duoc ket qua.
 
 ## 7. Stale-if-error vs Grace mode — THE STAR SECTION
 
-Day la phan QUAN TRONG NHAT de hieu stale-while-error trong Varnish. Co hai
-co che lien quan nhung KHAC NHAU.
+Đây là phân QUAN TRƯỜNG NHẬT để hiểu-while-error trong Varnish. Có hai cơ chế liên quan nhưng KHÁC NHƯỢNG.
 
 ### 7.1 Grace mode
 
-Grace la co che cua Varnish: khi object het TTL (obj.ttl < 0) nhung van trong
+Grace la co che cua Varnish: khi object het TTL (obj.ttl <  CODE484 ) nhung van trong
 grace window (obj.ttl + obj.grace > 0s) VA backend khong healthy, Varnish serve
 stale object.
 
@@ -1153,14 +1129,11 @@ vao do, no su dung grace nhu stale-if-error implementation:
 | **Dieu kien** | Backend unhealthy | Origin tra 5xx |
 | **Co che** | Varnish internal | Cache-Control directive |
 | **Async refresh?** | Co (trong Varnish default) | Khong (chi serve stale) |
-| **Health probe dependency?** | Co (std.healthy) | Khong nhat thiet |
+| **Health probe dependency?** | Co (std.healthy) | khong nhat thiet |
 | **Ai dat?** | VCL `beresp.grace` | Origin `Cache-Control` header |
 | **Trong VCL nay?** | `beresp.grace = 120s` | Duoc implement qua grace |
 
-**Diem khac biet cot loi**: Trong Varnish default behavior (khong co custom VCL),
-grace mode bao gom **async refresh**: Varnish serve stale object cho client,
-nhung DONG THOI gui mot request xuong origin de refresh object. Stale-if-error
-KHONG lam async refresh — no chi serve stale va KHONG lien lac origin.
+*Điểm khác biệt cốt lõi: Trong Varnish default behavior (không có custom VCL), gạch mode bao gồmsync refresh: Varnish serve object cho client, nhưng DONG THOI gửi một request xuống origin để refresh object. Stale-if-error KHONG làm async refresh — NÓ KHÔNG CÓ serve và KHONG liên lạc origin.
 
 Trong VCL cua chung ta, `vcl_hit` chi serve stale ma KHONG bat dau async refresh.
 Dieu nay duoc dam bao vi code chi `return (deliver)` — khong co `return (miss)`
@@ -1183,8 +1156,7 @@ Dieu kien KEP:
 2. `obj.ttl + obj.grace > 0s`: Object phai trong grace window. Neu qua grace
    window roi (obj da bi evict hoac keep het han), khong con stale de serve.
 
-Day la thiet ke AN TOAN: stale chi duoc serve khi origin that su khong kha dung.
-Khi origin healthy, user luon nhan fresh content.
+Đây là thiết kế AN TOÀN: chỉ được serve khi origin thật sự không khả dụng. Khi origin healthy, user luôn nhận fresh content.
 
 ### 7.6 X-Cache-Stale trong vcl_deliver
 
@@ -1231,7 +1203,7 @@ Co che kiem soat chat che:
               -> request tiep theo la MISS
 ```
 
-Case 09 test trong GRACE PERIOD: TTL=2s -> doi 3s -> van trong grace (3s < 120s).
+Case 09 test trong GRACE PERIOD: TTL=2s -> doi 3s -> van trong grace (3s <  CODE504 ).
 Neu doi > 122s, object se roi vao KEEP PERIOD va khong duoc serve stale.
 
 ### 7.8 Vi sao grace=120s, keep=600s?
@@ -1244,10 +1216,10 @@ Neu doi > 122s, object se roi vao KEEP PERIOD va khong duoc serve stale.
     - KHONG qua dai de tranh serve stale qua lau neu origin that su down vinh vien
 
   keep=600s: 10 phut. Du dai de:
-    - Giữ object trong cache sau khi het grace
+    - Giu object trong cache sau khi het grace
     - Cho phep conditional revalidation (304) khi origin recover
     - Tranh eviction som -> giam MISS storm khi origin recover
-    - 10 phut la compromise giua "giữ object" va "memory pressure"
+    - 10 phut la compromise giua "giu object" va "memory pressure"
 
   TTL=2s (trong test): chi de test nhanh
   TTL thuc te (production): 60s - 300s tuy loai content
@@ -1279,14 +1251,13 @@ Neu doi > 122s, object se roi vao KEEP PERIOD va khong duoc serve stale.
     -> Day la "misconfigured" — co co che nhung khong hoat dong
 ```
 
-Config C (cua chung ta) la gold standard. Config D la loi cau hinh pho bien —
-grace qua ngan, stale khong kip hoat dong truoc khi object bi roi khoi grace window.
+Config C (của chúng ta) là gold standard. Config D là lời cầu hình phổ biến — hiệu quả ngắn, không kịp hoạt động trước khi object bị rơi khỏi grace window.
 
 ## 8. Origin request counting proof — THE EVIDENCE
 
 ### 8.1 Vi sao origin request counting la EVIDENCE QUAN TRONG NHAT?
 
-Khong co origin request counting, day la nhung gi ban CO THE sai:
+Không có origin request counting, đây là những gì bạn CO THE sai:
 
 ```text
   Tinh huong A: CDN tra 200 + X-Cache-Stale: true
@@ -1397,7 +1368,7 @@ nham lan voi health probe path.
 
 ### 8.5 Counter reset va test pollution
 
-Neu khong reset counter truoc moi test:
+Nếu không reset counter trước mỗi test:
 
 ```text
   Case 08 (TTL expiry): MISS -> count +1
@@ -1494,14 +1465,14 @@ tu 0. Day la "test isolation" — moi case doc lap, khong bi anh huong boi case 
 
 ### Vi sao P7 (origin count=1) la CRITICAL?
 
-P7 phan biet "stale that su" va "stale gia":
+P7 phân biệt "stale thất sự" và "stale giả":
 
 - **Stale that su**: CDN serve object cu, KHONG lien lac origin -> count = 1.
 - **Stale gia**: CDN goi origin (origin error/healthy), roi serve object cu -> count > 1.
 - **Stale gia (background refresh)**: CDN serve stale cho client nhung async
   refresh tu origin -> count > 1 (co the la 2).
 
-Chi co P7 moi phan biet duoc ba tinh huong nay. Headers khong the.
+Chỉ có P7 mới phân biệt được ba tính hưởng này. Headers không thể.
 
 ## 11. Cach chay + output
 
@@ -1599,7 +1570,7 @@ $env:OPS_AUTH_TOKEN = $env:CI_OPS_AUTH_TOKEN
 
 ### Cach verify ket qua truc tiep (manual)
 
-Ngoai k6 output, ban co the verify tung buoc bang curl:
+Ngoại k6 output, bạn có thể verify từng bước bằng curl:
 
 ```bash
 # 1. Kiem tra origin profile hien tai
