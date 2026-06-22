@@ -13,75 +13,75 @@
 
 ### Response headers là Hợp đồng giữa origin và CDN
 
-Mới response cacheable mà origin trả về không chỉ chưa body (JSON, HTML, binary) --
-nó còn chưa một **HỢP ĐỒNG** (contract) năm trong các response header. Hợp đồng này
-là lỗi hua tự origin đến CDN (Varnish), nối rang:
+Mỗi response cacheable mà origin trả về không chỉ chứa body (JSON, HTML, binary) --
+nó còn chứa một **HỢP ĐỒNG** (contract) nằm trong các response header. Hợp đồng này
+là lời hứa từ origin đến CDN (Varnish), nói rằng:
 
 ```text
-Origin nối với CDN:
+Origin nói với CDN:
   "Đây là object này. Em được phép cache nó trong N giây.
-   De biet khi nao hết hạn, em nhin vào header Cache-Control của anh.
-   Muon xác nhận object còn đúng không, em dụng ETag này de hoi lại anh.
-   Object này thay đổi theo ngôn ngữ (Accept-Language) và quoc gia (X-Geo-Country)
-   -- em phải cache rieng cho từng combination.
-   Khi anh bảo em xóa object, em dụng Surrogate-Key này de tìm."
+   Để biết khi nào hết hạn, em nhìn vào header Cache-Control của anh.
+   Muốn xác nhận object còn đúng không, em dùng ETag này để hỏi lại anh.
+   Object này thay đổi theo ngôn ngữ (Accept-Language) và quốc gia (X-Geo-Country)
+   -- em phải cache riêng cho từng combination.
+   Khi anh bảo em xóa object, em dùng Surrogate-Key này để tìm."
 ```
 
-Nếu **BẤT KỲ** header nao trong hợp đồng này bị thiếu hoặc sai, CDN sẽ:
-- **Cache qua hung hang** (qua aggressive): serve stale data cho user, user thay
-  sai sản phẩm, sai gia, sai ngôn ngữ.
-- **Hoặc không cache gi ca**: mới request đều phải về origin, origin quá tải,
-  CDN thành "ong dan trong suot" vô dụng.
+Nếu **BẤT KỲ** header nào trong hợp đồng này bị thiếu hoặc sai, CDN sẽ:
+- **Cache quá hùng hăng** (qua aggressive): serve stale data cho user, user thấy
+  sai sản phẩm, sai giá, sai ngôn ngữ.
+- **Hoặc không cache gì cả**: mỗi request đều phải về origin, origin quá tải,
+  CDN thành "ống dẫn trong suốt" vô dụng.
 
-### Những header nao lập thành hợp đồng?
+### Những header nào lập thành hợp đồng?
 
 ```text
 BOX: 6 HEADER THÀNH PHẦN CỦA CACHE CONTRACT
 ==============================================================
- (1) Cache-Control        -- Thời giản tuoi (freshness) của object
+ (1) Cache-Control        -- Thời gian tươi (freshness) của object
                               trong shared cache (CDN) và browser.
                               Chứa các directive: public, s-maxage,
                               stale-while-revalidate, stale-if-error.
 
  (2) CDN-Cache-Control    -- TTL dành riêng cho CDN (Varnish).
                               Có thể override Cache-Control nếu
-                              origin muon browser cache khac CDN.
+                              origin muốn browser cache khác CDN.
 
  (3) ETag                 -- "Dấu vân tay" của object. Là một
                               opaque string (hash) mà origin tạo ra
-                              tự nội dụng. Dùng để revalidation.
+                              từ nội dung. Dùng để revalidation.
 
- (4) Vary                 -- Khai báo những request header nao
-                              lam thay đổi response. CDN dùng nó
+ (4) Vary                 -- Khai báo những request header nào
+                              làm thay đổi response. CDN dùng nó
                               để tạo cache key variant.
 
- (5) Surrogate-Key        -- Tag de invalidate theo nhom.
-                              Varnish dùng nó de ban-tag (xóa
+ (5) Surrogate-Key        -- Tag để invalidate theo nhóm.
+                              Varnish dùng nó để ban-tag (xóa
                               tất cả object có cùng tag).
 
- (6) Last-Modified        -- Timestamp lần cuoi object thay đổi.
-                              Validator thay thể cho ETag.
+ (6) Last-Modified        -- Timestamp lần cuối object thay đổi.
+                              Validator thay thế cho ETag.
 ==============================================================
 ```
 
-### Vì sao goi là "contract"?
+### Vì sao gọi là "contract"?
 
 ```text
-"Contract" không phải là ten goi hóa my. Nó là một khái niệm chính xác:
+"Contract" không phải là tên gọi hoa mỹ. Nó là một khái niệm chính xác:
 
-  - Origin CẢM KẾT (qua header): object này tuoi trong X giây, ETag
+  - Origin CAM KẾT (qua header): object này tươi trong X giây, ETag
     là Y, variant key là Z, tag là T.
 
-  - CDN THỰC THÌ (dựa vào header): cache object X giây, khi hết
+  - CDN THỰC THI (dựa vào header): cache object X giây, khi hết
     hạn đúng ETag revalidate, isolate variant, invalidate theo tag.
 
-  - Nếu origin cảm kết sai: CDN vẫn cache -- những sai data.
-    -> user thay sai, app logic bị pha vô.
+  - Nếu origin cam kết sai: CDN vẫn cache -- những sai data.
+    -> user thấy sai, app logic bị phá vỡ.
 
-  - Nếu origin không cảm kết: CDN không cache -- origin thoi.
+  - Nếu origin không cam kết: CDN không cache -- origin thôi.
     -> every request hit origin, không có offload.
 
-  - Nếu origin cảm kết đúng nhưng CDN không tôn trọng:
+  - Nếu origin cam kết đúng nhưng CDN không tôn trọng:
     -> cache leak, variant cross-talk, stale data.
 
 => Validating cache contract là VALIDATING FOUNDATION của CDN behavior.
@@ -89,35 +89,35 @@ BOX: 6 HEADER THÀNH PHẦN CỦA CACHE CONTRACT
    HIT/MISS, TTL expiry, stale serving, invalidation, coalescing.
 ```
 
-### Tải sao contract headers de bị thiếu hoặc sai?
+### Tại sao contract headers dễ bị thiếu hoặc sai?
 
-Trong thực tế, các hệ thống backend thuong mac phải nhưng sai song sau:
+Trong thực tế, các hệ thống backend thường mắc phải những sai sót sau:
 
 ```text
-Lỗi 1: Thieu Cache-Control trên response cacheable
+Lỗi 1: Thiếu Cache-Control trên response cacheable
   -> CDN mac định không cache (hoặc cache theo default TTL quá ngắn)
   -> Origin nhận 100% traffic, CDN là "ong dan"
 
 Lỗi 2: Cache-Control có private
   -> `Cache-Control: private, max-age=60`
   -> CDN không cache (private = chỉ browser được cache)
-  -> Mới request đều MISS -> origin overload
+  -> Mỗi request đều MISS -> origin overload
 
-Lỗi 3: Thieu ETag
-  -> Không có có chế revalidation
-  -> Khi object hết hạn, CDN phải fetch lại TOÀN BỘ body tự origin
+Lỗi 3: Thiếu ETag
+  -> Không có cơ chế revalidation
+  -> Khi object hết hạn, CDN phải fetch lại TOÀN BỘ body từ origin
   -> Ton băng thông, tang latency
 
 Lỗi 4: ETag không ổn định
   -> ETag thay đổi theo server timestamp thay vì content hash
-  -> Cứng nội dụng, 2 instance trả 2 ETag khac nhau
-  -> Revalidation luon thật bai -> 200 thay vì 304
+  -> Cùng nội dung, 2 instance trả 2 ETag khác nhau
+  -> Revalidation luon thất bại -> 200 thay vì 304
 
-Lỗi 5: Thieu Surrogate-Key
-  -> Không thể invalidate theo nhom (vd: xóa tất cả product category)
+Lỗi 5: Thiếu Surrogate-Key
+  -> Không thể invalidate theo nhóm (vd: xóa tất cả product category)
   -> Phải purge từng URL một -> chậm, tồn tại nguyen
 
-Lỗi 6: Vary thieu header quản trọng
+Lỗi 6: Vary thiếu header quan trọng
   -> User VN và user US đúng chứng cache object
   -> User VN thấy giá VND, user US cứng thấy giá VND
   -> Cache leakage
@@ -137,7 +137,7 @@ Tình huống: 17:55 chieu thủ 6 -- khach sẵn sàng mua sim cuoi tuan
     CDN cache: MISS -> HIT
 
   User B (US, desktop, tieng Anh) mở app -> GET /api/sim/products/1
-    Nếu Vary dụng: CDN MISS (variant khac) -> fetch tự origin tieng Anh
+    Nếu Vary dụng: CDN MISS (variant khac) -> fetch từ origin tieng Anh
     Nếu Vary sai: CDN HIT -> serve object tieng Viết cho nguoi My
     -> User B thay "Ao so mi" thay vì "T-shirt"
     -> Không mua hang -> lost revenue
@@ -145,14 +145,14 @@ Tình huống: 17:55 chieu thủ 6 -- khach sẵn sàng mua sim cuoi tuan
   Admin cập nhật giá sản phẩm -> POST /admin/products/1
     Nếu Surrogate-Key có: ban-tag product-1 -> CDN xóa tất cả variant
     Nếu Surrogate-Key không có: purge từng URL variant một
-    -> mặt 5-10 giây để purge hết -> trong thời giản đo, user thấy giá cũ
+    -> mặt 5-10 giây để purge hết -> trong thời gian đo, user thấy giá cũ
     -> mua hang gia SAI -> operational nightmare
 
   Sau 60 giây: object hết hạn (expired)
     Nếu có ETag: CDN gửi If-None-Match đến origin
       Origin trả 304 (không body) -> CDN cập nhật TTL, serve cached body
       -> BĂNG THÔNG TIẾT KIỆM: chỉ ton ~200 byte headers thay vì 4KB body
-    Nếu không có ETag: CDN phải fetch lại full body tự origin
+    Nếu không có ETag: CDN phải fetch lại full body từ origin
       -> 4KB * 1000 requests = 4MB băng thông bị lang phi
 ```
 
@@ -168,7 +168,7 @@ Tình huống: 17:55 chieu thủ 6 -- khach sẵn sàng mua sim cuoi tuan
 ```
 
 Đây không phải là "API có trả 200 không". Đây là cau hoi **contract**: origin
-đã dua ra một tạp hợp lỗi hua qua header; CDN có dữ thông tin de thực hiện
+đã dua ra một tạp hợp lời hứa qua header; CDN có dữ thông tin de thực hiện
 dụng công việc của nó không?
 
 ---
@@ -183,8 +183,8 @@ Case này chứng minh **5 capabilities** của CDN layer lien quản đến cac
 Origin phải emit Cache-Control với ít nhất:
   - public: cho phep shared cache (CDN, proxy)
   - s-maxage=N: TTL cho shared cache
-  - stale-while-revalidate=N: thời giản serve stale trong khi revalidate
-  - stale-if-error=N: thời giản serve stale khi origin lỗi
+  - stale-while-revalidate=N: thời gian serve stale trong khi revalidate
+  - stale-if-error=N: thời gian serve stale khi origin lỗi
 
 CDN-Cache-Control là CDN-specific override:
   - max-age=N: TTL dành riêng cho CDN
@@ -197,28 +197,28 @@ Nếu không có, Varnish fallback về Cache-Control.
 ### (b) ETag hien diện trên response cacheable
 
 ```text
-ETag là "dấu vân tay" của object. Origin tạo ETag tự nội dụng (hash),
+ETag là "dấu vân tay" của object. Origin tạo ETag từ nội dung (hash),
 không phải từ timestamp server. ETag phải:
   - Có mặt trên môi response cacheable
-  - Ổn định: cứng nội dụng -> cứng ETag (ngày ca qua nhiều instance)
+  - Ổn định: cứng nội dung -> cứng ETag (ngày ca qua nhiều instance)
   - Unique: nối dùng khác -> ETag khac
 ```
 
 ### (c) Vary header khai bảo đúng variant dimensions
 
 ```text
-Vary khai báo những request header nao lam thay đổi response.
-CDN dụng Vary de bien những header đo thành một phần của cache key.
+Vary khai báo những request header nào làm thay đổi response.
+CDN dùng Vary de bien những header đo thành một phần của cache key.
 
 Ví dụ: Vary: Accept-Language, X-Geo-Country
-  -> CDN cache rieng cho VN+VÌ, VN+EN, US+EN, US+VÌ, ...
+  -> CDN cache riêng cho VN+VÌ, VN+EN, US+EN, US+VÌ, ...
   -> Không bị leakage giữa các variant
 ```
 
-### (d) Surrogate-Key hien diện de invalidation theo nhom
+### (d) Surrogate-Key hien diện de invalidation theo nhóm
 
 ```text
-Surrogate-Key chưa space-separated tags. Varnish dụng tags này de:
+Surrogate-Key chứa space-separated tags. Varnish dùng tags này de:
   - ban-tag: xóa tất cả object có cùng tag
   - Invaildate theo nghiệp vụ: "xóa tất cả product-1" thay vì
     phải liet kế từng URL variant (product-1?lang=vì&geo=VN, ...)
@@ -267,7 +267,7 @@ Nếu chỉ test thống qua Nginx (không qua Varnish):
   -> Nhưng không biet Varnish có hiệu và sử dụng headers đo không
   
   Ví dụ: Origin emit Cache-Control: public, s-maxage=60
-         Những Varnish config sai -> vẫn MISS mới request
+         Những Varnish config sai -> vẫn MISS mỗi request
          -> Test app layer PASS (headers có) những CDN behavior FAIL
 ```
 
@@ -280,14 +280,14 @@ Test qua Varnish (:80) xác nhận ĐƯỢC:
   2. 304 revalidation hoạt động: CDN gửi If-None-Match, origin trả 304,
      CDN forward 304 cho client (hoặc 200 với cached body)
   3. Cache behavior dụng: sau request dau, request thủ 2 là HIT
-     (chung to CDN đã sử dụng Cache-Control de cache)
+     (chung to CDN đã sử dùng Cache-Control để cache)
   4. Vary isolation: request với header variant khac -> MISS
-     (chung to CDN đã sử dụng Vary de isolate)
+     (chung to CDN đã sử dùng Vary de isolate)
   5. Invalidation hoạt động: ban-tag dẫn đến MISS tiep theo
-     (chung to CDN đã sử dụng Surrogate-Key de tìm object)
+     (chung to CDN đã sử dùng Surrogate-Key để tìm object)
 ```
 
-### 304 revalidation flow -- tải sao PHẢI test o CDN layer?
+### 304 revalidation flow -- tại sao PHẢI test o CDN layer?
 
 ```text
 304 revalidation là flow MÀ CHỈ CDN LAYER MỚI CÓ THỂ KIỂM TRẢ ĐƯỢC:
@@ -321,7 +321,7 @@ Cache-Control: public, s-maxage=60, stale-while-revalidate=30, stale-if-error=12
 
 CDN-Cache-Control: max-age=120, stale-while-revalidate=60
   -> Varnish: ghi de Cache-Control, TTL=120s.
-     Dụng khi origin muon CDN cache lâu hơn browser.
+     Dụng khi origin muốn CDN cache lâu hơn browser.
 
 ETag: "abc123"
   -> Varnish: lưu ETag cùng với object.
@@ -390,7 +390,7 @@ EVENT PATH: không sử dụng trong case này
 5. Không có cache warming trước -- test tự tạo MISS và 304
 ```
 
-### Tải sao precondition quản trọng?
+### Tại sao precondition quan trọng?
 
 ```text
 Nếu public request di tháng Nginx (không qua Varnish):
@@ -502,7 +502,7 @@ Cache-Control: public, s-maxage=...
   - `stale-if-error=N`: Bắt buộc. Không có -> origin lỗi -> CDN serve 503.
 
 CDN-Cache-Control: max-age=...
-  - `max-age=N`: Bắt buộc. TTL rieng cho CDN.
+  - `max-age=N`: Bắt buộc. TTL riêng cho CDN.
   - `stale-while-revalidate=N`: Bắt buộc.
   - `stale-if-error=N`: Bắt buộc.
 
@@ -592,18 +592,18 @@ if (!categoriesBody.success) {
 
 ```text
 HOMEFEED:
-  - Surrogate-Key phải chưa `catalog-homefeed`: tag de invalidation
+  - Surrogate-Key phải chưa `catalog-homefeed`: tag để invalidation
     khi catalog thay đổi.
-  - Surrogate-Key phải chưa `segment-{segment}`: tag de invalidation
+  - Surrogate-Key phải chưa `segment-{segment}`: tag để invalidation
     theo user segment (returning, new_user, guest).
   -> 1 ban-tag "catalog-homefeed" xóa toàn bộ homefeed cache.
   -> 1 ban-tag "segment-returning" xóa homefeed cho returning users.
 
 CATEGORIES:
-  - Vary phải chưa `Accept-Language`: vì categories list khac nhau
+  - Vary phải chưa `Accept-Language`: vì categories list khác nhau
     theo ngôn ngữ (ten danh muc tieng Viết vs tieng Anh).
-  - Vary phải chưa `X-Geo-Country`: vì categories khac nhau theo
-    quoc gia (sản phẩm available o VN vs US).
+  - Vary phải chưa `X-Geo-Country`: vì categories khác nhau theo
+    quốc gia (sản phẩm available o VN vs US).
   - Response body phải có success=true.
 ```
 
@@ -629,7 +629,7 @@ Ai consume:      Browser, CDN (Varnish), intermediate proxies
 ================================================================
 ```
 
-**Các directive quản trọng cho CDN**:
+**Các directive quan trọng cho CDN**:
 
 ```text
 +------------------+--------------------------------------------------+
@@ -651,14 +651,14 @@ Ai consume:      Browser, CDN (Varnish), intermediate proxies
 |                  | Nếu không có s-maxage: CDN fallback max-age.      |
 +------------------+--------------------------------------------------+
 | max-age=N        | TTL cho BROWSER (private cache).                   |
-|                  | CDN sử dụng s-maxage (nếu có), không thì max-age.  |
+|                  | CDN sử dùng s-maxage (nếu có), không thì max-age.  |
 +------------------+--------------------------------------------------+
-| stale-while-     | Thời giản CDN được serve STALE trong khi           |
+| stale-while-     | Thời gian CDN được serve STALE trong khi           |
 | revalidate=N     | REVALIDATE ASYNC với origin.                       |
 |                  | VD: s-maxage=60, stale-while-revalidate=30        |
 |                  | -> Từ giây 61 đến 90: serve cached + async fetch   |
 +------------------+--------------------------------------------------+
-| stale-if-error=N | Thời giản CDN được serve STALE khi origin LỖI.     |
+| stale-if-error=N | Thời gian CDN được serve STALE khi origin LỖI.     |
 |                  | VD: stale-if-error=120                            |
 |                  | -> Từ giây 61 đến 180: nếu origin error, serve     |
 |                  |    stale thay vì 503.                              |
@@ -707,7 +707,7 @@ Trong VCL code:
 BOX: CDN-Cache-Control
 ================================================================
 Mục đích:        Override Cache-Control DÀNH RIÊNG cho CDN.
-                 Origin muon browser cache ngắt, CDN cache lau?
+                 Origin muốn browser cache ngắt, CDN cache lau?
                  -> CDN-Cache-Control.
 Vì trị:          Response header (origin -> CDN -> client)
                  Có thể bị CDN strip (không forward cho client).
@@ -717,7 +717,7 @@ Ai consume:      CDN (Varnish) -- ưu tiên hơn Cache-Control
 ================================================================
 ```
 
-**Tải sao cần CDN-Cache-Control rieng?**
+**Tại sao cần CDN-Cache-Control rieng?**
 
 ```text
 Tình huống: Origin muon:
@@ -731,7 +731,7 @@ Tình huống: Origin muon:
     -> Những responses đã được định nghĩa ky trong HTTP spec
 
   Trường hợp phức tạp hon:
-    Origin muon browser KHÔNG ĐƯỢC CACHE những CDN ĐƯỢC CACHE
+    Origin muốn browser KHÔNG ĐƯỢC CACHE những CDN ĐƯỢC CACHE
     Cache-Control: private, nó-store  (cho browser)
     CDN-Cache-Control: max-age=600    (cho CDN)
     -> Browser: không cache
@@ -840,18 +840,18 @@ Lần 2c (TTL hết, object thay đổi): Client -> CDN -> Origin
 **Cách origin tạo ETag dụng cách**:
 
 ```text
-GOOD: ETag = hash(nội dụng response body)
-  -> Cứng nội dụng -> cứng ETag
-  -> Khac nội dụng -> khac ETag
+GOOD: ETag = hash(nội dùng response body)
+  -> Cùng nội dung -> cứng ETag
+  -> Khac nội dung -> khac ETag
   -> Ổn định qua nhiều instance (cứng hash algorithm)
 
 BAD: ETag = server_timestamp + instance_id
-  -> Cứng nội dụng, khac instance -> khac ETag
+  -> Cùng nội dung, khac instance -> khac ETag
   -> Revalidation luon fail
   -> Every request -> 200 (full body) thay vì 304
 
-BAD: ETag = random UUID mới request
-  -> Mới request -> ETag mới
+BAD: ETag = random UUID mỗi request
+  -> Mỗi request -> ETag mới
   -> Revalidation không bảo giờ pass
   -> 304 không bảo giờ xay ra
 ```
@@ -885,10 +885,10 @@ Có Vary: Accept-Language:
   -> Mới variant có cache object rieng -> không leakage!
 ```
 
-**Cách CDN sử dụng Vary**:
+**Cách CDN sử dùng Vary**:
 
 ```text
-1. CDN đọc Vary header tự origin response.
+1. CDN đọc Vary header từ origin response.
 2. CDN tach ten các request header tự Vary (phần cách bởi ", ").
 3. CDN hash giá trị các request header đo -> variant hash.
 4. Cache key = hash(path + query) + variant hash.
@@ -943,7 +943,7 @@ Ai consume:      CDN (Varnish) -- ban-tag operation
 Purge URL: xóa chính xác 1 object theo URL
   VD: purge /api/sim/products/1?lang=vì&geo=VN
   -> Xóa DỤNG 1 variant của product 1
-  -> Cần purge 32 lần de xóa hết all variants (nếu có 32 variant)
+  -> Cần purge 32 lần để xóa hết all variants (nếu có 32 variant)
 
 Ban URL prefix: xóa tất cả object có URL bắt đầu bằng prefix
   VD: ban /api/sim/products/1
@@ -974,7 +974,7 @@ Ban tag (Surrogate-Key): xóa tất cả object có tag
    - Varnish tìm tag "product-1" trong hash table
    - Lấy danh sach cache keys: [cache_key_1]
    - Xóa (invalidate) tất cả object đo
-   - Request tiep theo -> MISS -> fetch tự origin
+   - Request tiep theo -> MISS -> fetch từ origin
 
 Đây là cơ chế INVALIDATION MANH ME Nhất của Varnish.
 ```
@@ -1003,7 +1003,7 @@ Categories:
 ```text
 BOX: Last-Modified
 ================================================================
-Mục đích:        Timestamp lần cuoi object thay đổi.
+Mục đích:        Timestamp lần cuối object thay đổi.
                  Validator THAY THỂ cho ETag (kem chính xác hơn).
 Vì trị:          Response header (origin -> CDN -> client)
 Cũ phap:         Last-Modified: <http-date>
@@ -1042,14 +1042,14 @@ Varnish sử dụng Last-Modified với If-Modified-Since.
 
 ## 7. 304 Revalidation deep-dive
 
-### Tải sao 304 là "chế đo tiết kiệm băng thông"?
+### Tại sao 304 là "chế đo tiết kiệm băng thông"?
 
 ```text
 So sanh 2 scenario:
 
 SCENARIO A: Không có revalidation (không ETag)
-  Object hết hạn -> CDN luon fetch full body tự origin
-  Mới request MISS: origin trả 200 OK + ~4KB body
+  Object hết hạn -> CDN luon fetch full body từ origin
+  Mỗi request MISS: origin trả 200 OK + ~4KB body
   1000 requests = 4MB băng thông origin->CDN
 
 SCENARIO B: CÓ revalidation (có ETag)
@@ -1173,7 +1173,7 @@ assertStatus(revalidated, 304, 'detail revalidation');
 
 ```text
 Trường hợp 1: ETag không ổn định
-  -> Mới request origin trả ETag khac nhau (dữ cứng nội dụng)
+  -> Mỗi request origin trả ETag khác nhau (dữ cứng nội dung)
   -> If-None-Match luôn không khop -> luon 200
   -> Giong như không có revalidation
 
@@ -1191,8 +1191,8 @@ Trường hợp 4: Cache-Control: nó-cache thieu
   -> Client nhận 200 tự cache (stale) thay vì 304
 
 Trường hợp 5: Object đã bị xóa khỏi CDN cache
-  -> Không còn object de revalidate
-  -> CDN phải fetch FULL tự origin -> 200 (MISS)
+  -> Không còn object để revalidate
+  -> CDN phải fetch FULL từ origin -> 200 (MISS)
   -> Nếu object bị evict (LRU) trước khi TTL hết -> mặt có hoi 304
 ```
 
@@ -1228,13 +1228,13 @@ CDN nhận 304:
 +------------------------+----------+-------------------------------------------+
 | Cache-Control          | Origin   | Policy cho browser + CDN                  |
 +------------------------+----------+-------------------------------------------+
-| CDN-Cache-Control      | Origin   | Policy rieng cho CDN                       |
+| CDN-Cache-Control      | Origin   | Policy riêng cho CDN                       |
 +------------------------+----------+-------------------------------------------+
 | ETag                   | Origin   | Validator danh tính cho body              |
 +------------------------+----------+-------------------------------------------+
-| Last-Modified          | Origin   | Validator thời giản (dữ phong)             |
+| Last-Modified          | Origin   | Validator thời gian (dữ phong)             |
 +------------------------+----------+-------------------------------------------+
-| Surrogate-Key          | Origin   | Tag de ban-tag invalidation               |
+| Surrogate-Key          | Origin   | Tag để ban-tag invalidation               |
 +------------------------+----------+-------------------------------------------+
 | Vary                   | Origin   | Variant isolation dimensions              |
 +------------------------+----------+-------------------------------------------+
@@ -1360,7 +1360,7 @@ Response tự cacheable endpoint Phải có:
    - Gửi If-None-Match với ETag tự response 1
    - Nhận được 304 Not Modified
 
-7. Surrogate-Key chưa tag theo dụng convention:
+7. Surrogate-Key chứa tag theo dụng convention:
    - Product detail: chưa product-{id}
    - Homefeed: chưa catalog-homefeed, segment-{segment}
 
@@ -1374,12 +1374,12 @@ Response tự cacheable endpoint Phải có:
 ```text
 HEADER THIEU:
 
-  [FAIL] Thieu Cache-Control -> CDN không biết cache bảo lau
+  [FAIL] Thiếu Cache-Control -> CDN không biết cache bảo lau
   [FAIL] Thieu CDN-Cache-Control -> CDN không có TTL rieng
-  [FAIL] Thieu ETag -> không thể revalidate
-  [FAIL] Thieu Last-Modified -> không có validator dữ phong
-  [FAIL] Thieu Surrogate-Key -> không thể ban-tag invalidate
-  [FAIL] Thieu Vary -> không có variant isolation
+  [FAIL] Thiếu ETag -> không thể revalidate
+  [FAIL] Thiếu Last-Modified -> không có validator dữ phong
+  [FAIL] Thiếu Surrogate-Key -> không thể ban-tag invalidate
+  [FAIL] Thiếu Vary -> không có variant isolation
 
 DIRECTIVE THIEU:
 
@@ -1393,7 +1393,7 @@ DIRECTIVE THIEU:
 
   [FAIL] ETag có nhưng 304 không xay ra (trả 200)
          -> ETag không ổn định hoặc origin không hỗ trợ If-None-Match
-  [FAIL] ETag thay đổi giữa 2 request (dữ cứng nội dụng)
+  [FAIL] ETag thay đổi giữa 2 request (dữ cứng nội dung)
          -> ETag hash bị sai (timestamp-based)
 
 SURROGATE-KEY SAI:
@@ -1519,7 +1519,7 @@ default ✓ [======================================] 1 VUs  00m14.0s/10m0s  1/1 
    -> Không cần fix từng check, chỉ cần fix ROOT CAUSE là origin emit Cache-Control
 
 3. Nếu PASS những muon INSPECT response headers:
-   -> Dụng --http-debug="full" de xem toàn bộ headers
+   -> Dụng --http-debug="full" để xem toàn bộ headers
    -> Hoặc thêm console.log trong script
 
 4. Nếu 304 revalidation FAIL:
@@ -1551,7 +1551,7 @@ CDN BEHAVIOR:
   > Nếu VCL default TTL = 0s -> KHÔNG CACHE
   > Nếu VCL default TTL = 120s -> cache 120s (nhưng không được kiểm soát)
   > KHÔNG CÓ stale-while-revalidate, stale-if-error
-  > Mới request đều MISS -> origin nhận 100% traffic
+  > Mỗi request đều MISS -> origin nhận 100% traffic
 
 DECISION:
   KHÔNG ĐƯỢC DEPLOY RA PRODUCTION.
@@ -1583,7 +1583,7 @@ ROOT CAUSE:
 CDN BEHAVIOR:
   Object vẫn được cache (có Cache-Control).
   Những khi hết hạn -> CDN KHÔNG THỂ revalidate.
-  CDN phải fetch full body tự origin (200 OK).
+  CDN phải fetch full body từ origin (200 OK).
   > Băng thông origin -> CDN tang 20x.
   > Latency tang (phải cho full body transfer).
 
@@ -1607,7 +1607,7 @@ OUTPUT:
   ✗ detail revalidation status 304            <-- FAIL (trả 200 thay vì 304)
 
 ROOT CAUSE (3 kha nang):
-  1. ETag không ổn định: mới request trả ETag khac
+  1. ETag không ổn định: mỗi request trả ETag khac
      -> Origin dụng server timestamp + instance ID để tạo ETag
      -> If-None-Match không bảo giờ khop -> luon 200
 
@@ -1693,7 +1693,7 @@ QUẢN TRỌNG NHẤT trong HTTP caching.
 304 là đầu HIỆU CỦA MỘT HỆ THỐNG CACHE HOẠT ĐỘNG ĐÚNG:
   - ETag hoạt động
   - If-None-Match được hỗ trợ
-  - Origin dụng conditional logic
+  - Origin dùng conditional logic
   - Băng thông được tiết kiệm
 
 NẾU TEST TRẢ VỀ 200 KHI MONG DOI 304 -> FAIL.
@@ -1723,7 +1723,7 @@ THỰC TẾ: CDN-Cache-Control có vai trò KHAC BIET:
   3. Private browser, public CDN:
      Cache-Control: private, max-age=300   (browser cache 5m)
      CDN-Cache-Control: max-age=3600       (CDN cache 1h)
-     -> Origin muon browser private cache những CDN public cache
+     -> Origin muốn browser private cache những CDN public cache
 
   4. CDN-specific directives:
      Một số CDN hỗ trợ directive rieng (vd: CDN-Cache-Control: nó-cdn)
@@ -1733,15 +1733,15 @@ THỰC TẾ: CDN-Cache-Control có vai trò KHAC BIET:
    Nó là một PHẦN CỦA CONTRACT HOÀN CHỈNH.
 ```
 
-### Misconception 3: "ETag thay đổi mới request là bình thường"
+### Misconception 3: "ETag thay đổi mỗi request là bình thường"
 
 ```text
-NHIỀU NGUOI NGHI: "ETag là random string, mới request khác là OK."
+NHIỀU NGUOI NGHI: "ETag là random string, mỗi request khác là OK."
 
-THỰC TẾ: ETag PHẢI ỔN ĐỊNH cho cứng nội dụng.
+THỰC TẾ: ETag PHẢI ỔN ĐỊNH cho cứng nội dung.
 
-Nếu ETag thay đổi mới request:
-  -> Mới revalidation đều thật bai (If-None-Match không khớp)
+Nếu ETag thay đổi mỗi request:
+  -> Mới revalidation đều thất bại (If-None-Match không khớp)
   -> Origin LUON trả 200 (full body) thay vì 304
   -> Băng thông BỊ LANG PHI
   -> ETag thành VÔ DỤNG
@@ -1750,7 +1750,7 @@ ETag DỤNG:
   ETag = hash(JSON.stringify(response_body))
   -> Cứng body -> cứng hash -> cứng ETag
   -> Khac body -> khac hash -> khac ETag
-  -> Ổn định qua mới request, mới instance
+  -> Ổn định qua mỗi request, mới instance
 
 Nếu không thể hash body (performance):
   ETag = hash(content_version + content_updated_at)
@@ -1802,7 +1802,7 @@ Ví dụ: Product detail có 5 variant dimensions, 2-3 giá trị mới dimensio
   -> Nếu dùng purge URL: PHẢI LIET KẾ VÀ PURGE TỪNG VARIANT.
      Nếu thieu 1 variant -> user vẫn thấy cached object CŨ.
   -> Nếu dùng ban-tag product-1: 1 LẦN XÓA DỮ 32 VARIANT.
-     Không lo thieu, không mặt thời giản liet kế.
+     Không lo thieu, không mặt thời gian liet kế.
 
 Ngoài ra:
   - Surrogate-Key cho phep INVALIDATION THEO BUSINESS LOGIC:
@@ -1887,11 +1887,11 @@ CATEGORIES:
 ### Variation 1: Different TTL values
 
 ```text
-Mục đích: Kiểm trả origin có thể emit TTL khac nhau cho
-          các endpoint khac nhau.
+Mục đích: Kiểm trả origin có thể emit TTL khác nhau cho
+          các endpoint khác nhau.
 
 Thay đổi: Thay vì chỉ test 1 TTL value, test nhiều endpoint
-          với TTL khac nhau.
+          với TTL khác nhau.
 
 Ví dụ script mở rộng:
   // Product detail: TTL 60s
@@ -1921,7 +1921,7 @@ Ví dụ script mở rộng:
 
 ```text
 Mục đích: Kiểm trả CDN-Cache-Control có TTL Khác với Cache-Control.
-          Đây là tính năng quản trọng cho CDN-specific TTL.
+          Đây là tính năng quan trọng cho CDN-specific TTL.
 
 Thay đổi: Assert CDN-Cache-Control max-age != Cache-Control s-maxage.
 
@@ -2000,7 +2000,7 @@ Ví dụ script mở rộng:
   - Weak ETag (W/...) chấp nhận semantic equivalence.
   - Strong ETag ("...") yêu cầu byte-by-byte identity.
   - Nếu không có prefix W/ -> strong ETag.
-  - ETag phải ỔN ĐỊNH: cứng nội dụng -> cứng ETag.
+  - ETag phải ỔN ĐỊNH: cứng nội dung -> cứng ETag.
 ```
 
 ### Variation 4: Multiple Vary dimensions
@@ -2043,7 +2043,7 @@ Ví dụ script mở rộng:
 Ý nghĩa:
   - Vary THIEU dimension -> cache leakage.
   - Vary THUA dimension -> cache fragmentation, HIT ratio giám.
-  - Vary phải CHÍNH XÁC: chỉ chưa những header origin thực sự variant hóa.
+  - Vary phải CHÍNH XÁC: chỉ chứa những header origin thực sự variant hóa.
 ```
 
 ### Variation 5: Smoke (minimal contract)
@@ -2101,7 +2101,7 @@ Sai:
 
 Hậu quả:
   CDN đọc "private" -> KHÔNG ĐƯỢC CACHE.
-  Mới request đều MISS -> origin nhận 100% traffic.
+  Mỗi request đều MISS -> origin nhận 100% traffic.
   Nếu traffic 1000 req/s -> origin cần xử lý 1000 req/s.
 
 Cách phát hiện:
@@ -2142,20 +2142,20 @@ Sai:
   c.Header("ETag", fmt.Sprintf(`"%d-%s"`, time.Now().UnixMilli(), instanceID))
 
 Hậu quả:
-  Mới request -> ETag khac nhau (vì timestamp thay đổi).
+  Mỗi request -> ETag khác nhau (vì timestamp thay đổi).
   If-None-Match không bảo giờ khop -> luon 200 (thay vì 304).
   Revalidation vô dụng.
 
 Cách phát hiện:
   Test 304 revalidation FAIL (trả 200 thay vì 304).
-  console.log ETag 2 request -> khac nhau.
+  console.log ETag 2 request -> khác nhau.
 
 Fix:
   ETag = hash của response body:
   c.Header("ETag", fmt.Sprintf(`"%x"`, md5.Sum(responseBody)))
   Hoặc ETag = content_version + content_updated_at:
   c.Header("ETag", fmt.Sprintf("W/\"%s-%d\"", product.Version, product.UpdatedAt.Unix()))
-  Mien là ỔN ĐỊNH cho cứng nội dụng.
+  Mien là ỔN ĐỊNH cho cứng nội dung.
 ```
 
 ### Anti-pattern 4: Vary khai báo User-Agent
@@ -2195,7 +2195,7 @@ Hậu quả:
   Kho debug vì handler code Đúng nhưng response THIEU.
 
 Cách phát hiện:
-  Dụng --http-debug="full" de xem response headers.
+  Dụng --http-debug="full" để xem response headers.
   So sanh response khi goi trực tiếp origin (:8080) vs qua CDN (:80).
   Nếu origin có Cache-Control những CDN response thieu -> middleware strip.
 
@@ -2320,11 +2320,11 @@ Run guide:     ./RUN_GUIDE.md
 ### Related cases
 
 ```text
-01-hit-smoke           -- HIT/MISS behavior (sử dụng contract headers de cache)
-05-invalidation-ops    -- Purge/ban-tag (sử dụng Surrogate-Key)
-08-ttl-expiry          -- TTL expiry (sử dụng Cache-Control s-maxage)
-09-stale-while-error   -- Stale serving (sử dụng stale-while-revalidate, stale-if-error)
-10-request-coalescing  -- Request coalescing (sử dụng cache key tự Vary)
+01-hit-smoke           -- HIT/MISS behavior (sử dụng contract headers để cache)
+05-invalidation-ops    -- Purge/ban-tag (sử dùng Surrogate-Key)
+08-ttl-expiry          -- TTL expiry (sử dùng Cache-Control s-maxage)
+09-stale-while-error   -- Stale serving (sử dùng stale-while-revalidate, stale-if-error)
+10-request-coalescing  -- Request coalescing (sử dùng cache key tự Vary)
 ```
 
 ### HTTP spec references
