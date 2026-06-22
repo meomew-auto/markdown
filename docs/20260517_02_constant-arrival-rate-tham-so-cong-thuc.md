@@ -4575,6 +4575,67 @@ config: rate=10, timeUnit="1s", duration="30s"
 => N_sched = 10 × 30 = 300 mốc start
 ```
 
+**── Bể bơi có vòi nước chảy đều ──**
+
+```text
+Một bể bơi được bơm nước với lưu lượng CỐ ĐỊNH 30 lít/phút.
+Mở vòi trong 15 phút:
+  => Tổng nước = lưu lượng × thời gian = 30 × 15 = 450 lít
+
+  Công thức hoàn toàn tương tự N_sched:
+    N_sched    = rate     × duration (cùng đơn vị)
+    lượng nước = lưu lượng × thời gian
+
+  Đây là lý do công thức N_sched dễ nhớ: nó chính là "tổng = tốc độ × thời gian"
+  mà bạn đã học từ cấp 1. Điểm KHÁC duy nhất là bạn phải kiểm tra
+  timeUnit để quy về cùng đơn vị trước khi nhân.
+```
+
+**── Ví dụ số lẻ (không tròn) ──**
+
+```text
+config: rate=7, timeUnit="1s", duration="13s"
+=> N_sched = 7 × 13 = 91 mốc start
+
+  Đây là con số KHÔNG tròn — cho thấy công thức là PHÉP NHÂN THUẦN,
+  không làm tròn, không ceil, không floor. K6 sẽ schedule ĐÚNG 91 slot.
+
+config: rate=11, timeUnit="2s", duration="7s"
+=> Bước 1: quy timeUnit về giây → 2s
+=> Bước 2: N_sched = 11 × 7 / 2 = 38.5 → nhưng k6 schedule 38 hay 39?
+=> Đáp án: 38 slot (k6 dùng floor, vì 38.5 slot cuối chưa đủ 1 interval
+   để ticker gõ, xem code constant_arrival_rate.go:209)
+```
+
+**── Verify từ output: kiểm tra N_sched đã tính có khớp thực tế không ──**
+
+```text
+Sau khi chạy test, mở summary JSON:
+  {
+    "iterations":          72,
+    "dropped_iterations":  8,
+    "interrupted":         0
+  }
+
+  Bước 1: Tính N_sched = rate × duration / timeUnit
+    config: rate=10, timeUnit="1s", duration="8s"
+    => N_sched = 10 × 8 = 80
+
+  Bước 2: Lấy số từ output:
+    N_done = iterations          = 72
+    N_drop = dropped_iterations  = 8
+    N_int  = interrupted         = 0
+
+  Bước 3: So sánh:
+    72 + 8 + 0 = 80
+    80 = N_sched ✓ (khớp tuyệt đối)
+
+  Nếu 72 + 8 + 0 = 80 ≠ N_sched → có thể do:
+    - execution segment chia rate (xem mục 3.9.3)
+    - iter bị interrupted thực sự (không hiển thị trong summary)
+    - timeUnit không được quy đúng
+```
+
 **Khi nào dùng**: ước lượng số iter scenario sẽ có, đối chiếu với metric
 `iterations` + `dropped_iterations` sau test.
 
@@ -4691,6 +4752,185 @@ lambda = 120/60 = 2 iter/s
 required_vus = ceil(2 × 1) × 1.2 = 3 VU
 ```
 
+**── Little's Law: L = λ × W ──**
+
+```text
+Công thức 3 CHÍNH LÀ Little's Law — một định luật nổi tiếng trong
+Queueing Theory (lý thuyết hàng đợi):
+
+  L = λ × W
+
+  Trong đó:
+    L (Length)    = số người/phần tử ĐANG ở trong hệ thống
+    λ (lambda)    = tốc độ đến (arrival rate) — đơn vị: người/giây
+    W (Wait/Work) = thời gian mỗi người ở trong hệ thống
+
+  Ánh xạ sang k6:
+    L = required_vus  → số VU đang chạy song song
+    λ = rate / timeUnit_in_seconds  → tốc độ iter mới được schedule
+    W = iter_time  → thời gian 1 VU hoàn thành 1 iter
+
+  Vậy: required_vus = λ × W
+      = (rate / timeUnit) × iter_time
+      = rate × iter_time / timeUnit_in_seconds
+
+  → Đây chính là công thức GỐC, chưa × 1.2
+```
+
+**── Phân tích từng thành phần ──**
+
+```text
+Công thức đầy đủ:
+  required_vus = ceil( rate × iter_time / timeUnit_in_seconds ) × 1.2
+
+  Bước 1: rate / timeUnit_in_seconds = λ (arrival rate, đơn vị iter/s)
+    vd: rate=10, timeUnit="1s" → λ = 10 iter/s
+    vd: rate=120, timeUnit="1m" → λ = 120/60 = 2 iter/s
+
+  Bước 2: λ × iter_time = số iter ĐANG CHẠY tại 1 thời điểm bất kỳ
+    vd: λ=10 iter/s, iter_time=0.5s → 10 × 0.5 = 5 iter đang chạy
+    → luôn có ĐÚNG 5 VU bận tại mọi thời điểm (trung bình)
+
+  Bước 3: ceil(...) — làm tròn LÊN
+    vd: 5 → ceil(5) = 5 (đã nguyên)
+    vd: 4.2 → ceil(4.2) = 5 (VU là số nguyên, không có 4.2 VU)
+
+  Bước 4: × 1.2 — dự phòng 20%
+    vd: ceil(5) × 1.2 = 6 VU
+```
+
+**── Tại sao dùng ceil()? ──**
+
+```text
+VU (Virtual User) là ĐƠN VỊ RỜI RẠC — bạn không thể có 3.2 VU hay 7.8 VU.
+Khi tính ra 4.2 VU, ceil(4.2) = 5 VU là con số AN TOÀN.
+
+  So sánh ceil vs floor:
+    ceil(4.2)  = 5 VU → đủ, có dư chút → KHÔNG drop
+    floor(4.2) = 4 VU → thiếu 0.2 VU-worth capacity → CÓ drop
+
+  Quy tắc: LUÔN ceil, không bao giờ floor khi sizing VU.
+  Thiếu 0.1 VU cũng có nghĩa là thiếu hẳn 1 VU — vì VU là nguyên.
+```
+
+**── Tại sao × 1.2 (dự phòng 20%)? ──**
+
+```text
+1.2 KHÔNG phải con số ngẫu nhiên. Nó bù cho:
+
+  a) iter_time KHÔNG phải hằng số
+     - Bạn đo iter_time trung bình = 0.5s
+     - Nhưng p95 có thể là 0.8s, p99 là 1.2s
+     - Khi iter chậm hơn dự kiến, cần thêm VU để giữ rate
+
+  b) Biến động mạng (network jitter)
+     - HTTP request không phải lúc nào cũng về trong X ms
+     - 1 request chậm kẹt 1 VU → cần VU khác gánh slot tiếp theo
+
+  c) VU init time
+     - K6 cần thời gian để khởi tạo VU mới (compile script, tạo context)
+     - Nếu tất cả VU đều bận, slot tiếp theo phải đợi init VU mới
+     - Có sẵn 20% VU dự phòng giúp hấp thụ slot mà không cần init
+
+  20% là con số empirical (thực nghiệm) an toàn cho hầu hết trường hợp.
+  Với hệ thống ổn định, iter_time đều, có thể giảm xuống 1.1.
+  Với hệ thống biến động cao (p99 >> p50), nên tăng lên 1.3–1.5.
+```
+
+**── Quầy thu ngân siêu thị ──**
+
+```text
+Siêu thị đông khách:
+  λ = 20 khách đến quầy/phút (đều đặn)
+  W = mỗi khách cần 2 phút để tính tiền
+
+  Áp dụng Little's Law:
+    L = λ × W = 20 × 2 = 40 khách đang được phục vụ CÙNG LÚC
+
+  Vậy siêu thị cần ÍT NHẤT 40 quầy thu ngân mở đồng thời?
+  → Đúng! Nếu mở ít hơn 40 quầy, khách sẽ xếp hàng dài mãi mãi
+    (hàng đợi tăng vô hạn — unstable queue)
+
+  Đây chính là lý do các siêu thị lớn mở RẤT NHIỀU quầy giờ cao điểm.
+  Nếu chỉ có 30 quầy: capacity = 30/2 = 15 khách/phút, drop = 5 khách/phút.
+
+  Liên hệ với k6: quầy = VU, khách = iter.
+```
+
+**── Ảnh hưởng của minIterationDuration ──**
+
+```text
+Khi code có minIterationDuration (hoặc sleep cố định dài hơn iter_time thực):
+
+  config: rate=10, timeUnit="1s"
+  code:
+    sleep(0.2)           // iter_time thực = 0.2s
+    minIterationDuration = 0.5s  // k6 giãn iter ra 0.5s
+
+  W_effective = max(iter_time, minIterationDuration) = max(0.2, 0.5) = 0.5s
+
+  required_vus = ceil(10 × 0.5 / 1) × 1.2 = ceil(5) × 1.2 = 6 VU
+
+  Nếu dùng iter_time=0.2s thay vì 0.5s:
+    → ceil(10 × 0.2) × 1.2 = 2.4 → 3 VU (tính SAI)
+    → 3 VU không đủ vì mỗi iter kéo dài 0.5s, không phải 0.2s
+
+  Quy tắc: W = thời gian THỰC TẾ 1 VU bận, bao gồm mọi sleep và
+  minIterationDuration. Đo bằng metric iteration_duration, không đo bằng code.
+```
+
+**── Ví dụ k6 đầy đủ với output thật ──**
+
+```js
+// script.js
+export const options = {
+  scenarios: {
+    constant_load: {
+      executor: 'constant-arrival-rate',
+      rate: 15,
+      timeUnit: '1s',
+      duration: '30s',
+      preAllocatedVUs: 10,  // ← sizing bằng Công thức 3
+    },
+  },
+};
+
+export default function () {
+  sleep(0.3);  // iter_time ≈ 0.3s
+}
+```
+
+```text
+Tính toán trước khi chạy:
+  λ = 15/1 = 15 iter/s
+  W = 0.3s
+  required_vus = ceil(15 × 0.3) × 1.2 = ceil(4.5) × 1.2 = 5 × 1.2 = 6
+
+  → Đặt preAllocatedVUs = 6 (dư so với tính toán, an toàn)
+  → Trong ví dụ trên đặt 10 → càng an toàn, không drop
+
+Output summary (sau khi chạy):
+  {
+    "iterations":          448,
+    "dropped_iterations":  0,
+    "vus_max":             8,
+    "iteration_duration": {
+      "avg": 0.31,
+      "p95": 0.45,
+      "p99": 0.62
+    }
+  }
+
+  Phân tích:
+    - N_sched = 15 × 30 = 450
+    - iterations = 448, dropped = 0 → 448 + 0 = 448 ≈ 450 ✓
+    - vus_max = 8 → thực tế dùng đến 8 VU (p99 iter_time=0.62s gây ra)
+    - Nếu chỉ đặt preAllocatedVUs = 6 (theo công thức):
+      → vus_max sẽ bị giới hạn ở 6, có thể gây drop khi p99 lên 0.62s
+    - Kết luận: dùng p99 iter_time thay vì avg khi sizing AN TOÀN:
+      required_vus_p99 = ceil(15 × 0.62) × 1.2 = ceil(9.3) × 1.2 = 12 VU
+```
+
 **Khi nào dùng**: trước khi chạy test, để biết đặt `preAllocatedVUs`
 bao nhiêu cho đủ. Nếu thiếu, sẽ có `dropped_iterations` lúc rate đỉnh.
 
@@ -4721,6 +4961,111 @@ M = 6 VU, code sleep(0.5) -> iter_time = 0.5s
 M = 4 VU, code sleep(1) -> iter_time = 1s
 => capacity = 4 / 1 = 4 iter/s
 => nếu config rate = 5/s -> sẽ DROP 1 iter/s (vượt capacity)
+```
+
+**── Phân tích decomposition: capacity = M × (1/iter_time) ──**
+
+```text
+capacity = M / iter_time = M × (1 / iter_time)
+
+  Trong đó:
+    M            = số VU trong pool (số nhân viên)
+    1/iter_time  = tốc độ 1 VU: 1 VU làm được bao nhiêu iter/giây
+
+  vd: iter_time = 0.5s → 1 VU làm được 1/0.5 = 2 iter/s
+      → Mỗi VU như 1 cái máy, cứ 0.5s hoàn thành 1 sản phẩm (iter)
+
+  Vậy capacity = (số máy) × (tốc độ 1 máy)
+               = M VU × (1/iter_time) iter/s mỗi VU
+
+  Đây chính là pattern của constant-vus:
+    Với constant-vus: rate = VUs / iter_time  (tự nhiên, không kiểm soát)
+    Với constant-arrival-rate: capacity = M / iter_time (giới hạn trên)
+
+  Điểm giống: cùng công thức M / iter_time
+  Điểm khác: constant-vus DÙNG công thức này để sinh tải tự nhiên,
+             constant-arrival-rate DÙNG để tính GIỚI HẠN CHỊU ĐỰNG
+```
+
+**── Đội sửa xe ──**
+
+```text
+Một garage có 3 thợ sửa xe:
+  Mỗi xe cần 20 phút để sửa xong.
+  => 1 thợ trong 60 phút sửa được: 60/20 = 3 xe
+  => Cả đội 3 thợ trong 60 phút sửa được: 3 × 3 = 9 xe
+
+  capacity (xe/giờ) = M / iter_time (giờ)
+                     = 3 / (20/60)
+                     = 3 / 0.333
+                     = 9 xe/giờ
+
+  Nếu có 9 xe đến mỗi giờ → đội vừa đủ (không tồn đọng)
+  Nếu có 12 xe đến mỗi giờ → thiếu 3 xe/giờ (tồn đọng tăng dần)
+  Nếu có 6 xe đến mỗi giờ → dư 3 thợ... nhưng thợ vẫn phải trả lương!
+
+  Bài học cho k6: đừng đặt preAllocatedVUs quá cao hơn mức cần —
+  VU dư thừa vẫn tiêu tốn RAM/CPU của máy chạy k6.
+```
+
+**── Bảng so sánh capacity với các giá trị M khác nhau ──**
+
+```text
+Cho iter_time = 0.5s (cố định), thay đổi M:
+
+  M (VU)    capacity = M/0.5     rate tối đa chịu được
+  ──────    ────────────────     ─────────────────────
+    1       2 iter/s             2/s
+    3       6 iter/s             6/s
+    5       10 iter/s            10/s
+   10       20 iter/s            20/s
+   20       40 iter/s            40/s
+   50       100 iter/s           100/s
+
+  Nhận xét:
+  - M tăng gấp đôi → capacity tăng gấp đôi (tuyến tính)
+  - Muốn chịu rate 100/s với iter_time=0.5s → cần ÍT NHẤT 50 VU
+  - Nếu iter_time giảm 1 nửa (0.25s) → capacity GẤP ĐÔI với cùng M:
+      M=10, iter_time=0.25s → capacity = 10/0.25 = 40 iter/s
+
+  Kết luận: có 2 cách tăng capacity —
+    Cách 1: tăng M (thêm VU) → tốn tài nguyên
+    Cách 2: giảm iter_time (tối ưu code) → miễn phí, nên làm trước
+```
+
+**── Kết nối ngược với Công thức 3: chiều ngược của Little's Law ──**
+
+```text
+Little's Law có 3 biến: L = λ × W. Biết 2 trong 3 → suy ra biến còn lại.
+
+  Công thức 3 (chiều xuôi):
+    Biết: λ (rate) và W (iter_time)
+    Tìm: L (required_vus)
+    → required_vus = ceil(λ × W) × 1.2
+
+  Công thức 4 (chiều ngược):
+    Biết: L (M, số VU có sẵn) và W (iter_time)
+    Tìm: λ_max (capacity, rate tối đa)
+    → capacity = L / W = M / iter_time
+
+  Cả hai cùng GỐC Little's Law, chỉ khác hướng suy luận:
+    - CT3: "Tôi muốn rate X, cần bao nhiêu VU?"
+    - CT4: "Tôi có M VU, chịu được rate bao nhiêu?"
+```
+
+**── Ví dụ k6 với số cụ thể ──**
+
+```text
+pool: M = 10 VU, iter_time = 0.3s
+  capacity = 10 / 0.3 = 33.3 iter/s
+
+  Nếu config rate = 33/s → vừa đủ, không drop
+  Nếu config rate = 40/s → drop khoảng 6.7/s
+    → Chạy 30s: drop dự kiến = 6.7 × 30 ≈ 200 iter
+
+  Nếu muốn chịu rate = 50/s mà không tăng VU:
+  → Cần giảm iter_time xuống: M / rate_max = 10 / 50 = 0.2s
+  → Phải tối ưu code từ 0.3s xuống 0.2s (giảm 33% thời gian)
 ```
 
 **Khi nào dùng**: đã có pool VU sẵn (vd test infrastructure cố định),
@@ -4760,6 +5105,127 @@ N_done + N_drop + N_int ≈ N_sched (đẳng thức gần đúng)
 vd: rate=10, duration=5s -> N_sched = 50
     summary: iterations=42, dropped_iterations=8, interrupted=0
     => 42 + 8 + 0 = 50 ✓ (khớp)
+```
+
+**── Vì sao dùng max(0, ...)? ──**
+
+```text
+max(0, rate − capacity) đảm bảo drop_rate KHÔNG BAO GIỜ ÂM:
+
+  Trường hợp 1: capacity ≥ rate (đủ VU)
+    drop_rate = max(0, rate − capacity)
+    vd: rate=10, capacity=15 → max(0, 10−15) = max(0, −5) = 0
+    → Không drop, dù pool DƯ capacity. Số dư không thành "drop âm".
+
+  Trường hợp 2: capacity < rate (thiếu VU)
+    drop_rate = max(0, rate − capacity)
+    vd: rate=15, capacity=10 → max(0, 15−10) = 5 iter/s
+    → Drop ĐÚNG 5 iter/s — phần vượt quá năng lực
+
+  Nếu KHÔNG có max(0, ...) mà dùng rate − capacity trực tiếp:
+    capacity=15, rate=10 → drop_rate = −5 → VÔ NGHĨA
+    (không thể có "drop âm", không thể "thiếu hụt ngược")
+
+  max(0, ...) là cách toán học nói: "chỉ drop khi thiếu, không drop khi đủ"
+```
+
+**── Quán phở quá tải ──**
+
+```text
+Quán phở giờ cao điểm:
+  12 khách đến mỗi phút (đều đặn, không dồn cục)
+  Nhưng quán chỉ có 4 bàn, mỗi khách ăn 30 giây:
+    capacity = 4 / 0.5 = 8 khách/phút
+
+  drop_rate = max(0, 12 − 8) = 4 khách/phút bỏ đi
+
+  Trong 1 giờ cao điểm (60 phút):
+    - 12 × 60 = 720 khách đến
+    - 8 × 60 = 480 khách được phục vụ
+    - 4 × 60 = 240 khách bỏ đi (drop)
+    - Kiểm tra: 480 + 240 = 720 ✓
+
+  Đây chính là lý do quán phở đông khách mở thêm bàn,
+  hoặc phục vụ nhanh hơn (giảm iter_time) để tăng capacity.
+```
+
+**── Timeline minh họa: slot nào bị drop? ──**
+
+```text
+1 giây có 10 slot được schedule (rate=10/s, interval=0.1s)
+Pool chỉ có 6 VU, iter_time = 0.5s
+
+Thời gian (s)   0.0  0.1  0.2  0.3  0.4  0.5  0.6  0.7  0.8  0.9  1.0
+Slot #           0    1    2    3    4    5    6    7    8    9   10
+                 ↓    ↓    ↓    ↓    ↓    ↓    ↓    ↓    ↓    ↓
+VU bận          VU0  VU1  VU2  VU3  VU4  VU5  ?    ?    ?    ?    ?
+                                                    ↑
+                          VU0 rảnh lúc t=0.5 ───────┘
+                          → slot #5 dùng VU0 (vừa rảnh)
+
+Slot #6 (t=0.6): tất cả 6 VU đều bận → DROP
+Slot #7 (t=0.7): VU1 rảnh lúc 0.6 → OK
+Slot #8 (t=0.8): VU2 rảnh lúc 0.7 → OK
+Slot #9 (t=0.9): VU3 rảnh lúc 0.8 → OK
+Slot #10 (t=1.0): VU4 rảnh lúc 0.9 → OK
+
+  Kết quả: 11 slot (0-10), 10 được pick up, 1 bị drop (slot #6)
+  drop_rate thực tế = 1 iter/s
+  drop_rate công thức = max(0, 10 − 6/0.5) = max(0, 10−12) = 0
+
+  → Tại sao công thức nói 0 mà thực tế drop 1?
+  → Vì drop còn phụ thuộc vào PHA (phase) giữa các slot.
+     Công thức cho GIÁ TRỊ TRUNG BÌNH dài hạn.
+     Trong ngắn hạn (1s), có thể lệch 1-2 slot do timing.
+```
+
+**── Nhiều mức rate khác nhau, cùng 1 pool ──**
+
+```text
+Pool cố định: M = 6 VU, iter_time = 0.5s → capacity = 12/s
+
+  Rate config    capacity    drop_rate     Chạy 30s dự kiến drop
+  ───────────    ────────    ─────────     ─────────────────────
+  5/s            12/s        max(0,5-12)=0     0 iter
+  8/s            12/s        max(0,8-12)=0     0 iter
+  10/s           12/s        max(0,10-12)=0    0 iter
+  12/s           12/s        max(0,12-12)=0    0 iter (vừa đủ)
+  15/s           12/s        max(0,15-12)=3    90 iter
+  20/s           12/s        max(0,20-12)=8    240 iter
+  30/s           12/s        max(0,30-12)=18   540 iter
+
+  Điểm gãy (break point): rate = capacity = 12/s.
+  - Dưới điểm gãy: drop = 0 (an toàn)
+  - Trên điểm gãy: drop tăng tuyến tính theo rate
+  - Đúng điểm gãy: về lý thuyết không drop, thực tế có thể lác đác
+```
+
+**── Dấu hiệu nhận biết drop trong output ──**
+
+```text
+Khi mở summary JSON, tìm các dấu hiệu sau:
+
+  1) dropped_iterations > 0
+     → Dấu hiệu trực tiếp nhất. Số iter đã bị drop.
+
+  2) Warning trong log:
+     "Insufficient VUs, had to drop N iterations"
+     → K6 in ra warning này khi drop xảy ra (level WARN)
+
+  3) vus_max == maxVUs (chạm trần)
+     Nếu bạn đặt maxVUs = 10 và vus_max = 10:
+     → K6 đã dùng HẾT VU, có thể vẫn thiếu → check dropped_iterations
+
+  4) iterations < N_sched một cách đáng kể
+     vd: N_sched = 500, iterations = 380, dropped = 0
+     → Có thể drop không được ghi nhận, hoặc iter bị lỗi/abort
+
+  5) Tỉ lệ drop:
+     drop_ratio = dropped_iterations / N_sched
+     - < 1%: chấp nhận được, timing noise
+     - 1-5%: đáng quan tâm, xem lại sizing
+     - > 5%: sizing thiếu rõ ràng, tăng VU hoặc giảm rate
+     - > 20%: test KHÔNG có ý nghĩa, phần lớn slot bị drop
 ```
 
 **Khi nào dùng**: sau test, để verify hệ thống có chịu được rate config
