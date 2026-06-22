@@ -3,93 +3,96 @@
 > **Case ID:** `cdn-03-bypass-rules`
 > **Script:** `03-bypass-rules.js`
 > **Layer:** CDN / Varnish
-> **Proof:** Authorization/Cookie/no-cache/write không được cache HIT
+> **Proof:** auth/cookie/no-cache/write requests must not become `HIT`
 
 ## 1. Business situation
 
-Authenticated, cookie-bearing, no-cache and write requests must bypass CDN cache.
+Authenticated reads, cookie-bearing requests, explicit no-cache requests, and write operations can contain private or mutation-sensitive data. CDN must not store and replay them as shared cache objects.
 
 ## 2. CDN capability being proven
 
-Prevents private or mutation traffic from being cached and served to the wrong caller.
+Proves Varnish bypasses shared cache for traffic that must reach origin:
 
-This case proves: **Authorization/Cookie/no-cache/write không được cache HIT**.
+- `Authorization` header;
+- `Cookie` header;
+- `Cache-Control: no-cache`;
+- unsafe/write method such as cart add.
 
 ## 3. Runtime path and precondition
 
 ```text
 Public path:  http://localhost:80 -> Varnish -> Nginx -> app
-Control path: http://localhost:8088 when setup/invalidation/origin counters are needed
-Event path:   http://localhost:9091 for catalog event invalidation cases
+Control path: not required for this case
+Event path:   not used
 ```
 
-Precondition: Public path qua CDN; không cần control token cho riêng case này.
+Precondition: run through the public CDN URL. Do not use direct/control path for the bypass proof.
 
 ## 4. Script and env knobs
 
 Source:
 
 ```text
-E:\Projects\k6\k6-metrics-server\load-target\k6\cdn\03-bypass-rules.js
+E:/Projects/k6/k6-metrics-server/load-target/k6/cdn/03-bypass-rules.js
 ```
 
-Env knobs:
-
-- Không có env knob riêng; dùng env chung trong `RUN_GUIDE.md`.
+Env knobs: no case-specific knobs; use common env from `RUN_GUIDE.md`.
 
 ## 5. Request sequence
 
-1. GET với Authorization -> not HIT
-2. GET với Cookie -> not HIT
-3. GET với Cache-Control:no-cache -> not HIT
-4. POST cart add -> not HIT, upstream cart-service
+1. `GET /api/sim/products/1` with `Authorization` -> not `HIT`.
+2. `GET /api/sim/products/1` with `Cookie` -> not `HIT`.
+3. `GET /api/sim/products/1` with `Cache-Control: no-cache` -> not `HIT`.
+4. `POST /api/sim/cart/add` -> not `HIT`, upstream `cart-service`.
 
-## 6. Catalog calls
+## 6. Expected observations
 
-| Phase | Method | Base URL | Path | Expected |
-| --- | --- | --- | --- | --- |
-|  | GET | publicBaseUrl | /api/sim/products/1 | expectedStatus=200; expectedCache=not HIT |
-|  | GET | publicBaseUrl | /api/sim/products/1 | expectedStatus=200; expectedCache=not HIT |
-|  | GET | publicBaseUrl | /api/sim/products/1 | expectedStatus=200; expectedCache=not HIT |
-|  | POST | publicBaseUrl | /api/sim/cart/add | expectedStatus=200; expectedCache=not HIT; expectedUpstream=cart-service |
+| Traffic type | Expected cache behavior |
+| --- | --- |
+| auth read | not `HIT` |
+| cookie read | not `HIT` |
+| no-cache read | not `HIT` |
+| write/cart add | not `HIT`; upstream `cart-service` |
 
 ## 7. Pass/fail criteria
 
 PASS when:
 
-```text
-k6 exits 0
-checks pass
-required X-Cache/header sequence matches the contract
-setup/control/event calls complete when this case uses them
-```
+- k6 exits 0.
+- all named bypass checks pass.
+- none of the private/write requests returns a shared-cache `HIT`.
 
 FAIL when:
 
-- Private request HIT -> nguy cơ leak cache
-- POST có cache key/header HIT -> write path bị cache sai
-- Bypass response thiếu upstream/service signal
+- auth/cookie/no-cache/write traffic returns `HIT`;
+- write response exposes cache-key/HIT behavior;
+- upstream signal is missing for write traffic.
 
 ## 8. How to run
 
 ```powershell
-cd E:\Projects\k6\k6-metrics-server
+cd E:/Projects/k6/k6-metrics-server
 $env:BASE_URL = "http://localhost:80"
 $env:CONTROL_BASE_URL = "http://localhost:8088"
 $env:CATALOG_EVENTS_BASE_URL = "http://localhost:9091"
 $env:OPS_AUTH_TOKEN = "<ops-token>"
-.\scriptsun-cdn-capabilities.ps1 -Scenarios 03-bypass-rules
+./scripts/run-cdn-capabilities.ps1 -Scenarios 03-bypass-rules
 ```
 
 ## 9. How to read output
 
-- Check k6 threshold summary first.
-- Then read the named checks for cache-state/header expectations.
-- For control/event cases, a setup endpoint returning 200 is not enough; the following public request must show the expected cache effect.
-- For expected 404/negative-cache behavior, judge by checks and headers, not by status-only intuition.
+Do not look for a `MISS -> HIT` sequence here. Correct behavior is “not `HIT`” for every private/write path.
 
-## 10. Reference
+## 10. Common failure interpretation
+
+| Symptom | Likely area to inspect |
+| --- | --- |
+| auth/cookie `HIT` | VCL `vcl_recv` bypass rules |
+| no-cache `HIT` | request Cache-Control handling |
+| POST cached | unsafe method handling and backend routing |
+
+## 11. Reference
 
 - Run guide: `./RUN_GUIDE.md`
 - Overview: `./00_overview.md`
-- Source README: `E:\Projects\k6\k6-metrics-server\load-target\k6\cdn\README.md`
+- Source README: `E:/Projects/k6/k6-metrics-server/load-target/k6/cdn/README.md`

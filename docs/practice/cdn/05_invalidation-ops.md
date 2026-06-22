@@ -3,92 +3,96 @@
 > **Case ID:** `cdn-05-invalidation-ops`
 > **Script:** `05-invalidation-ops.js`
 > **Layer:** CDN / Varnish
-> **Proof:** purge exact URL, ban-url, ban-tag invalidates expected objects
+> **Proof:** purge, ban-url, and ban-tag invalidate expected objects
 
 ## 1. Business situation
 
-Operators purge or ban cached objects after content or product updates.
+Operators need a safe way to remove stale content after product/content updates. Exact purge, URL ban, and tag ban each cover a different operational need.
 
 ## 2. CDN capability being proven
 
-Proves purge by URL, ban by URL and ban by surrogate tag remove the correct cached objects.
+Proves manual invalidation affects the real cached object, not just the control endpoint:
 
-This case proves: **purge exact URL, ban-url, ban-tag invalidates expected objects**.
+```text
+warm object -> HIT
+call purge/ban/ban-tag -> 200
+next public request -> MISS
+```
 
 ## 3. Runtime path and precondition
 
 ```text
 Public path:  http://localhost:80 -> Varnish -> Nginx -> app
-Control path: http://localhost:8088 when setup/invalidation/origin counters are needed
-Event path:   http://localhost:9091 for catalog event invalidation cases
+Control path: http://localhost:8088 for purge/ban/ban-tag
+Event path:   not used
 ```
 
-Precondition: Warm objects trước, gọi control plane qua `:8088` với ops token.
+Precondition: warm each object before invalidation and use `OPS_AUTH_TOKEN` for control calls.
 
 ## 4. Script and env knobs
 
 Source:
 
 ```text
-E:\Projects\k6\k6-metrics-server\load-target\k6\cdn\05-invalidation-ops.js
+E:/Projects/k6/k6-metrics-server/load-target/k6/cdn/05-invalidation-ops.js
 ```
 
-Env knobs:
-
-- Không có env knob riêng; dùng env chung trong `RUN_GUIDE.md`.
+Env knobs: no case-specific knobs; use common env from `RUN_GUIDE.md`.
 
 ## 5. Request sequence
 
-1. warm `/api/cached` then purge exact -> next MISS
-2. warm product detail then ban-url -> next MISS
-3. warm recommendations by surrogate tag then ban-tag -> next MISS
+1. Warm `/api/cached/...` to `MISS -> HIT`, then purge exact URL -> next request `MISS`.
+2. Warm `/api/sim/products/1` to `MISS -> HIT`, then ban URL -> next request `MISS`.
+3. Warm `/api/sim/products/1/recommendations`, then ban surrogate tag -> next request `MISS`.
 
-## 6. Catalog calls
+## 6. Expected observations
 
-| Phase | Method | Base URL | Path | Expected |
-| --- | --- | --- | --- | --- |
-|  | POST | controlBaseUrl | /ops/app/cdn/cache/purge | expectedStatus=200 |
-|  | POST | controlBaseUrl | /ops/app/cdn/cache/ban-url | expectedStatus=200 |
-|  | POST | controlBaseUrl | /ops/app/cdn/cache/ban-tag | expectedStatus=200 |
-|  | GET | publicBaseUrl | /api/cached, /api/sim/products/1, /api/sim/products/1/recommendations | expectedSequence=warm MISS/HIT -> invalidate -> MISS |
+| Invalidation type | Control endpoint | Public proof |
+| --- | --- | --- |
+| exact purge | `/ops/app/cdn/cache/purge` | next same URL `MISS` |
+| ban URL | `/ops/app/cdn/cache/ban-url` | next same URL `MISS` |
+| ban tag | `/ops/app/cdn/cache/ban-tag` | tagged object next request `MISS` |
 
 ## 7. Pass/fail criteria
 
 PASS when:
 
-```text
-k6 exits 0
-checks pass
-required X-Cache/header sequence matches the contract
-setup/control/event calls complete when this case uses them
-```
+- k6 exits 0.
+- warm objects reach `HIT` before invalidation.
+- control calls return success.
+- next public request is `MISS` for the expected object(s).
 
 FAIL when:
 
-- Control 200 nhưng next request HIT -> invalidation không tác động đúng object
-- Purge exact làm mất quá rộng -> collateral invalidation
-- ban-tag không cover related object -> surrogate tags sai
+- control returns 200 but public request remains `HIT`;
+- invalidation is too broad and breaks unrelated objects;
+- tag invalidation does not cover related objects.
 
 ## 8. How to run
 
 ```powershell
-cd E:\Projects\k6\k6-metrics-server
+cd E:/Projects/k6/k6-metrics-server
 $env:BASE_URL = "http://localhost:80"
 $env:CONTROL_BASE_URL = "http://localhost:8088"
 $env:CATALOG_EVENTS_BASE_URL = "http://localhost:9091"
 $env:OPS_AUTH_TOKEN = "<ops-token>"
-.\scriptsun-cdn-capabilities.ps1 -Scenarios 05-invalidation-ops
+./scripts/run-cdn-capabilities.ps1 -Scenarios 05-invalidation-ops
 ```
 
 ## 9. How to read output
 
-- Check k6 threshold summary first.
-- Then read the named checks for cache-state/header expectations.
-- For control/event cases, a setup endpoint returning 200 is not enough; the following public request must show the expected cache effect.
-- For expected 404/negative-cache behavior, judge by checks and headers, not by status-only intuition.
+A successful control response is setup evidence only. The final proof is the next public request showing `MISS` after the object had previously been `HIT`.
 
-## 10. Reference
+## 10. Common failure interpretation
+
+| Symptom | Likely area to inspect |
+| --- | --- |
+| control unauthorized | `OPS_AUTH_TOKEN`, Nginx/control routing |
+| next request still `HIT` | Varnish purge/ban implementation or URL normalization mismatch |
+| tag miss | `Surrogate-Key` generation and ban-tag mapping |
+
+## 11. Reference
 
 - Run guide: `./RUN_GUIDE.md`
 - Overview: `./00_overview.md`
-- Source README: `E:\Projects\k6\k6-metrics-server\load-target\k6\cdn\README.md`
+- Source README: `E:/Projects/k6/k6-metrics-server/load-target/k6/cdn/README.md`

@@ -3,91 +3,107 @@
 > **Case ID:** `cdn-08-ttl-expiry`
 > **Script:** `08-ttl-expiry.js`
 > **Layer:** CDN / Varnish
-> **Proof:** object HIT trước TTL và MISS sau TTL expiry
+> **Proof:** `MISS -> HIT -> wait TTL -> MISS`
 
 ## 1. Business situation
 
-A homefeed object should be served from cache until TTL expires, then refresh from origin.
+A homefeed object should be served from cache while it is fresh, then refreshed from origin after its shared-cache TTL expires.
 
 ## 2. CDN capability being proven
 
-Proves cached object transitions HIT -> expired -> MISS after s-maxage.
+Proves freshness transitions over time:
 
-This case proves: **object HIT trước TTL và MISS sau TTL expiry**.
+```text
+cold object -> MISS
+fresh repeat -> HIT
+wait past TTL -> MISS/refill
+```
+
+This is different from manual invalidation. Nothing triggers a purge; time alone should move the object from fresh to expired.
 
 ## 3. Runtime path and precondition
 
 ```text
 Public path:  http://localhost:80 -> Varnish -> Nginx -> app
-Control path: http://localhost:8088 when setup/invalidation/origin counters are needed
-Event path:   http://localhost:9091 for catalog event invalidation cases
+Control path: http://localhost:8088 for ban-url setup
+Event path:   not used
 ```
 
-Precondition: Clear homefeed, warm object, wait `TTL_WAIT_SECONDS` mặc định 21s.
+Precondition: clear homefeed cache object, warm it, then wait `TTL_WAIT_SECONDS` before the after-expiry request.
 
 ## 4. Script and env knobs
 
 Source:
 
 ```text
-E:\Projects\k6\k6-metrics-server\load-target\k6\cdn\08-ttl-expiry.js
+E:/Projects/k6/k6-metrics-server/load-target/k6/cdn/08-ttl-expiry.js
 ```
 
 Env knobs:
 
-- `TTL_WAIT_SECONDS` default `21`
+- `TTL_WAIT_SECONDS`, default `21`
 
 ## 5. Request sequence
 
-1. first request MISS
-2. second request HIT
-3. sleep TTL wait
-4. after expiry request MISS
+1. Clear homefeed object through control `ban-url`.
+2. First public `GET /api/sim/products/homefeed` -> `MISS`.
+3. Second public request -> `HIT`.
+4. Sleep until TTL is expected to expire.
+5. Public request after wait -> `MISS`.
 
-## 6. Catalog calls
+## 6. Expected observations
 
-| Phase | Method | Base URL | Path | Expected |
-| --- | --- | --- | --- | --- |
-|  | POST | controlBaseUrl | /ops/app/cdn/cache/ban-url |  |
-|  | GET | publicBaseUrl | /api/sim/products/homefeed | expectedSequence=MISS -> HIT -> wait TTL -> MISS |
+| Step | Expected |
+| --- | --- |
+| first read | `200 MISS` |
+| second read | `200 HIT` |
+| after TTL wait | `200 MISS` |
 
 ## 7. Pass/fail criteria
 
 PASS when:
 
-```text
-k6 exits 0
-checks pass
-required X-Cache/header sequence matches the contract
-setup/control/event calls complete when this case uses them
-```
+- k6 exits 0.
+- the sequence is `MISS -> HIT -> wait -> MISS`.
+- the wait duration is long enough for the configured TTL.
 
 FAIL when:
 
-- After wait vẫn HIT -> TTL/s-maxage không áp dụng như expected
-- Before wait không HIT -> object không cache
-- TTL wait quá ngắn/dài do env override sai
+- before-wait request does not become `HIT`;
+- after-wait request remains `HIT` when TTL should have expired;
+- an env override makes the wait shorter than the object TTL.
 
 ## 8. How to run
 
 ```powershell
-cd E:\Projects\k6\k6-metrics-server
+cd E:/Projects/k6/k6-metrics-server
 $env:BASE_URL = "http://localhost:80"
 $env:CONTROL_BASE_URL = "http://localhost:8088"
 $env:CATALOG_EVENTS_BASE_URL = "http://localhost:9091"
 $env:OPS_AUTH_TOKEN = "<ops-token>"
-.\scriptsun-cdn-capabilities.ps1 -Scenarios 08-ttl-expiry
+./scripts/run-cdn-capabilities.ps1 -Scenarios 08-ttl-expiry
+```
+
+Optional timing override:
+
+```powershell
+$env:TTL_WAIT_SECONDS = "21"
 ```
 
 ## 9. How to read output
 
-- Check k6 threshold summary first.
-- Then read the named checks for cache-state/header expectations.
-- For control/event cases, a setup endpoint returning 200 is not enough; the following public request must show the expected cache effect.
-- For expected 404/negative-cache behavior, judge by checks and headers, not by status-only intuition.
+This case is timing-sensitive. If it fails, record the actual `TTL_WAIT_SECONDS` used before changing values, then rerun only this case once.
 
-## 10. Reference
+## 10. Common failure interpretation
+
+| Symptom | Likely area to inspect |
+| --- | --- |
+| never `HIT` | response cacheability or key instability |
+| still `HIT` after wait | TTL/s-maxage policy or wait too short |
+| intermittent | stale/grace behavior or shared state from parallel runs |
+
+## 11. Reference
 
 - Run guide: `./RUN_GUIDE.md`
 - Overview: `./00_overview.md`
-- Source README: `E:\Projects\k6\k6-metrics-server\load-target\k6\cdn\README.md`
+- Source README: `E:/Projects/k6/k6-metrics-server/load-target/k6/cdn/README.md`

@@ -3,91 +3,100 @@
 > **Case ID:** `cdn-07-cache-contract`
 > **Script:** `07-cache-contract.js`
 > **Layer:** CDN / Varnish
-> **Proof:** Cache-Control/CDN-Cache-Control/ETag/Last-Modified/Surrogate-Key/Vary và 304 revalidation
+> **Proof:** cache contract headers and 304 revalidation
 
 ## 1. Business situation
 
-Cacheable APIs must return the headers CDN and clients need for revalidation, stale serving and tagging.
+Cacheable APIs need a clear response contract so CDN and clients know how to store, revalidate, vary, and invalidate objects. Without this contract, a response can look correct while being impossible to cache safely.
 
 ## 2. CDN capability being proven
 
-Validates Cache-Control, CDN-Cache-Control, ETag, Last-Modified, Surrogate-Key, Vary and 304 behavior.
+Validates the headers that make CDN behavior predictable:
 
-This case proves: **Cache-Control/CDN-Cache-Control/ETag/Last-Modified/Surrogate-Key/Vary và 304 revalidation**.
+- `Cache-Control` and `CDN-Cache-Control` for freshness and shared-cache policy;
+- `ETag` and `Last-Modified` for revalidation;
+- `Surrogate-Key` for grouped invalidation;
+- `Vary` and cache-key debug headers for variant safety;
+- conditional request behavior with expected `304`.
 
 ## 3. Runtime path and precondition
 
 ```text
 Public path:  http://localhost:80 -> Varnish -> Nginx -> app
-Control path: http://localhost:8088 when setup/invalidation/origin counters are needed
-Event path:   http://localhost:9091 for catalog event invalidation cases
+Control path: optional for setup, not the proof surface
+Event path:   not used
 ```
 
-Precondition: Public reads qua CDN; validate headers and conditional request.
+Precondition: public reads must go through CDN. Conditional revalidation should be sent through the same public surface.
 
 ## 4. Script and env knobs
 
 Source:
 
 ```text
-E:\Projects\k6\k6-metrics-server\load-target\k6\cdn\07-cache-contract.js
+E:/Projects/k6/k6-metrics-server/load-target/k6/cdn/07-cache-contract.js
 ```
 
-Env knobs:
-
-- Không có env knob riêng; dùng env chung trong `RUN_GUIDE.md`.
+Env knobs: no case-specific knobs; use common env from `RUN_GUIDE.md`.
 
 ## 5. Request sequence
 
-1. detail response có cache contract headers
-2. conditional `If-None-Match` returns 304
-3. homefeed/categories expose expected vary/surrogate behavior
+1. `GET /api/sim/products/1` and validate cache contract headers.
+2. Re-request with conditional `If-None-Match` / no-cache revalidation and expect `304`.
+3. Validate homefeed/categories responses expose expected cache and vary/tag behavior.
 
-## 6. Catalog calls
+## 6. Expected observations
 
-| Phase | Method | Base URL | Path | Expected |
-| --- | --- | --- | --- | --- |
-|  | GET | publicBaseUrl | /api/sim/products/1 | expectedStatus=200 |
-|  | GET | publicBaseUrl | /api/sim/products/1 | expectedStatus=304 |
-|  | GET | publicBaseUrl | /api/sim/products/homefeed, /api/sim/products/categories | expectedStatus=200 |
+| Signal | Expected |
+| --- | --- |
+| `Cache-Control` | present and cacheable as contract requires |
+| `CDN-Cache-Control` | present for shared cache semantics |
+| `ETag` | present and usable for conditional request |
+| `Last-Modified` | present where contract expects it |
+| `Surrogate-Key` | present for invalidation grouping |
+| `Vary` | contains required variant dimensions |
+| conditional request | `304` when validator matches |
 
 ## 7. Pass/fail criteria
 
 PASS when:
 
-```text
-k6 exits 0
-checks pass
-required X-Cache/header sequence matches the contract
-setup/control/event calls complete when this case uses them
-```
+- k6 exits 0.
+- required headers are present and valid.
+- conditional revalidation returns expected `304`.
+- cache-state checks still match the public CDN behavior.
 
 FAIL when:
 
-- Cacheable response thiếu Surrogate-Key/Vary -> invalidation/keying khó đúng
-- ETag present nhưng 304 fail -> revalidation contract sai
-- Header contract đúng nhưng X-Cache sequence sai -> VCL behavior cần kiểm
+- cacheable responses lack `Surrogate-Key`, `Vary`, or freshness headers;
+- `ETag` is present but `304` revalidation fails;
+- headers look correct but public cache behavior contradicts the contract.
 
 ## 8. How to run
 
 ```powershell
-cd E:\Projects\k6\k6-metrics-server
+cd E:/Projects/k6/k6-metrics-server
 $env:BASE_URL = "http://localhost:80"
 $env:CONTROL_BASE_URL = "http://localhost:8088"
 $env:CATALOG_EVENTS_BASE_URL = "http://localhost:9091"
 $env:OPS_AUTH_TOKEN = "<ops-token>"
-.\scriptsun-cdn-capabilities.ps1 -Scenarios 07-cache-contract
+./scripts/run-cdn-capabilities.ps1 -Scenarios 07-cache-contract
 ```
 
 ## 9. How to read output
 
-- Check k6 threshold summary first.
-- Then read the named checks for cache-state/header expectations.
-- For control/event cases, a setup endpoint returning 200 is not enough; the following public request must show the expected cache effect.
-- For expected 404/negative-cache behavior, judge by checks and headers, not by status-only intuition.
+Do not stop at “status 200”. This case is about response metadata and conditional semantics. The `304` revalidation check is a first-class pass/fail signal.
 
-## 10. Reference
+## 10. Common failure interpretation
+
+| Symptom | Likely area to inspect |
+| --- | --- |
+| missing `Surrogate-Key` | origin handler cache-contract generation |
+| missing/wrong `Vary` | variant key contract or Varnish header propagation |
+| 304 fails | ETag/Last-Modified conditional handling |
+
+## 11. Reference
 
 - Run guide: `./RUN_GUIDE.md`
 - Overview: `./00_overview.md`
-- Source README: `E:\Projects\k6\k6-metrics-server\load-target\k6\cdn\README.md`
+- Source README: `E:/Projects/k6/k6-metrics-server/load-target/k6/cdn/README.md`

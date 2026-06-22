@@ -3,92 +3,107 @@
 > **Case ID:** `cdn-02-variant-keys`
 > **Script:** `02-variant-keys.js`
 > **Layer:** CDN / Varnish
-> **Proof:** cache key split theo language/geo/device/AB/segment
+> **Proof:** language/geo/device/AB/segment variant isolation
 
 ## 1. Business situation
 
-Different language, geo, device, AB variant and user segment combinations must not share the wrong cached response.
+Different shoppers can legitimately see different cached content: language, country, device class, AB test variant, and user segment can all change the response. CDN caching must not leak one audience's response to another.
 
 ## 2. CDN capability being proven
 
-Proves cache key dimensions split variants correctly while repeated requests for the same variant hit cache.
+Proves the cache key includes the required variant dimensions while still allowing repeated requests for the same variant to hit cache.
 
-This case proves: **cache key split theo language/geo/device/AB/segment**.
+```text
+base variant:    MISS -> HIT
+new variant:     MISS -> HIT
+same new variant: HIT
+```
+
+The dangerous failure is not low hit ratio; it is a fast `HIT` for the wrong audience.
 
 ## 3. Runtime path and precondition
 
 ```text
 Public path:  http://localhost:80 -> Varnish -> Nginx -> app
-Control path: http://localhost:8088 when setup/invalidation/origin counters are needed
-Event path:   http://localhost:9091 for catalog event invalidation cases
+Control path: http://localhost:8088 for ban-url setup
+Event path:   not used
 ```
 
-Precondition: Chạy 1 VU deterministic; tăng iterations nếu cần thêm sample, không tăng VUs.
+Precondition: deterministic 1-VU sequence. Increase iterations only for extra samples; avoid concurrency because it can blur the expected `MISS -> HIT` order.
 
 ## 4. Script and env knobs
 
 Source:
 
 ```text
-E:\Projects\k6\k6-metrics-server\load-target\k6\cdn\02-variant-keys.js
+E:/Projects/k6/k6-metrics-server/load-target/k6/cdn/02-variant-keys.js
 ```
 
 Env knobs:
 
-- `VARIANT_KEYS_ITERATIONS` default `24`
+- `VARIANT_KEYS_ITERATIONS`, default `24`
 
 ## 5. Request sequence
 
-1. clear path trước từng proof
-2. base variant `MISS -> HIT`
-3. variant khác `MISS -> HIT`, không reuse object base
-4. homefeed guest/returning có segment key riêng
+1. Clear target path through control `ban-url`.
+2. Request base product variant -> `MISS`.
+3. Request same base variant -> `HIT`.
+4. Request variant with different language/geo/device/AB/segment -> `MISS`.
+5. Request the same variant again -> `HIT`.
+6. Repeat equivalent isolation proof for homefeed guest/returning segment variants.
 
-## 6. Catalog calls
+## 6. Expected observations
 
-| Phase | Method | Base URL | Path | Expected |
-| --- | --- | --- | --- | --- |
-|  | POST | controlBaseUrl | /ops/app/cdn/cache/ban-url |  |
-|  | GET | publicBaseUrl | /api/sim/products/1 | expectedStatus=200; expectedSequence=base MISS -> base HIT -> variant MISS -> variant HIT |
-|  | GET | publicBaseUrl | /api/sim/products/homefeed | expectedStatus=200; expectedSequence=guest MISS/HIT and returning MISS/HIT |
+| Signal | Expected |
+| --- | --- |
+| `X-Cache-Key-Language` | normalized language dimension |
+| `X-Cache-Key-Geo` | normalized country/geo dimension |
+| `X-Cache-Key-Device` | normalized device class |
+| `X-Cache-Key-AB` | AB variant dimension |
+| `X-Cache-Key-Segment` | segment dimension |
+| cross-variant first request | `MISS`, not reused `HIT` |
+| same-variant repeat | `HIT` |
 
 ## 7. Pass/fail criteria
 
 PASS when:
 
-```text
-k6 exits 0
-checks pass
-required X-Cache/header sequence matches the contract
-setup/control/event calls complete when this case uses them
-```
+- k6 exits 0.
+- variant-specific checks pass.
+- each new variant starts with `MISS` and then becomes `HIT`.
+- cache-key debug headers match expected normalized dimensions.
 
 FAIL when:
 
-- Variant khác trả HIT ngay -> cache key thiếu dimension
-- Cache-key headers không khớp expected normalization
-- Concurrency làm sequence MISS/HIT bị nhiễu
+- a different variant returns `HIT` immediately;
+- cache-key headers omit a required dimension;
+- concurrent runs make the proof non-deterministic.
 
 ## 8. How to run
 
 ```powershell
-cd E:\Projects\k6\k6-metrics-server
+cd E:/Projects/k6/k6-metrics-server
 $env:BASE_URL = "http://localhost:80"
 $env:CONTROL_BASE_URL = "http://localhost:8088"
 $env:CATALOG_EVENTS_BASE_URL = "http://localhost:9091"
 $env:OPS_AUTH_TOKEN = "<ops-token>"
-.\scriptsun-cdn-capabilities.ps1 -Scenarios 02-variant-keys
+./scripts/run-cdn-capabilities.ps1 -Scenarios 02-variant-keys
 ```
 
 ## 9. How to read output
 
-- Check k6 threshold summary first.
-- Then read the named checks for cache-state/header expectations.
-- For control/event cases, a setup endpoint returning 200 is not enough; the following public request must show the expected cache effect.
-- For expected 404/negative-cache behavior, judge by checks and headers, not by status-only intuition.
+Look for per-variant check names and `X-Cache-Key-*` assertions. A high hit ratio is invalid if the first request for a different variant is already a `HIT`.
 
-## 10. Reference
+## 10. Common failure interpretation
+
+| Symptom | Likely area to inspect |
+| --- | --- |
+| variant first request `HIT` | VCL hash/key missing a variant header |
+| same variant never `HIT` | response cacheability or key instability |
+| key header mismatch | normalization logic in Varnish |
+
+## 11. Reference
 
 - Run guide: `./RUN_GUIDE.md`
 - Overview: `./00_overview.md`
-- Source README: `E:\Projects\k6\k6-metrics-server\load-target\k6\cdn\README.md`
+- Source README: `E:/Projects/k6/k6-metrics-server/load-target/k6/cdn/README.md`

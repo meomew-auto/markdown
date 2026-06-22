@@ -3,94 +3,105 @@
 > **Case ID:** `cdn-01-hit-smoke`
 > **Script:** `01-hit-smoke.js`
 > **Layer:** CDN / Varnish
-> **Proof:** MISS -> HIT cho product detail anonymous read
+> **Proof:** product detail `MISS -> HIT`, sustained HIT
 
 ## 1. Business situation
 
-A product detail page is requested repeatedly by anonymous shoppers after an initial cold cache fill.
+A product detail page is requested repeatedly by anonymous shoppers after an initial cold cache fill. This is the most basic CDN promise: anonymous read traffic should be served from edge after the first origin fill.
 
 ## 2. CDN capability being proven
 
-Proves the basic MISS -> HIT path and stable HIT behavior for cacheable reads.
+Proves the basic cacheable read path:
 
-This case proves: **MISS -> HIT cho product detail anonymous read**.
+```text
+cold product detail request -> MISS -> origin products-service
+same object/variant again -> HIT -> CDN serves cached object
+sustained anonymous reads -> HIT remains stable
+```
+
+This case is not proving executor behavior. It proves Varnish can store and replay a cacheable product-detail response without changing the key unexpectedly.
 
 ## 3. Runtime path and precondition
 
 ```text
 Public path:  http://localhost:80 -> Varnish -> Nginx -> app
-Control path: http://localhost:8088 when setup/invalidation/origin counters are needed
-Event path:   http://localhost:9091 for catalog event invalidation cases
+Control path: http://localhost:8088 for ban-url setup
+Event path:   not used
 ```
 
-Precondition: Clear product detail object bằng control `ban-url`, sau đó warm qua public CDN path.
+Precondition: clear `/api/sim/products/1` through control `ban-url`, then warm through the public CDN path.
 
 ## 4. Script and env knobs
 
 Source:
 
 ```text
-E:\Projects\k6\k6-metrics-server\load-target\k6\cdn\01-hit-smoke.js
+E:/Projects/k6/k6-metrics-server/load-target/k6/cdn/01-hit-smoke.js
 ```
 
 Env knobs:
 
-- `HIT_SMOKE_VUS` default `4`
-- `HIT_SMOKE_DURATION` default `18s`
-- `HIT_SMOKE_SLEEP_SECONDS` default `0.025`
+- `HIT_SMOKE_VUS`, default `4`
+- `HIT_SMOKE_DURATION`, default `18s`
+- `HIT_SMOKE_SLEEP_SECONDS`, default `0.025`
 
 ## 5. Request sequence
 
-1. control ban-url `/api/sim/products/1`
-2. GET product detail lần 1 qua `:80` -> `MISS`
-3. GET cùng variant lần 2 -> `HIT`
-4. sustained traffic giữ `HIT` ổn định
+1. `POST /ops/app/cdn/cache/ban-url` for `/api/sim/products/1`.
+2. First public `GET /api/sim/products/1` -> expected `200 MISS`.
+3. Second public `GET /api/sim/products/1` -> expected `200 HIT`.
+4. Sustained reads keep returning `HIT` with `X-Upstream-Service=products-service`.
 
-## 6. Catalog calls
+## 6. Expected observations
 
-| Phase | Method | Base URL | Path | Expected |
-| --- | --- | --- | --- | --- |
-| setup | POST | controlBaseUrl | /ops/app/cdn/cache/ban-url |  |
-| setup | GET | publicBaseUrl | /api/sim/products/1 | expectedStatus=200; expectedCache=MISS; expectedUpstream=products-service |
-| setup/default | GET | publicBaseUrl | /api/sim/products/1 | expectedStatus=200; expectedCache=HIT; expectedUpstream=products-service |
+| Signal | Expected |
+| --- | --- |
+| status | `200` |
+| `X-Cache` first read | `MISS` |
+| `X-Cache` second/repeated reads | `HIT` |
+| `X-Upstream-Service` | `products-service` |
+| cache-key headers | normalized/default variant values |
 
 ## 7. Pass/fail criteria
 
 PASS when:
 
-```text
-k6 exits 0
-checks pass
-required X-Cache/header sequence matches the contract
-setup/control/event calls complete when this case uses them
-```
+- k6 exits 0.
+- required checks pass.
+- the observed cache sequence is `MISS -> HIT`.
+- setup ban completes successfully.
 
 FAIL when:
 
-- Lần 2 vẫn MISS -> object không cache hoặc key bị thay đổi
-- HIT nhưng upstream/header sai -> cần kiểm VCL/header propagation
-- Control ban fail -> token/topology/control path sai
+- the second request stays `MISS`;
+- a `HIT` is returned with wrong upstream/service headers;
+- control ban fails, making the cold-cache proof unreliable.
 
 ## 8. How to run
 
 ```powershell
-cd E:\Projects\k6\k6-metrics-server
+cd E:/Projects/k6/k6-metrics-server
 $env:BASE_URL = "http://localhost:80"
 $env:CONTROL_BASE_URL = "http://localhost:8088"
 $env:CATALOG_EVENTS_BASE_URL = "http://localhost:9091"
 $env:OPS_AUTH_TOKEN = "<ops-token>"
-.\scriptsun-cdn-capabilities.ps1 -Scenarios 01-hit-smoke
+./scripts/run-cdn-capabilities.ps1 -Scenarios 01-hit-smoke
 ```
 
 ## 9. How to read output
 
-- Check k6 threshold summary first.
-- Then read the named checks for cache-state/header expectations.
-- For control/event cases, a setup endpoint returning 200 is not enough; the following public request must show the expected cache effect.
-- For expected 404/negative-cache behavior, judge by checks and headers, not by status-only intuition.
+Read the named checks for first-read `MISS` and repeated `HIT`. A status-only 200 is not enough; this case exists to prove the CDN changed state from cold to warm.
 
-## 10. Reference
+## 10. Common failure interpretation
+
+| Symptom | Likely area to inspect |
+| --- | --- |
+| always `MISS` | response cache headers, VCL cacheability, query/key normalization |
+| wrong upstream | routing/header propagation through Varnish/Nginx |
+| setup unauthorized | `OPS_AUTH_TOKEN` or control path config |
+
+## 11. Reference
 
 - Run guide: `./RUN_GUIDE.md`
 - Overview: `./00_overview.md`
-- Source README: `E:\Projects\k6\k6-metrics-server\load-target\k6\cdn\README.md`
+- Source README: `E:/Projects/k6/k6-metrics-server/load-target/k6/cdn/README.md`

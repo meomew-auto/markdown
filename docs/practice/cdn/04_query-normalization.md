@@ -3,92 +3,100 @@
 > **Case ID:** `cdn-04-query-normalization`
 > **Script:** `04-query-normalization.js`
 > **Layer:** CDN / Varnish
-> **Proof:** tracking params không phá cache; business params tạo object riêng
+> **Proof:** tracking params do not fragment cache; business params do create distinct objects
 
 ## 1. Business situation
 
-Marketing tracking parameters should not fragment cache, while business query parameters should create distinct objects.
+Search pages often receive marketing parameters such as `utm_*`, `fbclid`, and `gclid`. Those should not create separate cache objects. Business parameters such as `sort=price` can change the response and must remain part of the cache key.
 
 ## 2. CDN capability being proven
 
-Proves CDN ignores tracking params such as utm/fbclid/gclid but keeps semantic params such as sort.
+Proves query normalization is neither too weak nor too aggressive:
 
-This case proves: **tracking params không phá cache; business params tạo object riêng**.
+```text
+/search?q=shoe                         -> MISS -> HIT
+/search?q=shoe&utm_source=...&fbclid=  -> HIT, same object
+/search?q=shoe&sort=price              -> MISS -> HIT, separate object
+```
 
 ## 3. Runtime path and precondition
 
 ```text
 Public path:  http://localhost:80 -> Varnish -> Nginx -> app
-Control path: http://localhost:8088 when setup/invalidation/origin counters are needed
-Event path:   http://localhost:9091 for catalog event invalidation cases
+Control path: http://localhost:8088 for ban-prefix setup
+Event path:   not used
 ```
 
-Precondition: Clear search prefix bằng control `ban`; chạy qua public CDN.
+Precondition: clear the search prefix by control `ban`, then run public CDN requests.
 
 ## 4. Script and env knobs
 
 Source:
 
 ```text
-E:\Projects\k6\k6-metrics-server\load-target\k6\cdn\04-query-normalization.js
+E:/Projects/k6/k6-metrics-server/load-target/k6/cdn/04-query-normalization.js
 ```
 
-Env knobs:
-
-- Không có env knob riêng; dùng env chung trong `RUN_GUIDE.md`.
+Env knobs: no case-specific knobs; use common env from `RUN_GUIDE.md`.
 
 ## 5. Request sequence
 
-1. canonical search `MISS -> HIT`
-2. same business query + utm/fbclid/gclid -> `HIT`
-3. semantic param `sort=price` -> object riêng `MISS -> HIT`
+1. Clear `/api/sim/products/search` cache objects.
+2. Canonical query `/api/sim/products/search?q=shoe` -> `MISS`.
+3. Same canonical query again -> `HIT`.
+4. Add tracking params (`utm_*`, `fbclid`, `gclid`) -> expected `HIT` from same normalized object.
+5. Add business param `sort=price` -> expected new object `MISS -> HIT`.
 
-## 6. Catalog calls
+## 6. Expected observations
 
-| Phase | Method | Base URL | Path | Expected |
-| --- | --- | --- | --- | --- |
-|  | POST | controlBaseUrl | /ops/app/cdn/cache/ban |  |
-|  | GET | publicBaseUrl | /api/sim/products/search?q=shoe | expectedSequence=MISS -> HIT |
-|  | GET | publicBaseUrl | /api/sim/products/search?q=shoe&utm_source=lesson&fbclid=abc123&gclid=paid123 | expectedCache=HIT |
-|  | GET | publicBaseUrl | /api/sim/products/search?q=shoe&sort=price | expectedSequence=MISS -> HIT |
+| Request | Expected |
+| --- | --- |
+| canonical first read | `MISS` |
+| canonical repeat | `HIT` |
+| tracking-param URL | `HIT` |
+| semantic `sort=price` first read | `MISS` |
+| semantic `sort=price` repeat | `HIT` |
 
 ## 7. Pass/fail criteria
 
 PASS when:
 
-```text
-k6 exits 0
-checks pass
-required X-Cache/header sequence matches the contract
-setup/control/event calls complete when this case uses them
-```
+- k6 exits 0.
+- tracking params reuse the canonical cached object.
+- semantic params create a separate cache object.
+- setup ban completes successfully.
 
 FAIL when:
 
-- Tracking param MISS -> cache fragmentation
-- Business param HIT cùng canonical -> key normalization quá aggressive
-- ban prefix không làm sạch objects trước proof
+- tracking-param URL returns `MISS`, causing cache fragmentation;
+- `sort=price` reuses canonical `HIT`, meaning normalization is too aggressive;
+- ban setup fails and stale previous cache state pollutes the proof.
 
 ## 8. How to run
 
 ```powershell
-cd E:\Projects\k6\k6-metrics-server
+cd E:/Projects/k6/k6-metrics-server
 $env:BASE_URL = "http://localhost:80"
 $env:CONTROL_BASE_URL = "http://localhost:8088"
 $env:CATALOG_EVENTS_BASE_URL = "http://localhost:9091"
 $env:OPS_AUTH_TOKEN = "<ops-token>"
-.\scriptsun-cdn-capabilities.ps1 -Scenarios 04-query-normalization
+./scripts/run-cdn-capabilities.ps1 -Scenarios 04-query-normalization
 ```
 
 ## 9. How to read output
 
-- Check k6 threshold summary first.
-- Then read the named checks for cache-state/header expectations.
-- For control/event cases, a setup endpoint returning 200 is not enough; the following public request must show the expected cache effect.
-- For expected 404/negative-cache behavior, judge by checks and headers, not by status-only intuition.
+This case has two opposite checks: tracking params should be cache-neutral, while business params should be cache-significant. Passing only one side is not enough.
 
-## 10. Reference
+## 10. Common failure interpretation
+
+| Symptom | Likely area to inspect |
+| --- | --- |
+| tracking URL `MISS` | VCL query-param strip list |
+| `sort=price` `HIT` canonical | VCL strips too many query params |
+| inconsistent order | query-string normalization/canonicalization |
+
+## 11. Reference
 
 - Run guide: `./RUN_GUIDE.md`
 - Overview: `./00_overview.md`
-- Source README: `E:\Projects\k6\k6-metrics-server\load-target\k6\cdn\README.md`
+- Source README: `E:/Projects/k6/k6-metrics-server/load-target/k6/cdn/README.md`
