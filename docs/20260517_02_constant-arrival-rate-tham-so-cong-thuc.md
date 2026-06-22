@@ -776,6 +776,39 @@ scheduled_slots = rate * duration_seconds / timeUnit_seconds
 Lý do: mốc đầu thường start gần `t=0`, mốc sát boundary cuối phụ thuộc timing, và summary rate tính
 trên `summary_runtime_base`. Khi phân tích output, ưu tiên đọc từ metric.
 
+**── `rate × duration` và họ hàng với executor khác ──**
+
+`rate × duration` trong constant-arrival-rate là "tổng slot lý thuyết được
+schedule". Cùng một khuôn với các executor khác — chỉ khác *rate* đến từ đâu:
+
+| Executor | Tổng work lý thuyết | Rate đến từ đâu | Có trong summary? |
+| --- | --- | --- | --- |
+| **per-vu-iterations** | `vus × iterations` | Không cần rate, count tuyệt đối | Có: `iterations` |
+| **constant-vus** | `vus × duration / iter_time` | `rate = vus / iter_time` (phụ thuộc latency) | Có: `iterations...: N X/s` |
+| **constant-arrival-rate** | `rate × duration` | `rate` từ config (cố định theo lịch) | **Không** — summary `iterations` là N_done, không phải N_sched |
+
+Trong constant-arrival-rate, `rate × duration` trả lời "bao nhiêu slot đã lên lịch",
+**không** phải "bao nhiêu iter đã xong". Summary `iterations` = slot CHẠY XONG,
+luôn ≤ `rate × duration` (vì có thể drop/interrupt).
+
+`duration` ở đây là field config, bạn tự đặt:
+```js
+duration: "5m",  // ← 300s, thời gian k6 mở cửa schedule slot
+```
+Không phải thứ trong summary. Summary chỉ có `iteration_duration` (thời gian
+1 iter) — đơn vị khác hẳn.
+
+Little's Law nối 2 thế giới:
+
+```text
+constant-vus:            rate = vus / iter_time   (rate sinh ra từ VU)
+constant-arrival-rate:   required_vus = rate × iter_time  (VU cần để giữ rate)
+```
+
+Cùng là `rate × iter_time` nhưng chiều ngược nhau:
+- Với constant-vus: `rate × iter_time = vus` → biết VU → tính rate
+- Với constant-arrival-rate: `rate × iter_time = vus cần` → biết rate → tính VU
+
 Ví dụ 1, đủ VU:
 
 ```js
