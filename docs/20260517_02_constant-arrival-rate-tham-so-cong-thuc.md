@@ -738,11 +738,25 @@ Công thức đọc output thực tế là:
 observed_scheduled_slots ~= completed_iterations + interrupted_iterations + dropped_iterations
 ```
 
-Đây là công thức đọc output để giải thích run, không phải invariant tuyệt đối của mọi edge case. Nếu
-test bị cancel đúng ở boundary, hoặc có `minIterationDuration` làm VU sleep bù sau khi
-`iteration_duration` đã được emit, metric summary và progress counter có thể lệch nhau ở vài mốc
-cuối. Với các demo trong bài này, không set `minIterationDuration`, nên công thức đủ tốt để cắt
-nghĩa output.
+Đây là con số bạn TỰ TÍNH, không có sẵn trong summary. Nó dùng để:
+
+1. Biết tổng slot thực tế đã được schedule — thay vì dùng con số lý thuyết
+   `rate × duration` (có thể lệch do mốc đầu thường gần t=0, mốc cuối phụ
+   thuộc timing).
+
+2. Kiểm tra "hạch toán": nếu N_done + N_drop + N_int khớp với N_sched lý
+   thuyết → mọi slot đều có lời giải thích, không bị thất thoát.
+
+3. Tìm nguyên nhân thiếu hụt: khi iterations thấp hơn dự kiến, nhìn vào
+   N_drop (thiếu VU rảnh) và N_int (bị cắt lúc hết duration) để biết
+   nguyên nhân chính.
+
+Tóm lại: `observed_scheduled_slots` là công cụ GIẢI THÍCH, không phải metric.
+Ba con số trong summary là N_done (iterations), N_drop (dropped_iterations),
+N_int (footer "X interrupted"). Cộng chúng lại → biết có bao nhiêu slot đã
+được schedule trong thực tế.
+
+Đây là công thức đọc output để giải thích run, không phải invariant tuyệt đối của mọi edge case.
 
 Tức là:
 
