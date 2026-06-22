@@ -1009,7 +1009,26 @@ Phần này trả lời câu hỏi:
 muốn giữ được target rate thì cần chuẩn bị khoảng bao nhiêu VU?
 ```
 
-Core k6 **không tự tính rồi tự set `preAllocatedVUs` cho bạn**. Bạn phải sizing bằng số liệu của script.
+**Quy trình sizing 3 bước:**
+
+```text
+Bước 1: Đo W_effective — thời gian 1 VU bận cho 1 iteration
+        Chạy thử script, xem iteration_duration trong summary.
+        Nếu có minIterationDuration: W = max(iteration_duration, minIterationDuration)
+
+Bước 2: Xác định lambda — tốc độ start iteration target
+        lambda = rate / timeUnit (vd: rate=30, timeUnit="1s" → lambda=30/s)
+
+Bước 3: Tính preAllocatedVUs tối thiểu
+        preAllocatedVUs >= ceil(lambda × W_effective)
+```
+
+Core k6 **không tự tính rồi tự set `preAllocatedVUs` cho bạn**. Bạn phải
+sizing bằng số liệu của script. Nếu bạn set `preAllocatedVUs` quá thấp,
+k6 sẽ cố spawn unplanned VU (đến `maxVUs`), nhưng vài slot đầu vẫn drop
+vì spawn VU cần thời gian (~vài ms đến vài trăm ms).
+
+**── Công thức ──**
 
 Các biến:
 
