@@ -9,10 +9,10 @@
 
 ### Khong phai traffic nao cung nen duoc cache
 
-CDN la mot shared cache — mot object duoc dua vao cache se duoc phuc vu lai cho muc dich cua cache.
-Tat ca nhung request giong het ve cache key sau nay. Dieu nay co nghia la:
-Neu mot request chua du lieu rieng tu (private data) bi cache, du lieu do se bi mat.
-Ro ri ri cho ngu khac.
+CDN là một shared cache — một object được đưa vào cache sẽ được phục vụ lại cho mục đích của cache.
+Tất cả những request giống hết về cache key sau này. Điều này có nghĩa là:
+Nếu một request chứa dữ liệu riêng tư (private data) bị cache, dữ liệu đó sẽ bị mất.
+Rò rỉ rỉ chỗ ngủ khác.
 
 ```text
 KHONG DUOC CACHE:
@@ -30,13 +30,13 @@ NEU CACHE NHUNG THU NAY:
   -> DATA BREACH
 ```
 
-Day la dau hieu trong ve 'tinh than tu va tinh toan ven du lieu'.
-Khong phai la "performance issue" — day lasecurity issue.
+Đây là dấu hiệu trong về 'tinh thần từ và tính toán ven dự liệu'.
+Không phải là "performance issue" — đây làsecurity issue.
 
 ### Authenticated traffic: moi nguoi dung thay noi dung khac nhau
 
-Khi mot user da login (co Authorization header hoac session Cookie), response
-Tu backend phu thuoc vao danh tinh cua user do:
+Khi một user đã login (có Authorization header hoặc session Cookie), response
+Từ backend phụ thuộc vào danh tính của user đó:
 
 ```text
 GET /api/sim/products/1  + Authorization: Bearer <token-cua-An>
@@ -48,7 +48,7 @@ GET /api/sim/products/1  + Cookie: session_id=<session-cua-Binh>
   -> Neu cache response nay -> tat ca user khac nhan discount cua Binh
 ```
 
-Vi du thuc te tu e-commerce:
+Vì du thực tế từ e-commerce:
 
 ```text
 Tinh huong: User VIP login, browse product detail page
@@ -61,7 +61,7 @@ Tinh huong: User VIP login, browse product detail page
 
 ### Cookie: khong chi la authentication
 
-Session cookie khong chi danh cho "da login Hay chua". Cookie con duoc dung de:
+Session cookie không chỉ dành cho "đà login Hay chưa". Cookie còn được dùng để:
 
 ```text
   - Theo doi session state (gio hang, wishlist)
@@ -71,13 +71,13 @@ Session cookie khong chi danh cho "da login Hay chua". Cookie con duoc dung de:
   - Language preference override
 ```
 
-Bat ky request nao co Cookie header deu co the chua duoc trieu chung tu ho.
-Trang thai ca nhan. Varnish khong the biet cookie nao la "vo hai" va cookie nao khong.
-nao chua session — vi vay toan bo Cookie header phai trigger bypass.
+Bất kỳ request nào có Cookie header đều có thể chữa được triệu chứng từ họ.
+Trang thái cá nhân. Varnish không thể biết cookie nào là "vô hại" và cookie nào không.
+nào chưa session — vì vậy toàn bộ Cookie header phải trigger bypass.
 
 ### Cache-Control: no-cache — client tu choi cache
 
-Client co the gui `Cache-Control: no-cache` de yeu cau 'fresh data tu origin:
+Client có thể gửi `Cache-Control: no-cache` để yêu cầu 'fresh data từ origin:
 
 ```text
 Tinh huong:
@@ -90,13 +90,13 @@ Tinh huong:
     -> loop vo tan
 ```
 
-Note: day la `Cache-Control: no-cache` trongrequest header (tu client), trong
-khong phai trong response header (tu nem). Response `Cache-Control: no-cache`
-Co Y nghia khac (backend bao gom cache response nay").
+Note: đây là `Cache-Control: no-cache` trongrequest header (tự client), trong
+không phải trong response header (tự ném). Response `Cache-Control: no-cache`
+Có Y nghĩa khác (backend bao gồm cache response này").
 
 ### Write methods: mutation khong bao gio duoc cache
 
-POST,PUT, DELETE, PATCH la nhung HTTP method doi du lieu tren server:
+POST,PUT, DELETE, PATCH là những HTTP method đòi dữ liệu trên server:
 
 ```text
 POST /api/sim/cart/add  { product_id: 1, quantity: 1 }
@@ -109,7 +109,7 @@ POST /api/sim/cart/add  { product_id: 1, quantity: 1 }
        -> user thay gio hang "ao" khong ton tai tren server
 ```
 
-Hau qua cua viec cache write method:
+Hậu quả của việc cache write method:
 
 ```text
 DATA CORRUPTION SCENARIO:
@@ -125,7 +125,7 @@ DATA CORRUPTION SCENARIO:
 
 ### GDPR, PCI-DSS va compliance
 
-Khong chi la van de ky thuat, bypass cache con la van de phap ly:
+Không chỉ là vấn đề kỹ thuật, bypass cache còn là vấn để pháp lý:
 
 ```text
 GDPR (General Data Protection Regulation - EU):
@@ -156,8 +156,8 @@ Internal security policy:
 
 ### Neu bypass rules overlap hoac xung dot
 
-Mot van de it duoc nghi den: khi nhieu Bypass rules cung Kich hoat, co the dan den
-the gay hoac behavior khong mong muon:
+Một vấn đề ít được nghĩ đến: khi nhiều Bypass rules cùng Kích hoạt, có thể dẫn đến
+thể gay hoặc behavior không mong muốn:
 
 ```text
 Vi du: request POST + Authorization + Cookie + no-cache
@@ -203,7 +203,7 @@ BOX: 4 LOAI TRAFFIC PHAI BYPASS CACHE
 
 ## 2. CDN capability being proven
 
-Case nay chung minh4 bypass rules hoat dong doc lap va chinh xac:
+Case này chứng minh4 bypass rules hoạt động độc lập và chính xác:
 
 ```text
 Rule 1: Authorization header  -> BYPASS (not HIT)
@@ -212,7 +212,7 @@ Rule 3: Cache-Control: no-cache (client request) -> BYPASS (not HIT)
 Rule 4: POST method            -> BYPASS (not HIT)
 ```
 
-Moi rule duoc test rieng biet — khong overlap, khong ambiguity:
+Mọi rule được test riêng biệt — không overlap, không ambiguity:
 
 ```text
 Authorization test:
@@ -240,7 +240,7 @@ POST test:
   - Chi co POST method la trigger bypass duy nhat
 ```
 
-Capability duoc chung minh qua2 Buoc cho moi bypass trigger:
+Capability được chứng minh qua2 Bước cho mỗi bypass trigger:
 
 ```text
 Buoc 1: Goi request bypass -> assert not HIT (X-Cache != HIT)
@@ -249,17 +249,17 @@ Buoc 2: Goi lai request bypass lan 2 -> assert not HIT (still not HIT)
            roi HIT lan sau
 ```
 
-Diem quan trong: KHONG HOT la CORRECT BEHAVIOR cho bypass case. Khong phai vay.
-"fail" hay "bug". Bypass la contract CDN phai giu — neu HDH thay vi bypass.
-thi do moi la bug (security bug).
+Điểm quan trọng: KHÔNG HỢT là CORRECT BEHAVIOR cho bypass case. Không phải vậy.
+"fail" hay "bug". Bypass là contract CDN phải giữ — nếu HĐH thay vì bypass.
+thì đó mới là bug (security bug).
 
 ## 3. Vi sao test o CDN layer
 
 ### Quyet dinh bypass xay ra TRUOC KHI request den app
 
 Trong architecture `client -> Varnish -> Nginx -> app`, quyet dinh bypass
-duoc thuc hien boi Varnish trong `vclrecv`. Request chua den duoc Nginx, nhung
-chua den duoc app. Dieu nay co nghia:
+được thực hiện bởi Varnish trong `vclrecv`. Request chưa đến được Nginx, nhưng
+chưa đến được app. Điều này có nghĩa:
 
 ```text
 Neu CDN cache sai (khong bypass):
@@ -283,7 +283,7 @@ Test o CDN layer (Day la noi duy nhat):
 
 ### Ly do security & compliance
 
-Day laCDN-edge-only concern vi ly do kien truc:
+Đây làCDN-edge-only concern vì lý do kiến truc:
 
 ```text
                           [CDN quyet dinh o day]
@@ -300,7 +300,7 @@ Day laCDN-edge-only concern vi ly do kien truc:
             |   -> App khong he biet
 ```
 
-Viec test bypass tai CDN layer con lien quan dencompliance:
+Việc test bypass tại CDN layer còn liên quan đếncompliance:
 
 ```text
   - PCI-DSS: khong duoc cache cardholder data
@@ -352,7 +352,7 @@ TargetLayer = full
 
 ### Precondition
 
-Case nay khong can got purge/ban truoc khi chay. Ly do:
+Case này không cần gọt purge/ban trước khi chạy. Lý do:
 
 ```text
   - Neu CDN hoat dong dung: moi request bypass se tu dong NOT HIT
@@ -362,8 +362,8 @@ Case nay khong can got purge/ban truoc khi chay. Ly do:
 ```
 
 Tuy nhien, de chung minh bypass rules hoat dong **doc lap** voi cache state,
-case nay duoc thiet ke de khong phu thuoc vao cache warmup. Khong co Buoc nhay
-"warm cache" trong script. Moi bypass duoc test truc tiep.
+case này được thiết kế để không phụ thuộc vào cache warmup. Không có Bước nhảy
+"warm cache" trong script. Mỗi bypass được test trực tiếp.
 
 ### Environment variables
 
@@ -403,13 +403,13 @@ export const options = {
 };
 ```
 
-Mot chi tiet thiet ke quan trong: `vo: 1, iterations: 1`. Day lasingle-run
-validation, khong phai load test. Mot VU, mot iteration chua tat ca cac cac
+Một chỉ tiết thiết kế quan trọng: `vỏ: 1, iterations: 1`. Đây làsingle-run
+validation, không phải load test. Một VU, một iteration chưa tất cả các cac
 bypass checks ben trong default function.
 
 ### Helper: exerciseRepeatedBypass
 
-Day la tru ly chinh cua case, dong thoi toan bo logic test cho mot bypass trigger:
+Đây là trụ lý chính của case, đồng thời toàn bộ logic test cho một bypass trigger:
 
 ```javascript
 function exerciseRepeatedBypass(label, requestOptions) {
@@ -449,7 +449,7 @@ function exerciseRepeatedBypass(label, requestOptions) {
 
 ### Vi sao goi 2 lan?
 
-Day la mot chi tiet thiet ke quan trong:
+Đây là một chỉ tiết thiết kế quan trọng:
 
 ```text
 Lan 1 (first):
@@ -509,7 +509,7 @@ export default function () {
 
 ### Phan tich profile guestVNMobileControl
 
-Profile duoc dung cho tat ca 4 bypass triggers:
+Profile được dùng cho tất cả 4 bypass triggers:
 
 ```javascript
 profiles.guestVNMobileControl = {
@@ -524,8 +524,8 @@ profiles.guestVNMobileControl = {
 };
 ```
 
-Profile nay laanonymous guest user — khong co auth, khong co cookie. Dieu
-nay quan trong Vi No dam bao chi co motpass trigger duoc kich hoat trong vai giay
+Profile này làanonymous guest user — không có auth, không có cookie. Dieu
+này quan trọng Vì Nô đảm bảo chỉ có mộtpass trigger được kích hoạt trong vài giây
 moi test case:
 
 ```text
@@ -556,13 +556,13 @@ export function cacheState(res) {
 }
 ```
 
-`cacheState` doc han `X-Cache` tu that bai. Varnish set `X -Cache: HIT` khi
-phuc vu tu cache, va `X-Cache: MISS` khi phai goi backend. `assertNotHit` kiem tra
-Tra rang `X-Cache` khong phai la `HIT'. Dieu nay chap nhan ca `MISS' va
-bat ky gia tri nao khac (VD: test tu `return(pass)` co the khong co
-`X-Cache' header do Varnish khong set trong `vcl deliver`).
+`cacheState` độc hãn `X-Cache` từ thất bại. Varnish set `X -Cache: HIT` khi
+phục vụ từ cache, và `X-Cache: MISS` khi phải gọi backend. `assertNotHit` kiểm tra
+Trả rằng `X-Cache` không phải là `HIT'. Điều này chấp nhận cả `MISS' và
+bất kỳ giá trị nào khác (VD: test từ `return(pass)` có thể không có
+`X-Cache' header do Varnish không set trong `vcl deliver`).
 
-Wait — day la mot diem quan trong ve Varnish behavior. Cung cap tich ky hon.
+Wait — đây là một điểm quan trọng về Varnish behavior. Cung cấp tích kỳ hơn.
 
 ### Phan tich assertHeadersAbsent
 
@@ -584,14 +584,14 @@ export function assertHeadersAbsent(res, headerNames, label) {
 }
 ```
 
-Doi voi GET bypass (Authorization, Cookie, no-cache): cache key headers duoc do bo
-kiem tra laabsent. Ly do: khi Varnish `return(pass)`, response khong di.
-qua `vcl deliver` theo Cach thong thuong – `X-Cache-*` headers khong duoc set.
+Đối với GET bypass (Authorization, Cookie, no-cache): cache key headers được dỡ bỏ
+kiểm tra làabsent. Lý do: khi Varnish `return(pass)`, response không đi.
+qua `vcl deliver` theo Cách thông thường – `X-Cache-*` headers không được set.
 
-Doi voi POST: `expectNoCacheKeyHeaders: false` bo qua check nay. Ly do:
-POST di den `/api/sim/cart/add` (khong phai products path), va backend co the chua
-van include `X-Cache-*` response headers nhu la convention across services.
-Check khong ap dung cho endpoint khac.
+Đối với POST: `expectNoCacheKeyHeaders: false` bỏ qua check này. Lý do:
+POST đi đến `/api/sim/cart/add` (không phải products path), và backend có thể chứa
+vẫn include `X-Cache-*` response headers như là convention across services.
+Check không áp dụng cho endpoint khác.
 
 ### Phan tich assertUpstream
 
@@ -604,7 +604,7 @@ export function assertUpstream(res, upstream, label) {
 }
 ```
 
-Assert nay chung minh rang mach du hocpass, request van den backend dung::
+Assert này chứng minh rằng mạch du họcpass, request vẫn đến backend đúng::
 
 ```text
   - Authorization + product detail -> van den products-service
@@ -621,7 +621,7 @@ Assert nay chung minh rang mach du hocpass, request van den backend dung::
 ### VCL la gi va tai sao can hieu?
 
 VCL (Varnish Configuration Language) la ngon ngu cau hinh state machine cua
-Varnish. Khi mot request den, No di qua cac subroutine theo thu tu:
+Varnish. Khi một request đến, No đi qua các subroutine theo thứ tự:
 
 ```text
 vcl_recv (receive request)
@@ -656,7 +656,7 @@ vcl_deliver (deliver response to client)
 
 ### return(pass) — co che bypass cache
 
-`return(pass)` la action quan trong nhat trong case nay. Khi Varnish gap
+`return(pass)` là action quan trọng nhất trong case này. Khi Varnish gặp
 `return(pass)` trong `vcl_recv`:
 
 ```text
@@ -679,7 +679,7 @@ vcl_deliver (deliver response to client)
    -> X-Cache duoc set la "MISS" (trong vcl_deliver: obj.hits > 0 -> HIT, else -> MISS)
 ```
 
-Luu y ve X-Cache khi pass:
+Luu y về X-Cache khi pass:
 
 ```text
 Trong vcl_deliver:
@@ -720,9 +720,9 @@ BOX: pass vs pipe
 ==============================================================
 ```
 
-Trong case nay, bypass rules dung `return(pass)`, khong phai `returne(pipe)`.
-Day la thiet ke dung — `pass' van cho phep Varnish set response headers de ne
-test co the verify upstream routing.
+Trong case này, bypass rules dùng `return(pass)`, không phải `returne(pipe)`.
+Đây là thiết kế đúng — `pass' vẫn cho phép Varnish set response headers để né
+test có thể verify upstream routing.
 
 ### VCL bypass rules — source code
 
@@ -774,8 +774,8 @@ sub vcl_recv {
 
 ### Thu tu thuc thi VCL
 
-Thu tu cac rule trong VCL laquan trong Vi Varnish thuc thi `vclrecv` tu
-tren xuong duoi, vareturn ngay lap tuc khi gap `return()` dau tien:
+Thủ từ các rule trong VCL làquan trọng Vi Varnish thực thi `vclrecv` từ
+trên xuống dưới, vàreturn ngay lập tức khi gặp `return()` đầu tiên:
 
 ```text
 Thu tu thuc te trong vcl_recv:
@@ -831,7 +831,7 @@ Vay tai sao de method check truoc?
 
 ### What happens to the response when return(pass) is used
 
-Khi `return(pass)` duoc goi, response journey qua Varnish khac voi hath/miss/hit:
+Khi `return(pass)` được gọi, response journey qua Varnish khác với hath/miss/hit:
 
 ```text
 HASH -> MISS flow:
@@ -852,7 +852,7 @@ PASS flow:
   -> Nhung backend response VAN duoc xu ly boi vcl_backend_response
 ```
 
-Dieu quan trong: `vclbackendresponse` van chay khi pass. Dieu nay co nghia:
+Điều quan trọng: `vclbackendresponse` vẫn chạy khi pass. Điều này có nghĩa:
 
 ```text
 Neu backend response co Set-Cookie:
@@ -872,7 +872,7 @@ Day la DOUBLE PROTECTION:
 
 ### Cach doc X-Cache header khi bypass
 
-Trong VCL hien tai, `vcldeliver` set `X-Cache' dua tren `obj.hits`:
+Trong VCL hiện tại, `vcldeliver` set `X-Cache' đua trên `obj.hits`:
 
 ```vcl
 sub vcl_deliver {
@@ -884,17 +884,17 @@ sub vcl_deliver {
 }
 ```
 
-Voi `return(pass)`, `obj.hits = 0` (khong lookup cache) `X-Cache = "MISS"`.
+Với `return(pass)`, `obj.hits = 0` (không lookup cache) `X-Cache = "MISS"`.
 
-Day la Cach set `X-Cache` chu dong de k6 co the verify. Trong mot so Varnish
-configuration pho bien, `X-Cache` khi pass co the khong duoc set (Neu `vcl deliver`).
-chi set `X-Cache` trong truong hop `boc hoi< 0`). Trong truong hop do,
-`assertNotHit` van hanh dong dung Vi `cacheState()' tra `""' khi khong co
-`X-Cache' header, va `""!== "HIT"` PASS.
+Đây là Cách set `X-Cache` chủ động để k6 có thể verify. Trong một số Varnish
+configuration phố biến, `X-Cache` khi pass có thể không được set (Neu `vcl deliver`).
+chỉ set `X-Cache` trong trường hợp `bốc hơi< 0`). Trong trường hợp đó,
+`assertNotHit` vận hành động dụng Vi `cacheState()' trả `""' khi không có
+`X-Cache' header, và `""!== "HIT"` PASS.
 
 ### Toan bo VCL bypass logic — annotated complete view
 
-Day la toan bo bypass logic trong `vclrecv` voi annotation ve muc dich:
+Đây là toàn bộ bypass logic trong `vclrecv` với annotation về mục đích:
 
 ```vcl
 sub vcl_recv {
@@ -955,8 +955,8 @@ sub vcl_recv {
 }
 ```
 
-Day ladefense-in-depth cho CDN cache security. Nhieu lop bypass rules bao ve
-ve cac khac nhau, dam bao khong co private/write traffic nao bi cache.
+Đây làdefense-in-depth cho CDN cache security. Nhiều lớp bypass rules bảo vệ
+về các khác nhau, đảm bảo không có private/write traffic nào bị cache.
 
 ## 7. Request sequence flow
 
@@ -1651,8 +1651,8 @@ DEBUG KHI FAIL:
 
 ### Variation 1: Custom bypass header
 
-Mot so he thong dung custom header thay Vi Authorization/Cookie de xac dinh muc dich
-User context. Vi du: 'X-User-Token`, `X-API-Key`, ``X-Session-ID`.
+Một số hệ thống dùng custom header thay Vi Authorization/Cookie để xác định mục đích
+User context. Ví dụ: 'X-User-Token`, `X-API-Key`, ``X-Session-ID`.
 
 ```javascript
 // Them test case vao default function
@@ -1664,7 +1664,7 @@ exerciseRepeatedBypass('custom_user_token', {
 });
 ```
 
-VCL can duoc cap nhat de bypass header nay:
+VCL cần được cấp nhất để bypass header này:
 
 ```vcl
 if (req.http.X-User-Token) {
@@ -1672,7 +1672,7 @@ if (req.http.X-User-Token) {
 }
 ```
 
-Hoac combine vao rule hien co (da co san trong VCL hien tai):
+Hoặc combine vào rule hiện có (đã có sẵn trong VCL hiện tại):
 
 ```vcl
 if (req.url ~ "^/api/sim/products($|\\?)"
@@ -1681,8 +1681,8 @@ if (req.url ~ "^/api/sim/products($|\\?)"
 }
 ```
 
-Luu Y: rule nay CHI ap dung cho `/api/sim/products` paths, khong phai global.
-Neu muon bypass toan bo, can dat truoc hanh trinh.
+Lưu Y: rule này CHI áp dụng cho `/api/sim/products` paths, không phải global.
+Nếu muốn bypass toàn bộ, cần đặt trước hành trình.
 
 ### Variation 2: Method-based bypass expansion (PUT, DELETE, PATCH)
 
@@ -1718,7 +1718,7 @@ exerciseRepeatedBypass('write_method_patch', {
 });
 ```
 
-VCL hien tai da bao phu tat ca non-GET/HEAD methods:
+VCL hiện tại đã bao phủ tất cả non-GET/HEAD methods:
 
 ```vcl
 if (req.method != "GET" && req.method != "HEAD") {
@@ -1726,13 +1726,13 @@ if (req.method != "GET" && req.method != "HEAD") {
 }
 ```
 
-Nhung test tung method rieng biet cho ta evidence ro rang rang rat hieu qua.
-Deu duoc bypass, chu khong chi "tat ca mat khach". Dac biet quan trong Neu
-sau nay ai do chinh sua VCL chi bypass POST nhung quen PUT/DELETE.
+Những test từng method riêng biệt cho ta evidence rõ ràng rằng rất hiệu quả.
+Đểu được bypass, chú không chỉ "tát cả mặt khách". Đặc biệt quan trọng Neu
+sau này ai đó chinh sửa VCL chỉ bypass POST những quen PUT/DELETE.
 
 ### Variation 3: Cookie prefix whitelist
 
-Mot pattern pho bien la'strip cookie khong quan trong' thay Vi bypass toan bo:
+Một pattern phổ biến là'strip cookie không quan trọng' thay Vi bypass toàn bộ:
 
 ```vcl
 // Strip tracking/analytics cookies, keep session cookies
@@ -1752,7 +1752,7 @@ if (req.http.Cookie) {
 }
 ```
 
-Test cho variation nay:
+Test cho variation này:
 
 ```javascript
 // Cookie chi co tracking -> should HIT (khong bypass)
@@ -1775,13 +1775,13 @@ exerciseRepeatedBypass('session_cookie', {
 });
 ```
 
-Canh bao: Cookie stripping co the gui tinh trang sai va cache session data.
-Test nay chung minh rang chi tracking cookies bi strip, con session cookies thi on.
-van trigger bypass.
+Cảnh báo: Cookie stripping có thể gửi tính trạng sai và cache session data.
+Test này chứng minh rằng chỉ tracking cookies bị strip, còn session cookies thì ổn.
+vẫn trigger bypass.
 
 ### Variation 4: Combining bypass triggers
 
-Test nhieu bypass triggers cung luc de verifyOR logic:
+Test nhiều bypass triggers cùng lúc để verifyOR logic:
 
 ```javascript
 // Authorization + Cookie + no-cache cung luc
@@ -1815,9 +1815,9 @@ exerciseRepeatedBypass('combined_auth_post', {
 
 ### Variation 5: Smoke test — prove cache works before bypass test
 
-Day la mot variation quan trong: truoc khi test bypass, warm cache de chung.
-minh rang cache dang hoat dong cho traffic binh thuong. Dieu nay loai tru rui ro
-kha nang "bypass notHIT nhung khong phai do bypass rule — do cache khong
+Đây là một variation quan trọng: trước khi test bypass, warm cache để chung.
+mình rằng cache đang hoạt động cho traffic bình thường. Điều này loại trừ rủi ro
+khả năng "bypass notHIT nhưng không phải do bypass rule — do cache không
 hoat dong".
 
 ```javascript
@@ -1849,8 +1849,8 @@ function warmCacheAndVerify() {
 }
 ```
 
-Day la mot best practice: chung minh cache hoat dong TRUOC khi chung minh
-Bypass hoat dong. Neu cache khong hoat dong notHIT khong co Y nghia.
+Đây là một best practice: chứng minh cache hoạt động TRUOC khi chứng minh
+Bypass hoạt động. Nếu cache không hoạt động notHIT không có Y nghĩa.
 
 ## 15. Anti-patterns
 
