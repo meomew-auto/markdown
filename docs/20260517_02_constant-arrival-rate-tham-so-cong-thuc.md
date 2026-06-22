@@ -4438,6 +4438,108 @@ config: rate=120, timeUnit="1m"
 => mốc start: t=0, 0.5, 1.0, 1.5, ... (cứ 0.5s 1 mốc)
 ```
 
+**── Vì sao rate cố định → interval cố định? ──**
+
+```text
+Đây là đặc trưng PHÂN BIỆT constant-arrival-rate với ramping-arrival-rate:
+
+  constant-arrival-rate:
+    rate = 10/s (KHÔNG đổi)
+    → slot_interval = 1/10 = 0.1s (KHÔNG đổi)
+    → đồ thị rate(t) là đường THẲNG NẰM NGANG
+
+  ramping-arrival-rate:
+    rate = 0 → 10/s (TĂNG dần)
+    → slot_interval = 1/rate (GIẢM dần theo thời gian)
+    → đồ thị rate(t) là đường DỐC LÊN (hoặc xuống)
+
+  Hệ quả: với constant-arrival-rate, bạn luôn biết trước CHÍNH XÁC
+  thời điểm của MỌI slot trong toàn bộ duration. Đây là sức mạnh
+  chính của executor này — tính dự đoán được (predictability).
+```
+
+**── Băng chuyền nhà máy ──**
+
+```text
+Nhà máy đóng chai nước ngọt:
+  Băng chuyền chạy đều, cứ 0.8 giây ra 1 chai.
+  => rate = 3600/0.8 = 4500 chai/giờ
+  => slot_interval = 0.8s (CỐ ĐỊNH, không phụ thuộc ca sáng hay tối)
+
+  Nếu băng chuyền tăng tốc lên 0.4s/chai:
+  => rate = 3600/0.4 = 9000 chai/giờ
+  => slot_interval = 0.4s
+
+  Tương tự, constant-arrival-rate giống như 1 băng chuyền:
+  - Tốc độ băng (= rate) do bạn cài đặt
+  - Khoảng cách sản phẩm (= slot_interval) = 1 / tốc độ băng
+  - Không cần biết có bao nhiêu công nhân (VU) đứng hai bên băng
+```
+
+**── Tại sao slot_interval quan trọng để ước lượng timing? ──**
+
+```text
+Biết slot_interval → bạn biết chính xác hệ thống đang ở đâu:
+
+  Bước 1: Tính slot cuối cùng ở thời điểm t
+    slot_thứ_k = floor(t / slot_interval)
+    vd: interval=0.25s, t=3.7s → slot_thứ = floor(3.7/0.25) = 14
+        → tại t=3.7s, k6 đã schedule xong slot #14
+
+  Bước 2: Tính thời điểm của slot bất kỳ
+    t_slot_k = k × slot_interval
+    vd: slot #37, interval=0.25s → t = 37 × 0.25 = 9.25s
+
+  Bước 3: Tính số slot trong 1 khoảng thời gian
+    slot_count = (t_end - t_start) / slot_interval
+    vd: từ t=2s đến t=5.5s, interval=0.25s
+        → slot_count = (5.5 - 2.0) / 0.25 = 14 slot
+
+  Ứng dụng thực tế: khi xem dashboard, bạn thấy spike ở giây thứ 7.3
+  → tra ngược lại slot nào bị lỗi: floor(7.3 / 0.25) = slot #29
+```
+
+**── Rate lớn, interval nhỏ → giới hạn thực tế ──**
+
+```text
+config: rate=1000, timeUnit="1s"
+=> slot_interval = 1s / 1000 = 0.001s = 1ms
+
+  Điều này có nghĩa: cứ 1ms, k6 phải start 1 iter mới.
+  Đây là giới hạn RẤT CAO:
+  - Nếu iter_time trung bình = 10ms → cần ít nhất 10 VU chạy song song
+  - Nếu iter_time trung bình = 100ms → cần ít nhất 100 VU
+  - CPU của máy chạy k6 phải đủ mạnh để sinh timer 1ms
+
+  Ngược lại, rate thấp:
+  config: rate=1, timeUnit="30s"
+  => slot_interval = 30s / 1 = 30s
+  => cứ 30 giây mới start 1 iter — quá thưa, không đủ tải để test
+
+  Quy tắc ngón cái: slot_interval NÊN nằm trong khoảng:
+    iter_time × 2  <  slot_interval  <  duration / 10
+    (đủ VU phục vụ)      (đủ dày)      (ít nhất 10 slot)
+```
+
+**── Kết nối với tickerPeriod trong Go code ──**
+
+```text
+Trong source code k6 (constant_arrival_rate.go:202):
+
+  tickerPeriod = getTickerPeriod(arrivalRate)
+
+  tickerPeriod CHÍNH LÀ slot_interval, nhưng ở dạng time.Duration.
+  K6 dùng Go time.Ticker để "gõ nhịp" — mỗi lần ticker gõ, 1 slot
+  được schedule (nếu có VU rảnh).
+
+  Mối liên hệ:
+    slot_interval (công thức) = tickerPeriod (code)
+    rate (config) → arrivalRate (biến nội bộ) → getTickerPeriod() → ticker
+
+  Khi bạn hiểu slot_interval, bạn hiểu luôn nhịp timer bên trong k6
+  — đây là "trái tim" của constant-arrival-rate executor.
+```
+
 **Khi nào dùng**: muốn biết tại 1 thời điểm cụ thể, k6 đang start mốc nào,
 hoặc check xem 2 mốc cách nhau bao xa.
 
