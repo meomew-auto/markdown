@@ -1096,7 +1096,25 @@ Capacity với `M` VU:
 capacity_with_M_vus ~= M / W_effective
 ```
 
+Đây là công thức nghịch đảo của `required_vus_min`:
+```text
+required_vus_min = ceil(lambda × W)     → "muốn rate lambda thì cần ? VU"
+capacity         = M / W                → "có M VU thì chịu được rate ?"
+```
+
+Hai công thức dùng chung 2 biến (`lambda`/`capacity` và `M`/`required_vus_min`),
+chỉ khác chiều tính. Nếu `M < required_vus_min` thì `capacity < lambda`.
+
 Nghĩa là nếu có `M` VU và mỗi VU bị chiếm `W_effective` giây để xong 1 iteration, thì cả pool làm được khoảng `M / W_effective` iteration mỗi giây.
+
+Công thức này chính là Little's Law áp dụng cho VU pool:
+```text
+capacity = số VU / thời gian bận mỗi iter
+         = M / W_effective
+```
+Giống hệt `peak_rate = vus / iter_time` bên constant-vus, chỉ khác là
+ở đây `capacity` là GIỚI HẠN của pool — nếu lambda vượt quá capacity
+thì slot thừa sẽ drop.
 
 Nếu:
 
@@ -1117,26 +1135,44 @@ Drop rate gần đúng:
 drop_rate ~= max(0, lambda - capacity_with_M_vus)
 ```
 
-Ví dụ thiếu VU:
+**── Ví dụ thiếu VU, phân tích từng bước ──**
 
 ```text
-lambda = 10 iterations/s
-W_effective = 1s
-M = 2 VUs
+lambda        = 10 iterations/s   (mỗi giây muốn start 10 slot)
+W_effective   = 1s                (1 iteration giữ VU bận 1 giây)
+M             = 2 VUs             (chỉ có 2 VU để nhận việc)
 
-capacity_with_2_vus ~= 2 / 1
-                    = 2 iterations/s
+Bước 1 — Tính capacity của pool:
+  capacity = M / W_effective = 2 / 1 = 2 iterations/s
+  → 2 VU, mỗi VU xong 1 iter trong 1s → 1 giây làm được tối đa 2 iter
 
-drop_rate ~= max(0, 10 - 2)
-          = 8 drops/s
+Bước 2 — So sánh lambda với capacity:
+  lambda = 10/s, capacity = 2/s
+  → Mỗi giây muốn start 10 slot nhưng chỉ xử lý được 2
+  → 8 slot mỗi giây không có VU rảnh → DROP
+
+Bước 3 — Tính drop rate:
+  drop_rate = max(0, 10 - 2) = 8 drops/s
+
+Bước 4 — Timeline 1 giây đầu tiên:
+  t=0.00: slot 1 → VU 1 nhận, bận đến t=1.00
+  t=0.10: slot 2 → VU 2 nhận, bận đến t=1.10
+  t=0.20: slot 3 → KHÔNG CÓ VU RẢNH → DROP
+  t=0.30: slot 4 → DROP
+  ...
+  t=0.90: slot 10 → DROP
+  → 2 slot chạy, 8 slot drop trong giây đầu
+
+  Sang giây thứ 2: VU 1 rảnh lúc t=1.00, VU 2 rảnh lúc t=1.10
+  → Vẫn chỉ xử lý được ~2 slot/s, 8 slot/s drop đều đặn
 ```
 
 Với `duration = 3s`:
 
 ```text
-expected_dropped ~= drop_rate * duration
-                 ~= 8 * 3
-                 ~= 24 drops
+expected_dropped ~= drop_rate × duration
+                 = 8 × 3
+                 = 24 drops
 ```
 
 Output demo đúng khoảng này:
