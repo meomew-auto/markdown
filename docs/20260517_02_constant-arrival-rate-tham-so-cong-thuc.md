@@ -778,41 +778,72 @@ Lý do: mốc đầu thường start gần `t=0`, mốc sát boundary cuối ph�
 Ví dụ cụ thể — config `rate: 4, timeUnit: "1s", duration: "4s"`:
 
 ```text
-Lý thuyết: 4 slot/s × 4s = 16 slot
+Bước 1: Tính khoảng cách giữa các mốc
+  gap = timeUnit / rate = 1s / 4 = 0.25s
 
-Timeline thực tế (mốc đầu ở t≈0, gap = 1/4 = 0.25s):
-  t ≈ 0.000s   slot 1
-  t ≈ 0.250s   slot 2
-  t ≈ 0.500s   slot 3
+Bước 2: Liệt kê các mốc từ t=0, mỗi lần +0.25s
+  slot 1:  t = 0.00s
+  slot 2:  t = 0.25s
+  slot 3:  t = 0.50s
+  slot 4:  t = 0.75s
+  slot 5:  t = 1.00s
   ...
-  t ≈ 3.750s   slot 16  ← mốc cuối, (16-1)×0.25 = 3.75s < 4s → OK
-  t = 4.000s   duration hết, không schedule nữa
+  slot 16: t = 3.75s   ← (16-1)×0.25 = 3.75 < 4.0 → được schedule
+  slot 17: t = 4.00s   ← 4.00 = duration → ???
 
-→ 16 slot, khớp lý thuyết.
+Bước 3: Mốc t=4.00s có được schedule không?
 
-Khi nào lệch? Vấn đề nằm ở BIÊN CUỐI, không phải mốc đầu:
+  Đọc code core thật: `lib/executor/constant_arrival_rate.go:364`
+  ```go
+  case <-regDurationCtx.Done():
+      return nil
+  ```
+  Khi `regDurationCtx` hết hạn (= startTime + duration = 4.00s), executor
+  return ngay lập tức. Slot timer tại t=4.00s cũng fire cùng thời điểm.
 
-  Với rate=4/s, gap=0.25s, các mốc rơi vào: 0, 0.25, 0.50, ..., 3.75, 4.00
+  Go `select` chọn ngẫu nhiên khi 2 channel cùng ready:
+    - Nếu `timer.C` thắng → slot được schedule → 17 slot
+    - Nếu `regDurationCtx.Done()` thắng → return, không schedule → 16 slot
 
-  Mốc tại t=4.00s — đúng bằng duration — có được schedule không?
-  → Tùy implementation: nếu check `slot_time < duration` thì KHÔNG (chỉ 16 slot)
-  → Nếu check `slot_time <= duration` thì CÓ (thành 17 slot)
+  → Kết quả: 16 hoặc 17, không đoán trước được.
+  → `rate × duration = 16` là ước lượng LÝ THUYẾT, không phải số đếm thực tế.
 
-  → Lệch 1 slot chỉ vì cách check biên. Run 4s lệch ~6%, run 300s lệch <0.1%.
+Bước 4: Ảnh hưởng — sai số tuyệt đối luôn ≤ 1 slot (slot biên).
+  Nhưng sai số TƯƠNG ĐỐI phụ thuộc độ dài run:
 
-Trường hợp khác: rate không chia hết cho duration:
-  rate=3/s, duration=5s → lý thuyết 15 slot
-  Mốc: 0, 0.333, 0.667, ..., 4.667 (slot 15), 5.000 (slot 16?)
-  → Slot 16 ở t=5.000s: có hay không? Lại phụ thuộc biên.
-  → Thực tế có thể 15 hoặc 16 slot.
+  Run 4s:   1 slot lệch / 16 slot  = 6.25% (lớn, không nên dùng công thức)
+  Run 10s:  1 slot lệch / 40 slot  = 2.5%
+  Run 60s:  1 slot lệch / 240 slot = 0.4%
+  Run 300s: 1 slot lệch / 1200 slot = 0.08% (vô nghĩa)
+
+  → Run càng dài, 1 slot biên càng "chìm" vào tổng số.
+  → Với run ngắn: dùng observed_scheduled_slots từ metric, không dùng công thức.
 ```
 
-Vì vậy:
-- `rate × duration` là ước lượng TỐT cho run dài (vài phút), sai số <1%
-- Với run ngắn (vài giây), 1 slot lệch đã vài % → dùng `observed_scheduled_slots`
-  (= N_done + N_drop + N_int) từ metric thì chính xác tuyệt đối
-- Và summary rate tính trên `summary_runtime_base` (khác `duration`), nên
-  không thể lấy `summary_rate × duration` để tính ngược ra scheduled slots
+Trường hợp rate không chia hết — `rate: 3/s, duration: "5s"`:
+
+```text
+  gap = 1/3 ≈ 0.333s
+
+  Liệt kê:
+  slot 1:  t=0.000
+  slot 2:  t=0.333
+  slot 3:  t=0.667
+  slot 4:  t=1.000
+  ...
+  slot 15: t=4.667   ← 4.667 < 5.0 → OK
+  slot 16: t=5.000   ← 5.000 = duration → ???
+  slot 17: t=5.333   ← 5.333 > 5.0 → chắc chắn KHÔNG
+
+  → Có thể 15 hoặc 16 slot, tùy cách check biên tại t=5.000.
+  → Công thức lý thuyết: rate × duration = 3 × 5 = 15.
+  → Nhưng nếu slot t=5.000 được schedule → thực tế là 16, lệch 1 slot.
+```
+
+Kết luận:
+- `rate × duration` là ước lượng LÝ THUYẾT, không phải số đếm thực tế
+- Muốn biết chính xác có bao nhiêu slot đã schedule → dùng `observed_scheduled_slots = N_done + N_drop + N_int` từ metric sau khi chạy
+- Với run dài (vài phút), 1 slot lệch không đáng kể. Với run ngắn (vài giây), phải đọc từ metric.
 
 **── `rate × duration` và họ hàng với executor khác ──**
 
