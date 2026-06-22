@@ -95,9 +95,9 @@ moi outage cua origin la outage cua toan bo site.
 **Database failover**: Primary DB mat ket noi -> app services bat dau tra 503 ->
 CDN van serve stale HTML/JSON products -> user khong thay gi.
 
-'Deploy thất bại]: Rollout version mới bug app crash origin unhealthy CDN serve từ version cũ user không bị ảnh hưởng team có thời gian rollback.
+'Deploy thất bại]: Rollout version mới bug app crash origin buffy CDN serve từ version cũ user không bị ảnh hưởng team có thời gian rollback.
 
-DDoS vào origin: Attacker target trực tiếp origin origin qua tài CDN (dung origin address khác, hoặc IP allowlist) và serve từ cache +.
+ĐĐS vào origin: Attacker target trực tiếp origin origin qua tài CDN (dung origin address khác, hoặc IP allowlist) và serve từ cache +.
 
 DNS / network partition: Origin unreachable do network — không phải origin code fail. Stale vẫn hoạt động.
 
@@ -159,7 +159,7 @@ Trong e-commerce, co 3 loai page:
 
 ### Storm sau outage: Ly do stale-while-error con quan trong HON
 
-Khi origin sau outage, mọi object trong CDN đều đã hết TTL. Toàn bộ traffic trở thành MISS. Đây là cách stampede thu cấp:
+Khi đứng sau outage, mọi object trong CDN đều đã hết TTL. Toàn bộ traffic trở thành MISS. Đây là cách stampede thu cấp:
 
 ```text
   Origin outage (5 phut):
@@ -186,7 +186,7 @@ Case nay chung minh 4 dieu:
 
 ### (a) Stale serving duoc kich hoat DUNG LUC
 
-Khi origin healthy CDN hoạt động bình thường (MISS HITHIT). Khi origin trở thành organichealthy CDN TỔ ĐÂY chuyển sang serving mode, KHONG CAN human. Đây là automatic circuit breaker ở cache layer.
+Khi origin healthy CDN hoạt động bình thường (MISS HITHIT). Khi origin trở thành organichealthy CDN TỔNG ĐÂY chuyển sang serving mode, KHONG CAN human. Đây là automatic circuit breaker ở cache layer.
 
 ### (b) Stale serving TRA VE DUNG OBJECT
 
@@ -307,11 +307,11 @@ Toàn bộ cơ chế — backend healthing, grace period calculation, serving de
                -> if origin unhealthy -> origin error -> client gets error
 ```
 
-Quy định "serve" chỉ xay ra trong vcl hút, chỉ khi object expired + backend unhealthy + object trong grace window. Tất cả các path khác đều dẫn đến origin.
+Quy định "serve" chỉ xảy ra trong vạch hút, chỉ khi object expired + backend unhealthy + object trong grace window. Tất cả các path khác đều dẫn đến origin.
 
 ### Application khong the test stale-while-error
 
-Neu bạn test ở application layer (direct-to-app, không qua CDN):
+Nếu bạn test ở application layer (direct-to-app, không qua CDN):
 
 ```text
   Application test:
@@ -328,7 +328,7 @@ hay khong. Den khi origin sap that -> user thay 503 -> ban moi biet.
 
 ### Vi sao khong test o mock environment?
 
-Stale-while-error phu thuoc vao:
+Stale-while-error phụ thuộc vào:
 
 1. **Health probe timing**: Varnish probe backend moi 1 giay, window=3, threshold=2
    -> can it nhat 2-3 giay de Varnish detect unhealthy. Mock khong the mo phong
@@ -629,7 +629,7 @@ Hai request warming:
 - **Second**: Cache HIT. CDN serve object tu cache (con fresh, obj.ttl >= 0s).
   Origin KHONG duoc lien lac. Origin request counter van = 1.
 
-Đây làprecondition proof: Neu warming fail (không HIT sau MISS) không có object để serve test võ nghia. Script bảo lưu ngày lập tức.
+Đây làprecondition proof: Neu warming fail (không Hết sau MISS) không có object để serve test võ nghia. Script bảo lưu ngày lập tức.
 
 ```javascript
   return { path };
@@ -688,7 +688,7 @@ interval=1s, window=3, threshold=2, Varnish can toi thieu 2 probes fail
   assertHeaderEquals(stale, 'X-Cache-Backend-Healthy', 'false', 'stale after origin unhealthy');
 ```
 
-Day là probe — bước chứng minh quan trọng nhất của toàn bộ test.
+Đây là probe — bước chứng minh quan trọng nhất của toàn bộ test.
 
 5 assertions trong stale probe:
 
@@ -825,7 +825,7 @@ truyen. Day la "test pollution" — test A lam hong test B.
   Stale served: YES (the third request)
 ```
 
-Đây là toàn bộ hành trình của một-while-error test. Mọi bước đều được chúng minh — không có gì là "assume."
+Đây là toàn bộ hành trình của một-while-error test. Mọi bước đều được chúng minh không có gì là "assume."
 
 ### 5.7 Bang tom tat: moi phase chung minh dieu gi
 
@@ -845,7 +845,7 @@ truyen. Day la "test pollution" — test A lam hong test B.
 Moi hang trong bang la mot "micro-assertion." Tat ca 10 micro-assertion deu
 phai pass de toan bo case pass. 9/10 la FAIL.
 
-Đây là toàn bộ hành trình của một-while-error test. Mọi bước đều được chúng minh — không có gì là "assume."
+Đây là toàn bộ hành trình của một-while-error test. Mọi bước đều được chúng minh không có gì là "assume."
 
 ## 6. Origin health model deep-dive
 
@@ -869,7 +869,7 @@ backend default {
 }
 ```
 
-Tham so probe:
+Tham số probe:
 
 - `.url = "/health/cdn-origin"`: Endpoint duoc probe. Day la endpoint doc lap,
   khong phai public URL cua test case.
@@ -933,7 +933,7 @@ func (h *Handler) CDNOriginHealth(c *gin.Context) {
 }
 ```
 
-Logic đơn giản nhưng CHINH XÀC:
+Logic đơn giản nhưng CHÍNH XỨC:
 
 - Neu `profile.Healthy == true` -> tra 200 (healthy).
 - Neu `profile.Healthy == false` -> tra `profile.ErrorStatus` (mac dinh 503).
@@ -973,7 +973,7 @@ func (h *Handler) storeCDNOriginProfile(ctx context.Context, profile cdnOriginPr
 }
 ```
 
-Hai lop storage:
+Hai lớp storage:
 
 1. **Redis** (primary): Profile duoc luu trong Redis key `ops:cdn:origin:profile`.
    Khi co Redis, day la nguon duy nhat. Health probe doc tu Redis (voi 250ms timeout).
@@ -983,7 +983,7 @@ Hai lop storage:
 
 ### 6.6 Tai sao can ca in-memory + Redis?
 
--Redis: Cho phép nhiều instance của app cùng chia sẻ origin profile. Khi API server scale ngang, tất cả instance đều đặn cung profile từ Redis. -In-memory: Fallback khi Redis down. Origin health probe vẫn hoạt động ngay cả khi Redis không sử dụng — profile được dồn từ memory.
+-Redis: Cho phép nhiều instance của app cùng chia sẻ origin profile. Khi API server scale ngang, tất cả instance đều đặn cùng profile từ Redis. -In-memory: Fallback khi Redis down. Origin health probe vẫn hoạt động ngay cả khi Redis không sử dụng — profile được dồn từ memory.
 
 ### 6.7 Sanitization
 
@@ -1133,7 +1133,7 @@ vao do, no su dung grace nhu stale-if-error implementation:
 | **Ai dat?** | VCL `beresp.grace` | Origin `Cache-Control` header |
 | **Trong VCL nay?** | `beresp.grace = 120s` | Duoc implement qua grace |
 
-*Điểm khác biệt cốt lõi: Trong Varnish default behavior (không có custom VCL), gạch mode bao gồmsync refresh: Varnish serve object cho client, nhưng DONG THOI gửi một request xuống origin để refresh object. Stale-if-error KHONG làm async refresh — NÓ KHÔNG CÓ serve và KHONG liên lạc origin.
+*Điểm khác biệt cốt lõi: Trong Varnish default behavior (không có custom VCL), gạch mode bao gồmsync refresh: Varnish serve object cho client, nhưng ĐONG THỨC gửi một request xuống origin để refresh object. Stale-if-error Khối làm async refresh — NHƯỢNG CÓ serve và KHÔNG liên lạc origin.
 
 Trong VCL cua chung ta, `vcl_hit` chi serve stale ma KHONG bat dau async refresh.
 Dieu nay duoc dam bao vi code chi `return (deliver)` — khong co `return (miss)`
@@ -1148,7 +1148,7 @@ if (!std.healthy(req.backend_hint) && obj.ttl + obj.grace > 0s) {
 }
 ```
 
-Dieu kien KEP:
+Điều kiện KEP:
 
 1. `!std.healthy(req.backend_hint)`: Backend phai khong healthy. Day la prerequisite —
    khong the serve stale neu backend con healthy (se forward request thay vi serve stale).
@@ -1172,7 +1172,7 @@ sub vcl_deliver {
 }
 ```
 
-Co che kiem soat chat che:
+Cơ chế kiểm soát chặt chẽ:
 
 - Header chi duoc set khi backend unhealthy VA object da tung duoc serve (obj.hits > 0).
 - Khi backend healthy, header bi unset — test se fail neu assert co header nay.
