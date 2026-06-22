@@ -756,3 +756,814 @@ TẤT CẢ các điều kiện sau đồng thời đúng:
 | Chạy khi cache đã warm canonical từ trước | canonical_first = HIT (thay vì MISS) | Nếu canonical_first = HIT, check vẫn pass (status 200, cache key đúng) — nhưng cache state sai ⇒ tổng checks fail vì `assertCacheState(canonicalFirst, 'MISS')` |
 | Chạy khi tracking params trùng canonical do app ignore params | tracked MISS dù CDN không strip | Không thể phát hiện từ CDN layer — cần kiểm tra app access log |
 | Chạy với profile không có variant | Cache key headers đơn giản hơn, dễ pass hơn | So sánh với expectedCacheKey |
+
+---
+
+## 10. Cách chạy + output mẫu
+
+### 10.1. Lệnh chạy
+
+```powershell
+cd E:\Projects\k6\k6-metrics-server\load-target
+
+$env:BASE_URL = "http://localhost:80"
+$env:CONTROL_BASE_URL = "http://localhost:8088"
+$env:CATALOG_EVENTS_BASE_URL = "http://localhost:9091"
+$env:OPS_AUTH_TOKEN = "<ops-token>"
+
+k6 run .\k6\cdn\04-query-normalization.js
+```
+
+Hoặc dùng runner script:
+
+```powershell
+cd E:\Projects\k6\k6-metrics-server
+$env:BASE_URL = "http://localhost:80"
+$env:CONTROL_BASE_URL = "http://localhost:8088"
+$env:CATALOG_EVENTS_BASE_URL = "http://localhost:9091"
+$env:OPS_AUTH_TOKEN = "<ops-token>"
+.\scripts\run-cdn-capabilities.ps1 -Scenarios 04-query-normalization
+```
+
+### 10.2. Output mẫu -- PASS
+
+```text
+
+         /\      |‾‾| /‾‾/   /‾‾/
+    /\  /  \     |  |/  /   /  /
+   /  \/    \    |     (   /   ‾‾\
+  /          \   |  |\  \ |  (‾)  |
+ / __________ \  |__| \__\ \_____/ .io
+
+  execution: local
+     script: .\k6\cdn\04-query-normalization.js
+     output: -
+
+  scenarios: (100.00%) 1 scenario, 1 max VUs, 10m30s max duration (incl. graceful stop):
+           * default: 1 iterations shared among 1 VUs (maxDuration: 10m0s, gracefulStop: 30s)
+
+
+running (00m00.2s), 0/1 VUs, 1 complete and 0 interrupted iterations
+default   [   0%] 0 VUs  00m00.2s/10m0s
+
+running (00m00.4s), 1/1 VUs, 1 complete and 0 interrupted iterations
+default   [ 100%] 1 VUs  00m00.4s/10m0s  1/1 shared iters
+
+     █ setup
+       ✓ ban-prefix /api/sim/products/search status 200
+
+     █ canonical_first
+       ✓ canonical first status 200
+       ✓ canonical first cache state MISS
+       ✓ canonical first cache language en
+       ✓ canonical first cache geo US
+       ✓ canonical first cache device desktop
+       ✓ canonical first cache ab control
+
+     █ canonical_second
+       ✓ canonical second status 200
+       ✓ canonical second cache state HIT
+       ✓ canonical second cache language en
+       ✓ canonical second cache geo US
+       ✓ canonical second cache device desktop
+       ✓ canonical second cache ab control
+
+     █ tracked_query
+       ✓ tracked query status 200
+       ✓ tracked query cache state HIT
+       ✓ tracked query cache language en
+       ✓ tracked query cache geo US
+       ✓ tracked query cache device desktop
+       ✓ tracked query cache ab control
+
+     █ business_param_first
+       ✓ business param first status 200
+       ✓ business param first cache state MISS
+       ✓ business param first cache language en
+       ✓ business param first cache geo US
+       ✓ business param first cache device desktop
+       ✓ business param first cache ab control
+
+     █ business_param_second
+       ✓ business param second status 200
+       ✓ business param second cache state HIT
+       ✓ business param second cache language en
+       ✓ business param second cache geo US
+       ✓ business param second cache device desktop
+       ✓ business param second cache ab control
+
+     ✓ checks.........................: 100.00%  ✓ 31  ✗ 0
+     data_received....................: 8.5 kB   42 kB/s
+     data_sent........................: 2.4 kB   12 kB/s
+     http_req_blocked.................: avg=1.87ms  min=1.21ms med=1.65ms  max=3.8ms   p(90)=3.12ms  p(95)=3.46ms
+     http_req_duration................: avg=17.3ms  min=12.8ms med=16.5ms  max=24.1ms  p(90)=22.3ms  p(95)=23.2ms
+     http_reqs........................: 6        30/s
+     iteration_duration..............: avg=245.12ms min=245.12ms med=245.12ms max=245.12ms p(90)=245.12ms p(95)=245.12ms
+     iterations.......................: 1        5/s
+     vus..............................: 1        min=1 max=1
+
+
+All checks passed
+```
+
+### 10.3. Output mẫu -- FAIL (tracking params không bị strip)
+
+```text
+     █ canonical_first
+       ✓ canonical first status 200
+       ✓ canonical first cache state MISS
+       ✓ canonical first cache language en
+       ✓ canonical first cache geo US
+       ✓ canonical first cache device desktop
+       ✓ canonical first cache ab control
+
+     █ canonical_second
+       ✓ canonical second status 200
+       ✓ canonical second cache state HIT
+       ✓ canonical second cache language en
+       ✓ canonical second cache geo US
+       ✓ canonical second cache device desktop
+       ✓ canonical second cache ab control
+
+     █ tracked_query
+       ✓ tracked query status 200
+       ✗ tracked query cache state HIT      <-- FAIL: expected HIT, got MISS
+       ✓ tracked query cache language en
+       ✓ tracked query cache geo US
+       ✓ tracked query cache device desktop
+       ✓ tracked query cache ab control
+
+     ✓ checks.........................: 96.77%   ✓ 30  ✗ 1
+
+ERRO[0003] thresholds on metrics 'checks' have been crossed
+```
+
+Trong output này: canonical MISS -> HIT bình thường. Nhưng tracked query trả về MISS thay vì HIT -- chứng tỏ CDN không strip `utm_source`/`fbclid`/`gclid`, dẫn đến cache key khác canonical. Cache fragmentation đang xảy ra.
+
+### 10.4. Output mẫu -- FAIL (business param bị strip quá aggressive)
+
+```text
+     █ business_param_first
+       ✓ business param first status 200
+       ✗ business param first cache state MISS   <-- FAIL: expected MISS, got HIT
+       ✓ business param first cache language en
+       ✓ business param first cache geo US
+       ✓ business param first cache device desktop
+       ✓ business param first cache ab control
+
+     ✓ checks.........................: 96.77%   ✓ 30  ✗ 1
+```
+
+Trong output này: business param request trả về HIT thay vì MISS -- chứng tỏ CDN đã strip `sort=price` (coi nó như tracking param), khiến cache key trùng canonical. Đây là lỗi over-normalization: người dùng yêu cầu sắp xếp theo giá nhưng nhận cache của kết quả mặc định.
+
+---
+
+## 11. 4 output -> decision scenarios
+
+### 11.1. Scenario A: Tất cả PASS (lý tưởng)
+
+| Quan sát | Giá trị |
+| --- | --- |
+| Exit code | `0` |
+| Checks | 31/31 ✓ (hoặc 30/30 tùy version) |
+| Canonical sequence | MISS -> HIT |
+| Tracked query | HIT |
+| Business sequence | MISS -> HIT |
+
+**Quyết định**: CDN query normalization hoạt động chính xác. Tracking params bị strip đúng, business params được giữ đúng. Triển khai production với confidence cao cho search endpoints.
+
+### 11.2. Scenario B: Tracking params vẫn MISS
+
+| Quan sát | Giá trị |
+| --- | --- |
+| Exit code | `≠ 0` |
+| canonical | MISS -> HIT (OK) |
+| tracked | MISS (FAIL) |
+| business | MISS -> HIT (OK) |
+
+**Quyết định**: Danh sách tracking params trong VCL thiếu `utm_source`, `fbclid`, hoặc `gclid`. Cần cập nhật VCL `normalize_query`:
+
+```vcl
+// Thêm vào danh sách strip
+if (req.url ~ "[?&](utm_source|utm_medium|utm_campaign|utm_term|utm_content|fbclid|gclid|dclid|msclkid)=") {
+  set req.url = regsuball(req.url, "[?&](utm_source|utm_medium|utm_campaign|utm_term|utm_content|fbclid|gclid|dclid|msclkid)=[^&]*", "");
+}
+```
+
+### 11.3. Scenario C: Business params HIT canonical
+
+| Quan sát | Giá trị |
+| --- | --- |
+| Exit code | `≠ 0` |
+| canonical | MISS -> HIT (OK) |
+| tracked | HIT (OK) |
+| business_first | HIT (FAIL -- mong đợi MISS) |
+
+**Quyết định**: VCL normalization quá aggressive -- đang strip `sort` hoặc các business param khác cùng với tracking params. Cần chuyển từ "whitelist approach" (chỉ giữ param đã biết) sang "blacklist approach" (chỉ xóa param đã biết là tracking). Hoặc cập nhật whitelist để bao gồm `sort`, `filter`, `page`, `limit`, `q`.
+
+### 11.4. Scenario D: Canonical không cache được
+
+| Quan sát | Giá trị |
+| --- | --- |
+| Exit code | `≠ 0` |
+| canonical_second | MISS (FAIL -- mong đợi HIT) |
+| Các request sau | Tất cả MISS |
+
+**Quyết định**: Cache layer không hoạt động hoặc origin không trả về cache headers phù hợp. Không phải vấn đề query normalization -- cần kiểm tra case 01 (HIT smoke) và case 07 (cache contract) trước khi debug case 04.
+
+---
+
+## 12. Nghịch lý / misconceptions
+
+### 12.1. Nghịch lý 1: "Tất cả query params nên được giữ lại để an toàn"
+
+**Lầm tưởng**: Không nên strip bất kỳ param nào -- mỗi URL khác nhau là một tài nguyên khác nhau. CDN nên cache chính xác những gì client yêu cầu.
+
+**Sự thật**: HTTP spec cho phép CDN normalize URL trước khi cache. Các tracking params như `utm_source`, `fbclid`, `gclid` được thêm bởi bên thứ ba (marketing platform) và **không ảnh hưởng đến response từ server**. Giữ chúng trong cache key là cache fragmentation vô ích. Varnish khuyến nghị strip chúng:
+
+```text
+"HTTP aware caching proxies such as Varnish will... potentially normalize the URL 
+before storing it in cache." — Varnish docs on cache variations
+```
+
+### 12.2. Nghịch lý 2: "Sorting params sau khi strip là không cần thiết"
+
+**Lầm tưởng**: Sau khi strip tracking params, URL đã "đủ sạch" -- không cần sort lại thứ tự params.
+
+**Sự thật**: Nếu không sort, `?q=shoe&sort=price` và `?sort=price&q=shoe` tạo ra 2 cache object khác nhau cho cùng nội dung. Mặc dù cả hai đều không có tracking params, thứ tự params khác nhau dẫn đến cache key khác nhau. Sorting đảm bảo canonical form.
+
+### 12.3. Nghịch lý 3: "Chỉ cần strip params ở VCL, không cần quan tâm app"
+
+**Lầm tưởng**: CDN strip tracking params là đủ -- app không cần biết về chúng.
+
+**Sự thật**: App vẫn cần nhất quán với CDN:
+
+| Vấn đề | Nếu app không đồng bộ |
+| --- | --- |
+| **Internal redirect** | App redirect `?utm_source=x` thành `?sort=price` -- CDN strip `utm_source` nhưng cache key từ URL gốc không khớp redirect target |
+| **Canonical URL trong HTML** | App render `<link rel="canonical">` với tracking params -- CDN cache phiên bản canonical, browser thấy URL khác |
+| **Sitemap** | Sitemap chứa URL có tracking params -- search engine index URL tracking, CDN cache canonical |
+
+### 12.4. Nghịch lý 4: "Tracking params list là cố định -- chỉ có UTM, FBCLID, GCLID"
+
+**Lầm tưởng**: Danh sách tracking params không thay đổi theo thời gian.
+
+**Sự thật**: Mỗi marketing platform thêm param riêng:
+
+| Platform | Param | Thời điểm xuất hiện |
+| --- | --- | --- |
+| Google Ads | `gclid` | Luôn có |
+| Google Analytics 4 | `_gl`, `_ga` | GA4 migration |
+| Facebook | `fbclid` | Luôn có |
+| Microsoft Ads | `msclkid` | 2021+ |
+| DoubleClick | `dclid` | Legacy |
+| HubSpot | `hsa_*` | Tùy integration |
+| Marketo | `mkt_tok` | Tùy integration |
+
+Cần review và cập nhật danh sách tracking params định kỳ. Tốt hơn: dùng whitelist approach (chỉ giữ business params đã biết) để tự động chặn tracking params mới.
+
+### 12.5. Nghịch lý 5: "Query normalization chỉ áp dụng cho search endpoint"
+
+**Lầm tưởng**: Query params chỉ quan trọng cho search API -- các endpoint khác (product detail, category) không có query params phức tạp.
+
+**Sự thật**: Tracking params có thể xuất hiện trên **bất kỳ URL nào**:
+
+```text
+Không có normalization:
+  /products/1?utm_source=email                    ──▶ Cache object riêng (lãng phí)
+  /products/1                                      ──▶ Cache object riêng
+  /categories?utm_source=fb&fbclid=abc            ──▶ Cache object riêng (lãng phí)
+  /categories                                      ──▶ Cache object riêng
+```
+
+Query normalization nên được áp dụng toàn cục trong `vcl_recv`, không chỉ cho search path. Nếu không, mọi endpoint có thể bị cache fragmentation do tracking params.
+
+---
+
+## 13. Checklist trước khi chạy
+
+### 13.1. Topology checklist
+
+```text
+[ ] TargetLayer = full (Varnish + Nginx + App)
+[ ] localhost:80 trả về response có X-Cache header
+[ ] localhost:80/api/sim/products/search?q=shoe trả về 200
+[ ] localhost:8088 chấp nhận request POST với OPS token
+[ ] CATALOG_EVENTS_BASE_URL = http://localhost:9091 (dù case này không dùng)
+```
+
+### 13.2. Env checklist
+
+```text
+[ ] BASE_URL = "http://localhost:80" (REQUIRED - phải qua Varnish)
+[ ] CONTROL_BASE_URL = "http://localhost:8088" (REQUIRED - cần cho ban prefix)
+[ ] OPS_AUTH_TOKEN được set (REQUIRED - cần cho control plane)
+[ ] Token có quyền POST /ops/app/cdn/cache/ban
+```
+
+### 13.3. Pre-run validation
+
+```text
+[ ] Chạy case 01 PASS trước — xác nhận cache hoạt động
+[ ] Chạy case 02 PASS trước — xác nhận cache key variant hoạt động
+[ ] Kiểm tra search endpoint thủ công:
+    curl -H "Accept-Language: en" \
+         -H "X-Geo-Country: US" \
+         -H "X-Device-Class: desktop" \
+         -H "X-Ab-Variant: control" \
+         -H "X-User-Segment: guest" \
+         "http://localhost:80/api/sim/products/search?q=shoe"
+    → 200, X-Cache header present
+[ ] Xác nhận ban prefix hoạt động:
+    curl -X POST \
+         -H "Authorization: Bearer $env:OPS_AUTH_TOKEN" \
+         -H "Content-Type: application/json" \
+         -d '{"prefix":"/api/sim/products/search"}' \
+         "http://localhost:8088/ops/app/cdn/cache/ban"
+    → 200
+```
+
+### 13.4. Post-run checklist
+
+```text
+[ ] k6 exit code = 0
+[ ] checks = 100.00% (30 hoặc 31 checks tùy version)
+[ ] canonical_first = MISS
+[ ] canonical_second = HIT
+[ ] tracked_query = HIT (ĐÂY LÀ TRỌNG TÂM)
+[ ] business_param_first = MISS (ĐÂY LÀ TRỌNG TÂM)
+[ ] business_param_second = HIT
+[ ] Tất cả cache key headers = {language:en, geo:US, device:desktop, ab:control}
+[ ] Không có dòng "ERRO" trong output
+```
+
+---
+
+## 14. 4-5 Variations với code mẫu
+
+### 14.1. Variation 1: Test với nhiều tracking params platform khác nhau
+
+Script gốc chỉ test 3 tracking params (`utm_source`, `fbclid`, `gclid`). Variation này mở rộng cho nhiều platform hơn.
+
+```javascript
+export default function () {
+  const profile = profiles.guestUSDesktopControl;
+  const expected = expectedCacheKey(profile);
+
+  // Warm canonical
+  warmCanonical(profile, expected);
+
+  // Test từng platform tracking param riêng biệt
+  const trackingTests = [
+    { label: 'google_ads', params: 'gclid=EAIaIQobChMI' },
+    { label: 'facebook', params: 'fbclid=IwAR123abc' },
+    { label: 'microsoft', params: 'msclkid=abc123def456' },
+    { label: 'doubleclick', params: 'dclid=CM-wx7u8pNcCFQUIaAod' },
+    { label: 'hubspot', params: 'hsa_acc=12345&hsa_cam=67890&hsa_grp=11111' },
+    { label: 'all_combined', params: 'utm_source=email&utm_medium=newsletter&utm_campaign=sale&fbclid=abc&gclid=xyz&msclkid=def' },
+  ];
+
+  for (const test of trackingTests) {
+    const trackedPath = `${paths.searchPrefix}?q=shoe&${test.params}`;
+    const res = requestCdn('GET', trackedPath, {
+      profile,
+      tags: { case: `tracked_${test.label}` },
+    });
+    assertStatus(res, 200, `tracked ${test.label}`);
+    assertCacheState(res, 'HIT', `tracked ${test.label}`);
+    assertCacheKeyHeaders(res, expected, `tracked ${test.label}`);
+  }
+}
+
+function warmCanonical(profile, expected) {
+  const first = requestCdn('GET', paths.search, {
+    profile,
+    tags: { case: 'canonical_warm' },
+  });
+  // Warm đủ để canonical có trong cache
+}
+```
+
+### 14.2. Variation 2: Test với nhiều business params
+
+```javascript
+export default function () {
+  const profile = profiles.guestUSDesktopControl;
+  const expected = expectedCacheKey(profile);
+
+  // Warm canonical
+  const canonical = requestCdn('GET', paths.search, { profile, tags: { case: 'canonical' } });
+
+  // Mỗi business param KHÁC NHAU phải tạo cache key riêng
+  const businessTests = [
+    { label: 'sort_price', params: 'sort=price' },
+    { label: 'sort_newest', params: 'sort=newest' },
+    { label: 'page_2', params: 'page=2' },
+    { label: 'filter_brand', params: 'filter=brand:nike' },
+    { label: 'combined', params: 'sort=price&page=1&filter=brand:adidas' },
+  ];
+
+  for (const test of businessTests) {
+    const path = `${paths.searchPrefix}?q=shoe&${test.params}`;
+    const first = requestCdn('GET', path, {
+      profile,
+      tags: { case: `${test.label}_first` },
+    });
+    assertStatus(first, 200, `${test.label} first`);
+    assertCacheState(first, 'MISS', `${test.label} first`);
+    assertCacheKeyHeaders(first, expected, `${test.label} first`);
+
+    const second = requestCdn('GET', path, {
+      profile,
+      tags: { case: `${test.label}_second` },
+    });
+    assertStatus(second, 200, `${test.label} second`);
+    assertCacheState(second, 'HIT', `${test.label} second`);
+    assertCacheKeyHeaders(second, expected, `${test.label} second`);
+  }
+}
+```
+
+### 14.3. Variation 3: Test param order independence
+
+```javascript
+// Chứng minh rằng thứ tự params không ảnh hưởng đến cache key
+const profile = profiles.guestUSDesktopControl;
+const expected = expectedCacheKey(profile);
+
+const base = requestCdn('GET', '/api/sim/products/search?q=shoe&sort=price&page=1', {
+  profile,
+  tags: { case: 'order_base' },
+});
+assertCacheState(base, 'MISS', 'order base');
+
+const reversed = requestCdn('GET', '/api/sim/products/search?page=1&sort=price&q=shoe', {
+  profile,
+  tags: { case: 'order_reversed' },
+});
+assertCacheState(reversed, 'HIT', 'order reversed');
+// HIT chứng tỏ URL đã được sort -> cache key giống base
+
+const withTracking = requestCdn('GET',
+  '/api/sim/products/search?utm_source=fb&q=shoe&fbclid=abc&sort=price&page=1&gclid=xyz', {
+  profile,
+  tags: { case: 'order_with_tracking' },
+});
+assertCacheState(withTracking, 'HIT', 'order with tracking');
+// HIT chứng tỏ sau khi strip tracking + sort, cache key giống base
+```
+
+### 14.4. Variation 4: Test cross-profile với cùng query
+
+```javascript
+export default function () {
+  // Mỗi profile KHÁC NHAU tạo cache key khác nhau, NGAY CẢ khi query giống nhau
+  const profiles_to_test = [
+    { profile: profiles.guestUSDesktopControl, label: 'us_desktop_en' },
+    { profile: profiles.guestVNMobileControl, label: 'vn_mobile_vi' },
+  ];
+
+  for (const { profile, label } of profiles_to_test) {
+    const expected = expectedCacheKey(profile);
+
+    const first = requestCdn('GET', paths.search, {
+      profile,
+      tags: { case: `${label}_first` },
+    });
+    assertCacheState(first, 'MISS', `${label} first`);
+    assertCacheKeyHeaders(first, expected, `${label} first`);
+
+    const second = requestCdn('GET', paths.search, {
+      profile,
+      tags: { case: `${label}_second` },
+    });
+    assertCacheState(second, 'HIT', `${label} second`);
+  }
+}
+```
+
+### 14.5. Variation 5: Dùng origin request counter để verify
+
+```javascript
+import { resetOriginRequestCounts, getOriginRequestCounts, findOriginRequestCount } from './shared.js';
+
+export function setup() {
+  banPrefix(paths.searchPrefix);
+  resetOriginRequestCounts();
+}
+
+export default function () {
+  const profile = profiles.guestUSDesktopControl;
+  const expected = expectedCacheKey(profile);
+
+  // ... canonical warm ...
+
+  // Sau khi warm canonical, origin count cho search endpoint = 1
+  const counts1 = getOriginRequestCounts();
+  const searchReqs1 = findOriginRequestCount(counts1, 'GET/search');
+  // searchReqs1 phải = 1 (chỉ canonical_first gọi origin)
+
+  // Gửi tracked query
+  const tracked = requestCdn('GET', '/api/sim/products/search?q=shoe&utm_source=fb&fbclid=abc', {
+    profile,
+    tags: { case: 'tracked' },
+  });
+  assertCacheState(tracked, 'HIT', 'tracked');
+
+  // Origin count KHÔNG tăng vì tracked query HIT cache
+  const counts2 = getOriginRequestCounts();
+  const searchReqs2 = findOriginRequestCount(counts2, 'GET/search');
+  // searchReqs2 vẫn phải = 1 (tracked query không gọi origin)
+}
+```
+
+---
+
+## 15. Anti-patterns
+
+### 15.1. Anti-pattern 1: Strip tất cả query params (kể cả business)
+
+```text
+SAI:
+  sub normalize_query {
+    set req.url = regsub(req.url, "\?.*$", "");
+    // Xóa TOÀN BỘ query string!
+  }
+```
+
+**Vấn đề**: Mọi request `/search?q=shoe&sort=price` trở thành `/search`. User không thể sắp xếp kết quả vì cache trả về object đầu tiên được cache. Business logic bị phá hủy.
+
+**Cách đúng**: Dùng blacklist tracking params cụ thể, hoặc whitelist business params.
+
+### 15.2. Anti-pattern 2: Chỉ strip khi URL khớp pattern cụ thể
+
+```text
+SAI:
+  if (req.url ~ "^/api/sim/products/search") {
+    set req.url = normalize_query(req.url);
+  }
+```
+
+**Vấn đề**: Tracking params có thể xuất hiện trên bất kỳ URL nào (product detail, category, homefeed). Chỉ normalize search path để lộ các endpoint khác.
+
+**Cách đúng**: Áp dụng normalization toàn cục trong `vcl_recv`, trước khi cache key được tính.
+
+### 15.3. Anti-pattern 3: Không test với URL đã encode
+
+```text
+SAI: Chỉ test với query params ASCII thuần túy
+  /search?q=shoe&utm_source=facebook
+```
+
+**Vấn đề**: URL trong thực tế có thể được encode:
+- `/search?q=gi%C3%A0y&utm_source=facebook` (giày được encode)
+- `/search?q=shoe&utm_campaign=flash%20sale` (space được encode)
+- `/search?q=shoe&utm_source=fb&fbclid=abc%3D%3D` (base64 padding)
+
+VCL normalization phải xử lý được URL encoded params.
+
+```javascript
+// Variation test cho URL encoded params
+const encodedPath = '/api/sim/products/search?q=shoe&utm_source=fb&utm_campaign=flash%20sale';
+const res = requestCdn('GET', encodedPath, { profile, tags: { case: 'encoded_tracking' } });
+assertCacheState(res, 'HIT', 'encoded tracking');
+```
+
+### 15.4. Anti-pattern 4: Dùng regex "quá rộng" để strip params
+
+```text
+SAI:
+  set req.url = regsuball(req.url, "[?&][a-zA-Z0-9_]+=[^&]*", "");
+  // Xóa MỌI param — kể cả q, sort, filter!
+```
+
+**Vấn đề**: Regex match mọi param. Sau khi strip, URL mất tất cả query.
+
+**Cách đúng**: Dùng regex với alternation của tracking param names cụ thể:
+
+```text
+set req.url = regsuball(req.url, 
+  "[?&](utm_source|utm_medium|utm_campaign|utm_term|utm_content|fbclid|gclid|dclid|msclkid|ref|referrer|source)=[^&]*", 
+  "");
+```
+
+### 15.5. Anti-pattern 5: Không xử lý edge case "chỉ có tracking params"
+
+```text
+URL: /search?utm_source=fb&fbclid=abc
+Sau khi strip: /search?
+hoặc: /search (nếu clean trailing ?)
+```
+
+Nếu không clean trailing `?` hoặc `&`, cache key có thể chứa ký tự thừa. Cần test edge case này:
+
+```javascript
+const onlyTrackingPath = '/api/sim/products/search?utm_source=fb&fbclid=abc';
+const res = requestCdn('GET', onlyTrackingPath, { profile, tags: { case: 'only_tracking' } });
+assertCacheState(res, 'HIT', 'only tracking');
+// Phải HIT canonical /search?q=shoe (nếu đã warm) hoặc ít nhất không crash
+```
+
+### 15.6. Anti-pattern 6: Bypass case 04 vì "app cũng ignore tracking params"
+
+```text
+SAI:
+  "App của tôi không dùng utm_source nên response giống nhau.
+   Không cần CDN normalize — app tự lo."
+```
+
+**Vấn đề**: Mặc dù app ignore tracking params và response giống nhau, CDN vẫn coi mỗi URL là một cache key khác nhau. Cache fragmentation xảy ra ở CDN layer, không phải app layer. App không thể "nói" cho CDN biết param nào là tracking — chỉ VCL mới làm được.
+
+---
+
+## 16. Real validation data
+
+### 16.1. Request/response mẫu -- canonical
+
+**Request canonical first:**
+```http
+GET /api/sim/products/search?q=shoe HTTP/1.1
+Host: localhost:80
+Accept: application/json
+Accept-Language: en
+X-Geo-Country: US
+X-Device-Class: desktop
+X-Ab-Variant: control
+X-User-Segment: guest
+```
+
+**Response canonical first:**
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+X-Cache: MISS
+X-Cache-Key-Language: en
+X-Cache-Key-Geo: US
+X-Cache-Key-Device: desktop
+X-Cache-Key-AB: control
+
+{"products": [...], "total": 42, "query": "shoe"}
+```
+
+**Response canonical second:**
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+X-Cache: HIT
+X-Cache-Key-Language: en
+X-Cache-Key-Geo: US
+X-Cache-Key-Device: desktop
+X-Cache-Key-AB: control
+
+{"products": [...], "total": 42, "query": "shoe"}
+```
+
+### 16.2. Request/response mẫu -- tracked query HIT canonical
+
+**Request:**
+```http
+GET /api/sim/products/search?q=shoe&utm_source=lesson&fbclid=abc123&gclid=paid123 HTTP/1.1
+Host: localhost:80
+Accept: application/json
+Accept-Language: en
+X-Geo-Country: US
+X-Device-Class: desktop
+X-Ab-Variant: control
+X-User-Segment: guest
+```
+
+**Response:**
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+X-Cache: HIT
+X-Cache-Key-Language: en
+X-Cache-Key-Geo: US
+X-Cache-Key-Device: desktop
+X-Cache-Key-AB: control
+
+{"products": [...], "total": 42, "query": "shoe"}
+```
+
+Lưu ý: `X-Cache: HIT` dù URL có `utm_source`, `fbclid`, `gclid`. Response body và cache key headers giống hệt canonical. Đây là bằng chứng tracking params đã bị strip, cache key trùng canonical.
+
+### 16.3. Request/response mẫu -- business param MISS
+
+**Request business first:**
+```http
+GET /api/sim/products/search?q=shoe&sort=price HTTP/1.1
+Host: localhost:80
+Accept: application/json
+Accept-Language: en
+X-Geo-Country: US
+X-Device-Class: desktop
+X-Ab-Variant: control
+X-User-Segment: guest
+```
+
+**Response business first:**
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+X-Cache: MISS
+X-Cache-Key-Language: en
+X-Cache-Key-Geo: US
+X-Cache-Key-Device: desktop
+X-Cache-Key-AB: control
+
+{"products": [...], "total": 15, "query": "shoe", "sort": "price"}
+```
+
+Lưu ý: `X-Cache: MISS` -- đây là cache key mới, KHÁC canonical. Response body có `total: 15` (khác với canonical `total: 42`), chứng tỏ `sort=price` tạo kết quả khác.
+
+**Response business second:**
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+X-Cache: HIT
+X-Cache-Key-Language: en
+X-Cache-Key-Geo: US
+X-Cache-Key-Device: desktop
+X-Cache-Key-AB: control
+
+{"products": [...], "total": 15, "query": "shoe", "sort": "price"}
+```
+
+### 16.4. Bảng so sánh response -- 3 loại request
+
+| Thuộc tính | Canonical (lần 2) | Tracked (utm+fbclid+gclid) | Business sort=price (lần 2) |
+| --- | --- | --- | --- |
+| URL request | `/search?q=shoe` | `/search?q=shoe&utm_source=lesson&fbclid=abc123&gclid=paid123` | `/search?q=shoe&sort=price` |
+| URL sau normalize | `/search?q=shoe` | `/search?q=shoe` | `/search?q=shoe&sort=price` |
+| `X-Cache` | `HIT` | `HIT` | `HIT` |
+| Cache key = canonical? | Có (chính nó) | **Có** (normalized) | **Không** (business param) |
+| `total` trong response | 42 | 42 | 15 |
+| Origin được gọi? | Không | Không | Không (đã warm) |
+
+### 16.5. Latency comparison
+
+| Request type | Lần 1 (ms) | Lần 2 (ms) | Chênh lệch |
+| --- | --- | --- | --- |
+| Canonical | ~18ms (MISS) | ~3ms (HIT) | HIT nhanh hơn ~6x |
+| Tracked | ~3ms (HIT canonical) | N/A | Bằng canonical HIT |
+| Business | ~18ms (MISS) | ~3ms (HIT) | HIT nhanh hơn ~6x |
+
+Tracked query lần đầu tiên đã là HIT (vì canonical đã warm), nên latency ~3ms -- nhanh hơn nhiều so với nếu phải gọi origin. Đây là lợi ích trực tiếp của query normalization: user từ ad campaign nhận response nhanh như user trực tiếp.
+
+---
+
+## 17. Reference
+
+### 17.1. Source code
+
+| File | Path |
+| --- | --- |
+| Script | `E:\Projects\k6\k6-metrics-server\load-target\k6\cdn\04-query-normalization.js` |
+| Shared helpers | `E:\Projects\k6\k6-metrics-server\load-target\k6\cdn\shared.js` |
+| Common utilities | `E:\Projects\k6\k6-metrics-server\load-target\k6\shared\common.js` |
+| Case catalog | `E:\Projects\k6\k6-metrics-server\load-target\k6\cdn\case-catalog.json` |
+| Scenario README | `E:\Projects\k6\k6-metrics-server\load-target\k6\cdn\README.md` |
+
+### 17.2. Documents
+
+| Document | Path |
+| --- | --- |
+| CDN Overview | `E:\Khoa hoc\k6\docs\practice\cdn\00_overview.md` |
+| Case 01 (HIT smoke) | `E:\Khoa hoc\k6\docs\practice\cdn\01_hit-smoke.md` |
+| Case 02 (Variant keys) | `E:\Khoa hoc\k6\docs\practice\cdn\02_variant-keys.md` |
+| Case 03 (Bypass rules) | `E:\Khoa hoc\k6\docs\practice\cdn\03_bypass-rules.md` |
+| Run guide | `E:\Khoa hoc\k6\docs\practice\cdn\RUN_GUIDE.md` |
+
+### 17.3. External references
+
+| Resource | URL / Description |
+| --- | --- |
+| Varnish `vcl_hash` docs | `https://varnish-cache.org/docs/trunk/reference/vcl.html#hash` |
+| Varnish URL normalization best practices | `https://info.varnish-software.com/blog/normalizing-urls-in-varnish` |
+| Google UTM parameters | `https://support.google.com/analytics/answer/1033863` |
+| Facebook `fbclid` documentation | `https://developers.facebook.com/docs/marketing-api/click-id/` |
+| Microsoft `msclkid` documentation | `https://help.ads.microsoft.com/apex/index/3/en/60000` |
+| RFC 3986 — URI Generic Syntax | `https://datatracker.ietf.org/doc/html/rfc3986` |
+| RFC 7234 — HTTP Caching (Section 4: Cache Key) | `https://datatracker.ietf.org/doc/html/rfc7234` |
+
+### 17.4. Related cases
+
+```text
+cdn-01-hit-smoke              ──▶ Hiểu baseline cache HIT trước khi test normalization
+cdn-02-variant-keys           ──▶ Cache key dimensions (headers) — normalization áp dụng cho cả URL và headers
+cdn-03-bypass-rules           ──▶ Bypass rules (ngược lại: request không được cache)
+cdn-05-invalidation-ops       ──▶ Purge/ban object — cần normalize URL trước khi gửi invalidation command
+cdn-07-cache-contract         ──▶ Origin cache headers (Cache-Control) — response vẫn phải có cache headers dù URL được normalize
+```
+
+### 17.5. Ghi chú về interoperability
+
+Query normalization trong CDN phải đồng bộ với:
+
+| Component | Yêu cầu đồng bộ |
+| --- | --- |
+| **App server** | App không nên redirect dựa trên tracking params, không nhúng tracking params vào canonical URL |
+| **Control plane** | Khi purge/ban URL, phải dùng URL đã normalize (không có tracking params) hoặc control plane cũng normalize trước khi gửi lệnh |
+| **CDN log/analytics** | Log URL gốc (trước normalize) cho analytics, nhưng cache với URL đã normalize |
+| **Sitemap / SEO** | Sitemap dùng canonical URL (không có tracking params) |
+| **Client-side analytics** | JavaScript analytics vẫn đọc tracking params từ `window.location.search` — không bị ảnh hưởng bởi CDN normalization |

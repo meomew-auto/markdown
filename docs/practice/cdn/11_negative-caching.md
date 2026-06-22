@@ -1188,6 +1188,50 @@ Negative caching là behavior phụ thuộc thời gian (TTL). Một lần pass 
 
 Nên test ít nhất 2 lần với TTL khác nhau (ví dụ: 2s và 10s).
 
+### 12.6. Misconception 6: "Negative caching chỉ cần cho 404"
+
+Nhiều team chỉ cấu hình VCL cache 404, bỏ qua các status code quan trọng khác:
+
+| Status code bị bỏ qua | Tại sao cũng cần cache |
+| --- | --- |
+| 410 Gone | Object đã bị xóa vĩnh viễn — nên cache lâu hơn 404 vì sẽ không quay lại |
+| 403 Forbidden | Rate limiting hoặc geo-blocking — cache để tránh check lại permission liên tục |
+| 301 Moved Permanently | Redirect vĩnh viễn — cache để tránh redirect chain |
+| 429 Too Many Requests | Rate limit response — cache để không đếm rate limit cho request lặp |
+
+### 12.7. Misconception 7: "Khi origin unhealthy, vẫn nên serve stale 404"
+
+Đây là một câu hỏi khó. Khi origin down:
+
+- **Serve stale 404**: User thấy "Sản phẩm không tồn tại" cho cả sản phẩm có thật. User rời đi → mất doanh thu.
+- **Serve 503 với retry-after**: User thấy "Hệ thống đang bảo trì" và có thể quay lại sau. Giữ được khả năng mua hàng khi origin hồi phục.
+
+**Khuyến nghị**: Không serve stale 404 khi origin down. Dùng `stale-if-error` cho response 200, nhưng không cho 404. Trong VCL:
+
+```vcl
+if (beresp.status == 404) {
+    set beresp.grace = 0s;  // Không serve stale 404
+}
+```
+
+Lý do: Một sản phẩm bị 404 giả (do origin lỗi) tệ hơn nhiều so với việc hiển thị thông báo lỗi hệ thống.
+
+### 12.8. Misconception 8: "Negative caching và request coalescing là giống nhau"
+
+Đây là hai cơ chế khác nhau nhưng hay bị nhầm lẫn:
+
+| Khía cạnh | Negative caching (Case 11) | Request coalescing (Case 10) |
+| --- | --- | --- |
+| Mục đích | Cache response lỗi | Gộp nhiều request cold thành 1 origin hit |
+| Response status | 404 (lỗi expected) | 200 (thành công) |
+| Cơ chế | TTL + cache key | Request queue collapse |
+| Test sequence | MISS→HIT→(wait)→MISS | batch→HIT |
+| Evidence chính | Origin count = 1 rồi 2 | Origin count <= 2 |
+| Cần concurrent? | Không | Có |
+| Dùng `http.batch`? | Không | Có |
+
+Cả hai đều dùng `getOriginRequestCounts()` làm evidence, nhưng mục đích và cách test khác nhau hoàn toàn.
+
 ---
 
 ## 13. Checklist
@@ -1204,6 +1248,9 @@ Nên test ít nhất 2 lần với TTL khác nhau (ví dụ: 2s và 10s).
 [ ] Không có script nào khác đang chạy (cache/control state dùng chung)
 [ ] NEGATIVE_TTL_SECONDS đã set (nếu muốn khác default 5s)
 [ ] NEGATIVE_WAIT_SECONDS > NEGATIVE_TTL_SECONDS
+[ ] Route /api/cached/missing/* đã được đăng ký trong app
+[ ] Control endpoint /ops/app/cdn/origin/request-counts hoạt động
+[ ] Control endpoint /ops/app/cdn/cache/ban-url hoạt động
 ```
 
 ### 13.2. Runtime checklist
@@ -1214,6 +1261,7 @@ Nên test ít nhất 2 lần với TTL khác nhau (ví dụ: 2s và 10s).
 [ ] Checks rate hiển thị trong output
 [ ] Không có error log (không có "level=error")
 [ ] Tất cả check có tag "negative" đều pass
+[ ] Không có threshold crossing warning (trừ nếu chủ ý)
 ```
 
 ### 13.3. Post-run checklist
@@ -1226,8 +1274,10 @@ Nên test ít nhất 2 lần với TTL khác nhau (ví dụ: 2s và 10s).
 [ ] Trước expiry: origin count = 1
 [ ] negative after expiry: status=404, X-Cache=MISS
 [ ] Sau expiry: origin count = 2
-[ ] http_req_failed = 30% (±3/10) — expected
+[ ] http_req_failed = 30% (±3/10) — expected, không phải lỗi
 [ ] Không ảnh hưởng case sau (teardown đã reset)
+[ ] Origin profile đã reset (không còn unhealthy từ case trước)
+[ ] Origin request counts đã reset về 0
 ```
 
 ### 13.4. Debug checklist (nếu fail)
@@ -1240,6 +1290,24 @@ Nên test ít nhất 2 lần với TTL khác nhau (ví dụ: 2s và 10s).
 [ ] Kiểm tra token ops có hết hạn không
 [ ] Kiểm tra origin counter có reset đúng không (chạy curl trực tiếp)
 [ ] Thử tăng NEGATIVE_WAIT_SECONDS lên TTL + 3
+[ ] Kiểm tra response body của first request: có phải JSON error object không?
+[ ] Kiểm tra Cache-Control header của first request: có s-maxage không?
+[ ] Kiểm tra xem có phải request bị route đến sai backend không
+```
+
+### 13.5. Production readiness checklist
+
+```text
+[ ] Negative caching hoạt động cho 404
+[ ] Negative caching hoạt động cho 410 (nếu cần)
+[ ] TTL negative cache có giới hạn tối đa (không vượt quá 60s)
+[ ] Purge/ban hoạt động cho negative cache object
+[ ] Stale 404 không được serve khi origin unhealthy (tùy policy)
+[ ] X-Negative-Cache header được set đúng
+[ ] Origin có set Cache-Control cho response 404
+[ ] Monitoring/alerting không coi 404 từ CDN là error spike
+[ ] Log aggregation phân biệt được 404 từ CDN HIT vs 404 từ origin
+[ ] Có runbook cho operator: cách purge negative cache khi thêm sản phẩm mới
 ```
 
 ---
@@ -1276,75 +1344,273 @@ Mục đích: Xác nhận TTL dài vẫn hoạt động đúng. Hữu ích cho r
 
 ```javascript
 // Sửa script để test nhiều URL cùng lúc
-export default function (data) {
-  const paths = [
-    buildCachedMissingPath(`batch-a-${Date.now()}`, { ttl_seconds: NEGATIVE_TTL_SECONDS }),
-    buildCachedMissingPath(`batch-b-${Date.now()}`, { ttl_seconds: NEGATIVE_TTL_SECONDS }),
-    buildCachedMissingPath(`batch-c-${Date.now()}`, { ttl_seconds: NEGATIVE_TTL_SECONDS }),
-  ];
+import { sleep } from 'k6';
+import { envFloat, envInt } from '../shared/common.js';
+import {
+  buildCachedMissingPath,
+  banUrl,
+  requestCdn,
+  assertCacheState,
+  assertHeaderEquals,
+  assertStatus,
+  getOriginRequestCounts,
+  findOriginRequestCount,
+  resetOriginProfile,
+  resetOriginRequestCounts,
+} from './shared.js';
 
-  for (const path of paths) {
-    const first = requestCdn('GET', path, { tags: { case: 'multi_first' } });
-    assertStatus(first, 404, 'multi first');
-    assertCacheState(first, 'MISS', 'multi first');
+const NEGATIVE_TTL_SECONDS = envInt('NEGATIVE_TTL_SECONDS', 5);
+const NEGATIVE_URL_COUNT = envInt('NEGATIVE_URL_COUNT', 5);
 
-    const second = requestCdn('GET', path, { tags: { case: 'multi_second' } });
-    assertStatus(second, 404, 'multi second');
-    assertCacheState(second, 'HIT', 'multi second');
+export const options = {
+  vus: 1,
+  iterations: 1,
+  thresholds: {
+    checks: ['rate==1'],
+  },
+  tags: {
+    scenario: 'cdn_negative_caching_multi',
+  },
+};
+
+export function setup() {
+  const ts = Date.now();
+  const paths = [];
+  for (let i = 0; i < NEGATIVE_URL_COUNT; i++) {
+    const path = buildCachedMissingPath(`multi-${ts}-${i}`, {
+      ttl_seconds: NEGATIVE_TTL_SECONDS,
+    });
+    paths.push(path);
   }
 
-  const counts = getOriginRequestCounts();
+  resetOriginProfile();
+  resetOriginRequestCounts();
   for (const path of paths) {
-    const count = findOriginRequestCount(counts, path);
-    if (count !== 1) {
-      throw new Error(`path ${path}: expected count 1, got ${count}`);
+    banUrl(path);
+  }
+
+  return { paths };
+}
+
+export default function (data) {
+  const paths = data.paths;
+
+  // First request: tất cả MISS
+  for (let i = 0; i < paths.length; i++) {
+    const first = requestCdn('GET', paths[i], {
+      tags: { case: `multi_${i}_first` },
+    });
+    assertStatus(first, 404, `multi ${i} first`);
+    assertCacheState(first, 'MISS', `multi ${i} first`);
+    assertHeaderEquals(first, 'X-Negative-Cache', 'true', `multi ${i} first`);
+  }
+
+  // Second request: tất cả HIT
+  for (let i = 0; i < paths.length; i++) {
+    const second = requestCdn('GET', paths[i], {
+      tags: { case: `multi_${i}_second` },
+    });
+    assertStatus(second, 404, `multi ${i} second`);
+    assertCacheState(second, 'HIT', `multi ${i} second`);
+    assertHeaderEquals(second, 'X-Negative-Cache', 'true', `multi ${i} second`);
+  }
+
+  // Verify origin count cho từng URL = 1
+  const counts = getOriginRequestCounts();
+  for (let i = 0; i < paths.length; i++) {
+    const requestCount = findOriginRequestCount(counts, paths[i]);
+    if (requestCount !== 1) {
+      throw new Error(
+        `path ${i} ${paths[i]}: expected count 1, got ${requestCount}`
+      );
     }
   }
 }
+
+export function teardown() {
+  resetOriginProfile();
+  resetOriginRequestCounts();
+}
 ```
 
-Mục đích: Xác nhận nhiều negative cache object không ảnh hưởng lẫn nhau.
+Mục đích: Xác nhận nhiều negative cache object không ảnh hưởng lẫn nhau và mỗi object có origin count độc lập.
 
 ### 14.4. Variation 4: Response 410 Gone thay vì 404
 
 ```javascript
-// Sửa origin handler để trả về 410 Gone cho một số path
-// (yêu cầu sửa application code, không chỉ sửa test script)
+// Variation test cho 410 Gone — yêu cầu origin hỗ trợ endpoint gone
+// Giả sử có endpoint: /api/cached/missing/gone-<key>?ttl_seconds=N&status=410
 
-const first = requestCdn('GET', gonePath, { tags: { case: 'gone_first' } });
-assertStatus(first, 410, 'gone first');
-// Vẫn mong đợi X-Cache: MISS -> HIT -> MISS
+export default function (data) {
+  const path = buildCachedMissingPath(`gone-${Date.now()}`, {
+    ttl_seconds: 30,     // TTL dài hơn cho 410
+    status: 410,          // Yêu cầu origin trả về 410
+  });
+
+  const first = requestCdn('GET', path, {
+    tags: { case: 'gone_first' },
+  });
+  assertStatus(first, 410, 'gone first');
+  assertCacheState(first, 'MISS', 'gone first');
+
+  const second = requestCdn('GET', path, {
+    tags: { case: 'gone_second' },
+  });
+  assertStatus(second, 410, 'gone second');
+  assertCacheState(second, 'HIT', 'gone second');
+
+  // 410 nên có TTL dài hơn 404 vì object sẽ không quay lại
+  const counts = getOriginRequestCounts();
+  const requestCount = findOriginRequestCount(counts, path);
+  if (requestCount !== 1) {
+    throw new Error(`expected gone path ${path} to hit origin once, got ${requestCount}`);
+  }
+}
 ```
 
-Mục đích: Kiểm tra xem VCL có cache các status code khác ngoài 404 không.
+Mục đích: Kiểm tra xem VCL có cache các status code khác ngoài 404 không. 410 Gone khác 404 — 410 nghĩa là "đã từng tồn tại nhưng bị xóa vĩnh viễn". Search engine xử lý 410 khác 404. TTL cho 410 có thể dài hơn nhiều (30-300s).
 
-**Lưu ý**: 410 Gone khác 404 — 410 nghĩa là "đã từng tồn tại nhưng bị xóa vĩnh viễn". Search engine xử lý 410 khác 404. Nếu CDN cache 410, TTL có thể dài hơn.
-
-### 14.5. Variation 5: Negative caching với burst concurrent
+### 14.5. Variation 5: Negative caching với burst concurrent (kết hợp case 10)
 
 ```javascript
+// Variation kết hợp negative caching + request coalescing
+import http from 'k6/http';
+import { sleep } from 'k6';
+import { envFloat, envInt } from '../shared/common.js';
+import {
+  CDN_BASE_URL,
+  buildCachedMissingPath,
+  buildHeaders,
+  banUrl,
+  requestCdn,
+  assertCacheState,
+  assertStatus,
+  getOriginRequestCounts,
+  findOriginRequestCount,
+  resetOriginProfile,
+  resetOriginRequestCounts,
+} from './shared.js';
+
+const NEGATIVE_TTL_SECONDS = envInt('NEGATIVE_TTL_SECONDS', 5);
+const BURST_CONCURRENCY = envInt('BURST_CONCURRENCY', 10);
+
 export const options = {
-  vus: 10,           // 10 VU đồng thời
-  iterations: 10,    // mỗi VU 1 iteration
+  vus: 1,
+  iterations: 1,
   thresholds: {
     checks: ['rate==1'],
   },
+  tags: {
+    scenario: 'cdn_negative_coalescing',
+  },
 };
+
+export function setup() {
+  const path = buildCachedMissingPath(`burst-${Date.now()}`, {
+    ttl_seconds: NEGATIVE_TTL_SECONDS,
+    origin_delay_ms: 500,  // Delay để test coalescing
+  });
+
+  resetOriginProfile();
+  resetOriginRequestCounts();
+  banUrl(path);
+
+  return { path };
+}
 
 export default function (data) {
   const path = data.path;
 
-  const res = requestCdn('GET', path, {
-    tags: { case: 'negative_burst' },
-  });
+  // Burst BURST_CONCURRENCY request đồng thời đến cùng 404 URL
+  const requests = Array.from({ length: BURST_CONCURRENCY }, (_, index) => ({
+    method: 'GET',
+    url: `${CDN_BASE_URL}${path}`,
+    params: {
+      headers: buildHeaders(),
+      tags: { case: `burst_${index}` },
+    },
+  }));
 
-  // Tất cả request sau request đầu tiên nên HIT
-  // (nhưng concurrent có thể có race condition)
-  // Origin count vẫn nên = 1 (coalescing cho 404)
+  const responses = http.batch(requests);
+  for (const [index, res] of responses.entries()) {
+    assertStatus(res, 404, `burst ${index}`);
+    // Request đầu tiên MISS, còn lại có thể HIT (nếu coalescing hoạt động)
+  }
+
+  // Follow-up: object đã được cache
+  const followUp = requestCdn('GET', path, {
+    tags: { case: 'burst_follow_up' },
+  });
+  assertStatus(followUp, 404, 'burst follow up');
+  assertCacheState(followUp, 'HIT', 'burst follow up');
+
+  // Origin count nên = 1 (coalescing cho 404)
+  const counts = getOriginRequestCounts();
+  const requestCount = findOriginRequestCount(counts, path);
+  if (requestCount > 2) {
+    throw new Error(
+      `expected coalesced negative cache for ${path} to stay <= 2, got ${requestCount}`
+    );
+  }
+}
+
+export function teardown() {
+  resetOriginProfile();
+  resetOriginRequestCounts();
 }
 ```
 
-Mục đích: Kết hợp test negative caching + request coalescing cho response 404.
+Mục đích: Kết hợp test negative caching + request coalescing cho response 404. Kiểm tra xem CDN có vừa cache 404 vừa gộp request đồng thời không.
+
+### 14.6. Variation 6: Negative caching với purge/ban thủ công
+
+```javascript
+// Kiểm tra xem purge có xóa negative cache object không
+export default function (data) {
+  const path = data.path;
+
+  // Warm negative cache
+  const first = requestCdn('GET', path, { tags: { case: 'purge_first' } });
+  assertStatus(first, 404, 'purge first');
+  assertCacheState(first, 'MISS', 'purge first');
+
+  const second = requestCdn('GET', path, { tags: { case: 'purge_second' } });
+  assertStatus(second, 404, 'purge second');
+  assertCacheState(second, 'HIT', 'purge second');
+
+  // Purge URL — xóa negative cache object
+  banUrl(path);
+
+  // Sau purge: phải MISS lại
+  const afterPurge = requestCdn('GET', path, {
+    tags: { case: 'purge_after' },
+  });
+  assertStatus(afterPurge, 404, 'purge after');
+  assertCacheState(afterPurge, 'MISS', 'purge after');
+
+  // Origin count = 2 (trước purge 1, sau purge thêm 1)
+  const counts = getOriginRequestCounts();
+  const requestCount = findOriginRequestCount(counts, path);
+  if (requestCount !== 2) {
+    throw new Error(
+      `expected 2 origin hits after purge, got ${requestCount}`
+    );
+  }
+}
+```
+
+Mục đích: Xác nhận rằng purge/ban hoạt động với negative cache object giống như với positive cache object. Đây là yêu cầu quan trọng trong thực tế: khi sản phẩm mới được thêm vào, operator phải purge được URL để xóa 404 cache.
+
+### 14.7. Tổng hợp variations
+
+| Variation | Mục đích | Env knobs | Thời gian chạy | Độ phức tạp |
+| --- | --- | --- | --- | --- |
+| 1: TTL ngắn | Kiểm tra TTL 2s | `TTL=2, WAIT=3` | ~3s | Thấp |
+| 2: TTL dài | Kiểm tra TTL 30s | `TTL=30, WAIT=31` | ~31s | Thấp |
+| 3: Multi URL | Kiểm tra isolation | `URL_COUNT=5` | ~1s | Trung bình |
+| 4: 410 Gone | Kiểm tra status khác | Cần sửa origin | ~1s | Trung bình |
+| 5: Burst | Kết hợp coalescing | `BURST=10` | ~1s | Cao |
+| 6: Purge | Purge negative object | Dùng `banUrl` | ~1s | Trung bình |
 
 ---
 
@@ -1417,6 +1683,158 @@ export function setup() {
 ```
 
 **Tại sao sai**: Sau case 09 (stale-while-error), origin bị set unhealthy. Case 11 cần origin healthy để nhận request. Thiếu `resetOriginProfile()` khiến first request có thể không đến được origin.
+
+### 15.7. Anti-pattern 7: Chạy case 11 song song với case khác
+
+```powershell
+# SAI — chạy song song làm origin counter bị nhiễu
+k6 run 11-negative-caching.js &
+k6 run 10-request-coalescing.js &
+```
+
+**Tại sao sai**: Cả hai case đều dùng chung origin counter (`/ops/app/cdn/origin/request-counts`). Nếu chạy song song, count của case 10 có thể bị tính vào case 11 hoặc ngược lại.
+
+**Cách đúng**: Luôn chạy tuần tự. Dùng runner script:
+```powershell
+.\scripts\run-cdn-capabilities.ps1 -Scenarios all
+```
+
+### 15.8. Anti-pattern 8: Không đọc kỹ error message khi fail
+
+```text
+# Error message thực tế (từ lần fail đầu):
+Error: expected negative cached path
+/api/cached/missing/missing-1782128522093?ttl_seconds=5
+to hit origin once before expiry, got 0
+```
+
+**Thông tin trong error này**:
+- Path đầy đủ: `/api/cached/missing/missing-1782128522093?ttl_seconds=5`
+- Expected: `1` (origin bị gọi 1 lần)
+- Got: `0` (origin chưa từng bị gọi)
+
+**Suy luận**: `got 0` nghĩa là request đầu tiên không đến được origin. Nguyên nhân có thể:
+1. Ứng dụng chưa khởi tạo route handler → request thất bại trước khi đến origin.
+2. Varnish forward request đến sai backend.
+3. Origin counter chưa được implement cho path này.
+
+**Bài học**: Đọc error message kỹ — `got 0` hoàn toàn khác với `got 2` hay `got 3`. Mỗi con số gợi ý nguyên nhân khác nhau.
+
+### 15.9. Anti-pattern 9: Dùng checkpoint quá cứng cho test có sleep dài
+
+```javascript
+// SAI — total test time > 10m với TTL=600
+const NEGATIVE_TTL_SECONDS = envInt('NEGATIVE_TTL_SECONDS', 600);
+const NEGATIVE_WAIT_SECONDS = envFloat('NEGATIVE_WAIT_SECONDS', 601);
+```
+
+**Tại sao sai**: k6 default `maxDuration: 10m0s`. Nếu iteration mất >10 phút, k6 sẽ force stop iteration đang chạy.
+
+**Cách đúng**: Nếu cần test TTL dài, tăng `maxDuration`:
+```javascript
+export const options = {
+  vus: 1,
+  iterations: 1,
+  maxDuration: '15m',  // Cho phép iteration dài
+  thresholds: {
+    checks: ['rate==1'],
+  },
+};
+```
+
+### 15.10. Anti-pattern 10: Không phân biệt http_req_failed do 404 vs do lỗi thật
+
+```text
+# PASS output:
+http_req_failed................: 30.00% 3 out of 10
+
+3 failed = 3 response 404 → expected.
+```
+
+Nhưng nếu bạn thấy:
+```text
+http_req_failed................: 50.00% 5 out of 10
+```
+
+5 failed (thay vì 3) → có 2 request thực sự lỗi (có thể connection refused, timeout). Cần kiểm tra xem request nào fail bằng cách xem tag breakdown:
+
+```powershell
+k6 run ... --summary-export summary.json
+# Xem http_req_failed breakdown theo tag
+```
+
+---
+
+## 15b. Hướng dẫn troubleshoot khi case fail
+
+### 15b.1. Phân loại lỗi theo triệu chứng
+
+| Triệu chứng | Checks fail pattern | Nguyên nhân khả dĩ | Cách fix |
+| --- | --- | --- | --- |
+| First request status != 404 | `negative first status 404` FAIL | Origin trả về status khác (200, 500) | Kiểm tra route handler app |
+| First request X-Negative-Cache missing | `negative first X-Negative-Cache equals true` FAIL | Origin không set header | Thêm header vào app error handler |
+| Second request X-Cache = MISS | `negative second cache state HIT` FAIL | VCL không cache 404 | Sửa VCL `vcl_backend_response` |
+| Origin count = 0 | `throw Error: ... got 0` | Request không đến origin | Kiểm tra VCL forwarding và route app |
+| Origin count > 1 | `throw Error: ... got 2+` | Object không được cache | Sửa VCL cache policy |
+| After expiry X-Cache = HIT | `negative after expiry cache state MISS` FAIL | TTL chưa hết hạn | Tăng `NEGATIVE_WAIT_SECONDS` |
+| After expiry origin count != 2 | `throw Error: ... got 1` hoặc `got 3` | Cache behavior không đúng | Kiểm tra TTL và grace period |
+
+### 15b.2. Quy trình debug từng bước
+
+**Bước 1 — Xác nhận origin hoạt động**:
+```powershell
+curl.exe http://localhost:8088/health
+curl.exe http://localhost:8088/api/cached/missing/test-debug?ttl_seconds=5
+# Expected: 404 với Cache-Control header và X-Negative-Cache: true
+```
+
+**Bước 2 — Xác nhận Varnish routing đúng**:
+```powershell
+curl.exe -i http://localhost:80/api/cached/missing/test-debug?ttl_seconds=5
+# Expected: 404, X-Cache: MISS, X-Negative-Cache: true
+```
+
+**Bước 3 — Xác nhận cache 404 hoạt động**:
+```powershell
+# Request lần 1
+curl.exe -i http://localhost:80/api/cached/missing/test-debug-2?ttl_seconds=5
+# Request lần 2 (ngay lập tức)
+curl.exe -i http://localhost:80/api/cached/missing/test-debug-2?ttl_seconds=5
+# Expected: X-Cache: HIT cho lần 2
+```
+
+**Bước 4 — Xác nhận origin counter hoạt động**:
+```powershell
+# Reset counter
+curl.exe -X POST http://localhost:8088/ops/app/cdn/origin/request-counts/reset `
+  -H "Authorization: Bearer <token>" -H "X-Ops-Token: <token>"
+# Gọi request qua CDN
+curl.exe http://localhost:80/api/cached/missing/test-debug-2?ttl_seconds=5
+# Đọc counter
+curl.exe http://localhost:8088/ops/app/cdn/origin/request-counts `
+  -H "Authorization: Bearer <token>" -H "X-Ops-Token: <token>"
+# Expected: count của test-debug-2 = 1
+```
+
+**Bước 5 — Debug VCL trực tiếp**:
+```bash
+# Xem log Varnish real-time khi request đến
+varnishlog -g request -q "ReqUrl ~ 'missing'" | grep -E "ReqURL|Status|TTL|Hit|beresp"
+```
+
+### 15b.3. Nguyên nhân fail thường gặp và cách khắc phục
+
+1. **"Application chưa sẵn sàng"**: Route `/api/cached/missing/*` chưa được đăng ký trong app. Fix: kiểm tra application startup log, đảm bảo tất cả route handler được mount trước khi chạy test. Thêm `waitOriginHealthy()` hoặc delay trong setup nếu cần.
+
+2. **"VCL pass tất cả non-200"**: VCL có rule `if (beresp.status >= 400) { return(pass); }`. Fix: sửa VCL để cho phép cache 404 có chủ ý, chỉ pass các 5xx không mong đợi.
+
+3. **"Origin không set Cache-Control cho 404"**: Response 404 không có `Cache-Control: s-maxage=N` hoặc `Cache-Control: public`. Fix: thêm `Cache-Control` header vào error handler của app. Nếu không sửa được app, set default TTL trong VCL.
+
+4. **"Token ops hết hạn"**: Control endpoint trả về 401 Unauthorized. Fix: refresh token và set lại biến môi trường `OPS_AUTH_TOKEN`.
+
+5. **"Port 80 không qua Varnish"**: Request đến thẳng app backend, bypass CDN hoàn toàn. Không thấy `X-Cache` header. Fix: kiểm tra docker compose networking, đảm bảo port 80 được map vào Varnish container, không phải app container.
+
+6. **"TTL bị ghi đè trong VCL"**: Origin set `Cache-Control: s-maxage=5` nhưng VCL ghi đè `set beresp.ttl = 120s`. Fix: kiểm tra VCL `vcl_backend_response`, đảm bảo tôn trọng TTL từ origin cho 404.
 
 ---
 

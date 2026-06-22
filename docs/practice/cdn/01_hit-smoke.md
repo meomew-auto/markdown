@@ -932,9 +932,50 @@ Với correctness test, 1-4 VUs là đủ. Load test là một loại test khác
 
 HIT ratio có ý nghĩa trong production với traffic thật đa dạng. Trong test, tập trung vào sequence MISS/HIT, không phải ratio.
 
----
+### 12.6. "Chỉ cần test localhost — không cần test production CDN"
 
-## 13. Checklist trước khi chạy
+**SAI.** Development CDN (Varnish trên localhost) và production CDN (Fastly, CloudFront, Cloudflare) có behavior khác biệt:
+
+| Khía cạnh | Local Varnish | Production CDN |
+|-----------|--------------|----------------|
+| Cache key model | VCL-controlled | Vendor-specific (Fastly: custom VCL, CloudFront: cache policy) |
+| TTL interpretation | Chuẩn RFC | Có thể có default override (vd: CloudFront min TTL) |
+| Invalidation latency | Instant (single node) | Có thể mất vài giây đến vài phút (global distribution) |
+| Header propagation | Đầy đủ (self-controlled) | Một số header bị strip (vd: CloudFront strip `X-Cache-Key-*`) |
+| Coalescing behavior | Varnish built-in | Vendor-specific (CloudFront: regional edge caches) |
+
+Local test là **necessary but not sufficient**. Sau khi pass trên local Varnish, cần verify trên staging CDN với vendor thật.
+
+### 12.7. "Ban URL là đủ — không cần setup MISS->HIT sequence"
+
+**SAI.** Ban URL chỉ xóa object khỏi cache. Nó không chứng minh:
+- Object mới có được cache không (cần MISS đầu tiên)
+- Object cache có được reuse không (cần HIT thứ hai)
+- Cache key có đúng không (cần assert cache key headers)
+
+Setup sequence MISS -> HIT là **atomic proof**. Ban URL chỉ là bước dọn dẹp trước khi proof.
+
+### 12.8. "Case 01 quá đơn giản — có thể bỏ qua để học case phức tạp hơn"
+
+**SAI.** Case 01 là nền tảng. Nếu bạn không chứng minh được cache HIT cơ bản:
+- Case 02 (variant keys): Làm sao biết variant MISS -> HIT là do cache key đúng, không phải do cache không hoạt động?
+- Case 08 (TTL expiry): Làm sao biết MISS sau TTL là do expire, không phải do cache chưa bao giờ hoạt động?
+- Case 09 (stale): Làm sao biết stale HIT là do grace mode, không phải do object chưa bao giờ được cache?
+
+Case 01 là **single point of failure** cho toàn bộ CDN test suite. Nếu case 01 fail, mọi case khác đều vô nghĩa.
+
+### 12.9. "Origin trả 200 + Cache-Control: public -> CDN sẽ cache"
+
+**KHÔNG HẲN.** CDN có thể không cache dù origin trả đúng headers, vì:
+
+1. **Response quá lớn**: Varnish có giới hạn object size (mặc định thường vài MB). Object vượt quá -> không cache.
+2. **Response có `Vary: *`**: Dấu hiệu response là private, Varnish thường không cache.
+3. **Request method không phải GET/HEAD**: POST/PUT/DELETE không được cache.
+4. **Request có `Authorization` header**: Mặc định Varnish bypass cache.
+5. **Request có `Cookie` header**: Tùy VCL config, có thể bypass.
+6. **Cache storage full**: Object mới không thể lưu.
+
+Case 01 kiểm tra chính xác những điều kiện này bằng cách xác nhận sequence MISS -> HIT thực tế.
 
 ### 13.1. Infrastructure checklist
 
@@ -1213,9 +1254,153 @@ export default function () {
 
 **Cách đúng:** Luôn có sleep hợp lý (dù nhỏ, như `0.025s`).
 
+### 15.6. Anti-pattern 6: Chỉ nhìn status code để đánh giá pass/fail
+
+```javascript
+// SAI
+const res = requestCdn('GET', paths.productDetail, { profile });
+if (res.status === 200) {
+  console.log('PASS');  // Chỉ check status
+}
+```
+
+**Vấn đề:** Status 200 không có nghĩa là cache hoạt động. Request có thể 200 nhưng:
+- `X-Cache: BYPASS` -> không cache được
+- `X-Cache: MISS` -> gọi origin mỗi lần
+- `X-Cache: HIT` nhưng sai key -> phục vụ nhầm người dùng
+
+**Cách đúng:** Assert đầy đủ: status, cache state, upstream, cache key headers.
+
+### 15.7. Anti-pattern 7: Bỏ qua `X-Upstream-Service` header
+
+```javascript
+// SAI — chỉ check cache, không check upstream
+assertCacheState(res, 'HIT', 'detail');
+// Thiếu: assertUpstream(res, 'products-service', 'detail');
+```
+
+**Vấn đề:** Cache HIT nhưng `X-Upstream-Service` sai -> request đã đi qua sai service trước khi được cache. Những request sau HIT sẽ trả response từ service sai.
+
+**Cách đúng:** Luôn assert upstream service, đặc biệt trong setup warm.
+
+### 15.8. Anti-pattern 8: Hardcode URL thay vì dùng `paths` object
+
+```javascript
+// SAI
+const res = requestCdn('GET', '/api/sim/products/1', { profile });
+```
+
+**Vấn đề:**
+- URL thay đổi -> phải sửa nhiều nơi
+- Dễ typo -> request 404 nhưng không ai biết
+- Không consistent với các case khác
+
+**Cách đúng:**
+```javascript
+const res = requestCdn('GET', paths.productDetail, { profile });
+```
+
 ---
 
-## 16. Real validation data
+## 15b. Troubleshooting guide
+
+### 15b.1. Sơ đồ chẩn đoán nhanh
+
+```text
+Case 01 fail
+  │
+  ├─ k6 không chạy được?
+  │   ├─ "Cannot find module" -> Kiểm tra import paths
+  │   ├─ "envInt is not a function" -> Kiểm tra shared/common.js
+  │   └─ "connect ECONNREFUSED" -> localhost:80 hoặc :8088 không chạy
+  │
+  ├─ Setup fail?
+  │   ├─ banUrl fail (401/403)?
+  │   │   ├─ OPS_AUTH_TOKEN chưa set -> set env var
+  │   │   ├─ OPS_AUTH_TOKEN sai -> kiểm tra token
+  │   │   └─ Control plane không chạy -> khởi động :8088
+  │   │
+  │   ├─ first request fail (không phải 200)?
+  │   │   ├─ 503 -> Origin không healthy -> kiểm tra products-service
+  │   │   ├─ 404 -> Path sai -> kiểm tra paths.productDetail
+  │   │   └─ 502 -> Varnish không kết nối được Nginx
+  │   │
+  │   ├─ first request = HIT (expected MISS)?
+  │   │   ├─ banUrl không hoạt động -> object cũ vẫn trong cache
+  │   │   ├─ Có process khác vừa warm object này
+  │   │   └─ Cache key không như expected -> kiểm tra X-Cache-Key-*
+  │   │
+  │   └─ second request = MISS (expected HIT)?
+  │       ├─ Origin trả Cache-Control: private -> CDN không cache
+  │       ├─ Response có Set-Cookie -> CDN bypass
+  │       ├─ TTL = 0 -> object expire ngay lập tức
+  │       └─ Cache storage full -> object bị evict
+  │
+  └─ Default function fail?
+      ├─ Một vài request MISS (intermittent)?
+      │   ├─ TTL ngắn hơn duration -> object expire giữa chừng
+      │   ├─ Cache eviction do memory pressure
+      │   └─ Có process khác invalidate object này
+      │
+      └─ Toàn bộ request fail?
+          ├─ Origin crash trong lúc test -> http_req_failed > 0
+          ├─ Network partition giữa Varnish và origin
+          └─ Varnish crash/restart -> mất toàn bộ cache
+```
+
+### 15b.2. Các câu lệnh chẩn đoán thủ công
+
+```powershell
+# 1. Kiểm tra Varnish có đang chạy không
+curl -I http://localhost:80/api/sim/products/1 2>&1 | Select-String "X-Cache"
+
+# 2. Kiểm tra control plane
+curl http://localhost:8088/ops/app/cdn/origin/profile -H "Authorization: Bearer $env:OPS_AUTH_TOKEN"
+
+# 3. Kiểm tra ban-url hoạt động
+curl -X POST http://localhost:8088/ops/app/cdn/cache/ban-url `
+  -H "Authorization: Bearer $env:OPS_AUTH_TOKEN" `
+  -H "Content-Type: application/json" `
+  -d '{"url":"/api/sim/products/1"}'
+
+# 4. Xem toàn bộ response headers (không chỉ body)
+curl -v http://localhost:80/api/sim/products/1 `
+  -H "Accept-Language: vi" `
+  -H "X-Geo-Country: VN" `
+  -H "X-Device-Class: mobile" `
+  -H "X-Ab-Variant: control" 2>&1 | Select-String "X-"
+
+# 5. Kiểm tra origin request count
+curl http://localhost:8088/ops/app/cdn/origin/request-counts `
+  -H "Authorization: Bearer $env:OPS_AUTH_TOKEN" | ConvertFrom-Json | ConvertTo-Json -Depth 5
+```
+
+### 15b.3. Các symptom thường gặp và root cause
+
+| Symptom | Root cause phổ biến nhất | Tần suất gặp |
+|---------|--------------------------|-------------|
+| first request HIT thay vì MISS | banUrl fail (token sai / control plane down) | Cao |
+| second request MISS thay vì HIT | Origin response có `Cache-Control: private` hoặc `Set-Cookie` | Cao |
+| `X-Cache` header không tồn tại | Target layer không phải `full` — request không qua Varnish | Trung bình |
+| `X-Cache-Key-*` headers rỗng hoặc sai | VCL `vcl_recv` không set header trước `vcl_hash` | Trung bình |
+| Timeout khi gọi control plane | `CONTROL_BASE_URL` sai port hoặc service không chạy | Thấp |
+| Response có status 200 nhưng body rỗng | Origin trả 200 với Content-Length: 0 | Thấp |
+| k6 crash với "connection reset" | Quá nhiều request/giây, OS hết ephemeral ports | Thấp |
+
+### 15b.4. Khi nào cần xóa cache thủ công trước khi chạy
+
+```powershell
+# Nếu ban-url không hoạt động (control plane down), 
+# có thể restart Varnish để xóa toàn bộ cache:
+docker restart varnish  # nếu dùng Docker
+# hoặc
+sudo systemctl restart varnish  # nếu cài trực tiếp
+
+# Sau đó chạy lại case 01
+k6 run load-target/k6/cdn/01-hit-smoke.js
+```
+
+**Lưu ý:** Restart Varnish chỉ dùng trong development/local. Trong production, dùng control plane để invalidate có chủ đích.
 
 ### 16.1. Môi trường test
 
@@ -1253,6 +1438,45 @@ Response time (MISS): ~45ms (single occurrence in setup)
 1. **Response time của HIT rất thấp** (~2ms trung bình): Đây là dấu hiệu object được phục vụ từ in-memory cache. Nếu HIT mà response time > 50ms, có thể object đang được fetch từ disk cache hoặc đang bị revalidate.
 2. **Không có HIT nào bị "rơi" thành MISS**: 2,870 sustained requests đều HIT, chứng tỏ TTL đủ dài cho duration test.
 3. **Cache key headers nhất quán**: Mọi response đều có `X-Cache-Key-Language: vi`, `X-Cache-Key-Geo: VN`, `X-Cache-Key-Device: mobile`, `X-Cache-Key-AB: control`.
+
+### 16.4. Bảng kiểm chứng từng assertion
+
+| # | Assertion | Phase | Kết quả thực tế | Trạng thái |
+|---|-----------|-------|-----------------|------------|
+| 1 | `banUrl` trả 200 | setup | 200 OK | PASS |
+| 2 | `first detail request` status 200 | setup | 200 | PASS |
+| 3 | `first detail request` upstream = `products-service` | setup | `products-service` | PASS |
+| 4 | `first detail request` X-Cache = `MISS` | setup | `MISS` | PASS |
+| 5 | `first detail request` X-Cache-Key-Language = `vi` | setup | `vi` | PASS |
+| 6 | `first detail request` X-Cache-Key-Geo = `VN` | setup | `VN` | PASS |
+| 7 | `first detail request` X-Cache-Key-Device = `mobile` | setup | `mobile` | PASS |
+| 8 | `first detail request` X-Cache-Key-AB = `control` | setup | `control` | PASS |
+| 9 | `second detail request` X-Cache = `HIT` | setup | `HIT` | PASS |
+| 10 | 2,870 sustained requests X-Cache = `HIT` | default | 2,870/2,870 HIT | PASS |
+| 11 | `checks` rate = 100% | all | 22,990/22,990 | PASS |
+| 12 | `http_req_failed` rate = 0% | all | 0/2,872 | PASS |
+| 13 | k6 exit code = 0 | all | 0 | PASS |
+
+### 16.5. Điều kiện tái lập kết quả
+
+Để tái lập được kết quả trên, cần đảm bảo:
+
+1. **Target layer đúng**: `TargetLayer=full`, Varnish chạy trên port 80
+2. **Token hợp lệ**: `OPS_AUTH_TOKEN` có quyền gọi control plane CDN ops
+3. **Origin healthy**: `products-service` trả 200 với JSON body hợp lệ
+4. **Cache storage trống**: Không có object nào trong cache trước khi chạy
+5. **Không có traffic khác**: Chỉ có k6 client truy cập :80 trong lúc chạy test
+6. **VCL config chuẩn**: `vcl_recv` normalize headers, `vcl_hash` hash đủ dimensions, `vcl_backend_response` set TTL > 18s
+
+### 16.6. Các yếu tố có thể làm sai lệch kết quả
+
+| Yếu tố | Ảnh hưởng | Cách kiểm soát |
+|--------|-----------|---------------|
+| Object đã có trong cache từ trước | first request HIT thay vì MISS -> test pass giả | Luôn gọi `banUrl` trong setup |
+| TTL < 18s (duration) | Một vài sustained request MISS -> test fail giả | Đảm bảo origin trả `s-maxage >= 30` |
+| Nhiều process cùng chạy case 01 | Ban URL của nhau -> intermittent fail | Chạy một instance duy nhất |
+| Network latency cao | Response time HIT cao bất thường | Chạy local, không qua VPN/proxy |
+| Cache storage giới hạn thấp | Eviction sớm -> MISS giữa chừng | Cấu hình Varnish storage đủ lớn (tối thiểu 100MB) |
 
 ---
 

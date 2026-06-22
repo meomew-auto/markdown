@@ -1137,6 +1137,16 @@ SAI:
 
 **Vấn đề**: Khi người dùng nhấn Ctrl+Shift+R (hard refresh), browser gửi `Cache-Control: no-cache`. Nếu CDN không bypass, người dùng nhận bản cache cũ và nghĩ rằng nội dung chưa được cập nhật. Đây là UX bug phổ biến.
 
+**Phân tích chi tiết**: Browser gửi các header khác nhau cho các loại refresh:
+
+| User action | Request header | CDN behavior đúng |
+| --- | --- | --- |
+| Click link / F5 (soft refresh) | Không có Cache-Control đặc biệt | Serve từ cache nếu có (HIT) |
+| Ctrl+F5 / Ctrl+Shift+R (hard refresh) | `Cache-Control: no-cache` | **Bypass cache**, gọi origin |
+| DevTools "Disable cache" | `Cache-Control: no-cache` | **Bypass cache**, gọi origin |
+
+Nếu CDN không phân biệt, hard refresh vẫn trả về HIT — người dùng không thể thấy nội dung mới nhất sau khi admin cập nhật.
+
 ### 15.6. Anti-pattern 6: Bypass dựa trên path thay vì header
 
 ```text
@@ -1148,6 +1158,56 @@ SAI:
 ```
 
 **Vấn đề**: Authorization header có thể xuất hiện trên bất kỳ path nào. Một API "public" như product detail có thể trả về dữ liệu khác cho user đã login (giá đặc biệt, voucher cá nhân). Bypass phải dựa trên **request characteristics** (headers, method), không phải **URL pattern**.
+
+**Ví dụ cụ thể**:
+
+```text
+GET /api/sim/products/1 (không auth)
+  → Kết quả: giá gốc 1,000,000 VND
+  → Cache key: hash(/api/sim/products/1|vi|VN|mobile|control|guest)
+
+GET /api/sim/products/1 (có Authorization: Bearer user_token)
+  → Kết quả: giá VIP 850,000 VND + voucher cá nhân
+  → Nếu bị cache → user khác thấy giá VIP và voucher của người này!
+```
+
+Path `/api/sim/products/1` là public, nhưng response phụ thuộc vào việc có Authorization hay không. Nếu VCL chỉ bypass `/api/private/*`, request có Authorization đến `/api/sim/products/1` sẽ bị cache với dữ liệu cá nhân.
+
+### 15.7. Anti-pattern 7: Dùng `hash_data(req.http.Cookie)` để tạo variant thay vì bypass
+
+```text
+SAI:
+  sub vcl_hash {
+    if (req.http.Cookie) {
+      hash_data(req.http.Cookie);  // Cookie làm variant cache key
+    }
+  }
+  // Thay vì return(pass) cho request có Cookie
+```
+
+**Vấn đề**:
+1. Mỗi session cookie khác nhau tạo ra một cache object riêng → **cache explosion**. Nếu có 10,000 sessions, có 10,000 cache objects cho cùng một product detail.
+2. Cookie thay đổi liên tục (session renewal, tracking) → cache object nhanh chóng trở nên vô dụng.
+3. Dữ liệu cá nhân vẫn có thể bị truy cập nếu attacker đoán được cookie value và dùng nó làm cache key.
+
+**Quy tắc**: Cookie = bypass, không phải variant dimension.
+
+### 15.8. Anti-pattern 8: Không test bypass với nhiều method type
+
+```text
+SAI: Chỉ test POST, bỏ qua PUT, PATCH, DELETE
+```
+
+**Vấn đề**: VCL có thể chỉ xử lý POST mà quên các method ghi khác. Mỗi method cần được test riêng vì:
+
+| Method | Idempotent? | Safe? | Cache risk |
+| --- | --- | --- | --- |
+| POST | Không | Không | Cao — tạo resource mới mỗi lần |
+| PUT | Có | Không | Trung bình — update toàn bộ resource |
+| PATCH | Không | Không | Cao — update một phần, kết quả thay đổi |
+| DELETE | Có | Không | Trung bình — xóa resource |
+
+Nếu VCL chỉ bypass POST, PUT request có thể bị cache và gây ra hành vi không mong muốn (user update sản phẩm nhưng thấy dữ liệu cũ từ cache).
 
 ---
 
@@ -1289,3 +1349,185 @@ cdn-02-variant-keys    ──▶ Cache key construction (ngược với bypass: 
 cdn-04-query-normalization ──▶ Query param không phá cache (bypass ở mức query, không phải header)
 cdn-07-cache-contract  ──▶ Origin cache headers (Cache-Control, ETag, Vary)
 ```
+
+### 17.5. Ghi chú về VCL implementation patterns
+
+Hai pattern chính để implement bypass trong Varnish:
+
+**Pattern A: Early return(pass) -- khuyến nghị**
+
+```vcl
+sub vcl_recv {
+  # Bypass checks PHẢI ở đầu vcl_recv, trước mọi logic khác
+  if (req.method != "GET" && req.method != "HEAD") {
+    set req.http.X-Pass-Reason = "write-method";
+    return(pass);
+  }
+  if (req.http.Authorization) {
+    set req.http.X-Pass-Reason = "authorization";
+    return(pass);
+  }
+  if (req.http.Cookie) {
+    set req.http.X-Pass-Reason = "cookie";
+    return(pass);
+  }
+  if (req.http.Cache-Control ~ "no-cache" || req.http.Pragma ~ "no-cache") {
+    set req.http.X-Pass-Reason = "client-no-cache";
+    return(pass);
+  }
+  # ... cache key construction ...
+}
+```
+
+**Pattern B: Set flag + check later -- ít khuyến nghị hơn**
+
+```vcl
+sub vcl_recv {
+  # Dùng flag thay vì return(pass) ngay
+  if (req.http.Authorization || req.http.Cookie) {
+    set req.http.X-Bypass-Cache = "1";
+  }
+  # ... cache key construction ...
+}
+
+sub vcl_hash {
+  if (req.http.X-Bypass-Cache == "1") {
+    # Tạo cache key duy nhất không bao giờ match
+    hash_data(req.http.X-Request-Id);
+    hash_data(now);
+  }
+}
+```
+
+Pattern B phức tạp hơn và dễ gây lỗi -- pattern A được khuyến nghị cho hầu hết trường hợp.
+
+### 17.6. Tóm tắt signal chain
+
+```text
+Bypass request lifecycle:
+  Client request
+    └─▶ vcl_recv: phát hiện bypass condition
+         └─▶ return(pass)
+              └─▶ vcl_pass: forward đến backend
+                   └─▶ Backend xử lý
+                        └─▶ vcl_deliver: gán X-Cache = MISS (hoặc pass)
+                             └─▶ KHÔNG lưu vào cache storage
+
+Cacheable request lifecycle (để so sánh):
+  Client request
+    └─▶ vcl_recv: không bypass
+         └─▶ vcl_hash: tạo cache key
+              └─▶ lookup: MISS hoặc HIT
+                   ├─▶ HIT: serve từ cache (KHÔNG gọi backend)
+                   └─▶ MISS: gọi backend → lưu vào cache → HIT lần sau
+```
+
+### 17.7. So sánh chi tiết bypass vs cacheable
+
+| Khía cạnh | Cacheable read (case 01) | Bypass auth (case 03) | Bypass POST (case 03) |
+| --- | --- | --- | --- |
+| **VCL quyết định** | `vcl_recv` → `vcl_hash` → lookup | `vcl_recv` → `return(pass)` | `vcl_recv` → `return(pass)` |
+| **Cache key** | Có (URL + variant headers) | Không | Không |
+| **Lần 1** | MISS (gọi origin, lưu cache) | MISS/pass (gọi origin, không lưu) | MISS/pass (gọi origin, không lưu) |
+| **Lần 2** | HIT (serve từ cache) | MISS/pass (gọi origin lại) | MISS/pass (gọi origin lại) |
+| **Origin load (10 requests)** | ~1-2 lần gọi | 10 lần gọi | 10 lần gọi |
+| **Response time** | ~3ms (warm) | ~18ms | ~18ms |
+| **Cache key headers** | Có (5 headers) | Không | Không |
+| **Security** | OK (public data) | Required (private data) | Required (mutation) |
+
+### 17.8. Quy tắc thiết kế bypass rules
+
+```text
+1. Bypass dựa trên REQUEST characteristics, không phải URL pattern
+2. return(pass) phải ở ĐẦU vcl_recv, trước vcl_hash
+3. Authorization và Cookie là hai check riêng biệt — không gộp chung
+4. Cache-Control: no-cache từ client ≠ Cache-Control từ origin
+5. Non-GET/HEAD methods LUÔN bypass — không có ngoại lệ
+6. Dùng return(pass) thay vì return(pipe) để giữ observability
+7. Set X-Pass-Reason header để debug dễ dàng
+8. Test mỗi bypass rule với ÍT NHẤT 2 lần request liên tiếp
+9. Đừng quên Pragma: no-cache (HTTP/1.0 legacy)
+10. Cookie bypass không cần parse nội dung cookie — chỉ cần kiểm tra sự tồn tại
+```
+
+### 17.9. Các câu hỏi thường gặp
+
+**Hỏi**: Nếu tôi có API vừa cần auth vừa public (cùng URL, response khác nhau tùy auth), làm sao CDN biết?
+
+**Đáp**: CDN không cần biết. Mọi request có `Authorization` header đều bypass — kể cả khi response "giống hệt" public version. Đây là safe default. Nếu bạn muốn cache authenticated response, cần thêm logic phức tạp hơn (ví dụ: hash `Authorization` header value vào cache key) — nhưng điều này có rủi ro bảo mật.
+
+**Hỏi**: Case 03 cần `OPS_AUTH_TOKEN` không?
+
+**Đáp**: Không. Case 03 không gọi control plane (không có `setup()`, không purge/ban). Bạn có thể chạy case này mà không cần set `OPS_AUTH_TOKEN`.
+
+**Hỏi**: Nếu script chạy pass nhưng tôi vẫn thấy POST response có vẻ bị cache thì sao?
+
+**Đáp**: Kiểm tra response headers. Nếu `X-Cache` không phải `HIT` và không có cache key headers, request đã bypass đúng. "Có vẻ bị cache" có thể là do response data trùng lặp ngẫu nhiên.
+
+**Hỏi**: Tại sao case này dùng `iterations: 1` thay vì `duration`?
+
+**Đáp**: Case này là correctness proof, không phải load test. Một iteration với 8 request tuần tự đủ để chứng minh bypass rules hoạt động. Tăng iteration có thể hữu ích để test stability (variation 5), nhưng script gốc giữ đơn giản.
+
+### 17.10. Bảng tổng kết năng lực CDN — case 03
+
+| Năng lực | Trạng thái | Evidence |
+| --- | --- | --- |
+| Phát hiện Authorization header | Hoạt động | 2 lần GET not HIT, không cache key headers |
+| Phát hiện Cookie header | Hoạt động | 2 lần GET not HIT, không cache key headers |
+| Phát hiện Cache-Control: no-cache | Hoạt động | 2 lần GET not HIT, không cache key headers |
+| Phát hiện non-GET method | Hoạt động | 2 lần POST not HIT |
+| Bypass nhất quán (repeatability) | Hoạt động | Lần 1 và lần 2 đều bypass |
+| Không tạo cache key cho bypass | Hoạt động | Cache key headers absent |
+| Upstream routing đúng | Hoạt động | X-Upstream-Service đúng service |
+
+### 17.11. Dependency graph
+
+Case 03 là case độc lập nhất trong suite — không phụ thuộc vào bất kỳ case nào khác. Tuy nhiên, theo pedagogical order, nên học case 01 và 02 trước để hiểu cache behavior bình thường trước khi học bypass:
+
+```text
+Recommended learning order:
+  01_hit-smoke ──▶ 02_variant-keys ──▶ 03_bypass-rules ──▶ 04_query-normalization
+       │                   │                    │                    │
+       │─ Hiểu HIT/MISS    │─ Hiểu cache key   │─ Hiểu bypass      │─ Hiểu query norm
+       │  cơ bản           │  dimensions         │  rules             │
+```
+
+Bypass rules (case 03) là "ngoại lệ" của cache behavior bình thường (case 01 và 02). Hiểu cái bình thường trước khi hiểu ngoại lệ giúp tránh nhầm lẫn giữa "MISS vì chưa warm" và "MISS vì bypass".
+
+### 17.12. Kiểm tra chéo với curl
+
+Trước khi chạy k6, bạn có thể kiểm tra nhanh từng bypass rule bằng curl:
+
+```powershell
+# Test Authorization bypass
+curl -s -o NUL -w "%{http_code} X-Cache:%header{X-Cache}" `
+  -H "Authorization: Bearer test" `
+  -H "Accept-Language: vi" -H "X-Geo-Country: VN" `
+  -H "X-Device-Class: mobile" -H "X-Ab-Variant: control" `
+  -H "X-User-Segment: guest" `
+  http://localhost:80/api/sim/products/1
+
+# Test Cookie bypass
+curl -s -o NUL -w "%{http_code} X-Cache:%header{X-Cache}" `
+  -H "Cookie: session_id=test123" `
+  -H "Accept-Language: vi" -H "X-Geo-Country: VN" `
+  -H "X-Device-Class: mobile" -H "X-Ab-Variant: control" `
+  -H "X-User-Segment: guest" `
+  http://localhost:80/api/sim/products/1
+
+# Test no-cache bypass
+curl -s -o NUL -w "%{http_code} X-Cache:%header{X-Cache}" `
+  -H "Cache-Control: no-cache" `
+  -H "Accept-Language: vi" -H "X-Geo-Country: VN" `
+  -H "X-Device-Class: mobile" -H "X-Ab-Variant: control" `
+  -H "X-User-Segment: guest" `
+  http://localhost:80/api/sim/products/1
+
+# Test POST bypass
+curl -s -o NUL -w "%{http_code} X-Cache:%header{X-Cache}" `
+  -X POST -H "Content-Type: application/json" `
+  -d '{"product_id":1,"quantity":1}' `
+  http://localhost:80/api/sim/cart/add
+```
+
+Kết quả mong đợi: tất cả trả về HTTP 200 và `X-Cache` khác `HIT`. Nếu curl tiện lợi, đây là cách debug nhanh nhất trước khi chạy k6 đầy đủ.

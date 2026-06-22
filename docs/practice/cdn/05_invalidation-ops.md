@@ -1436,7 +1436,100 @@ banTag('product-1');  // Vẫn OK
 // (assertStatus trong banUrl/banTag đã kiểm tra 200)
 ```
 
-### Bảng tổng hợp variations
+### Variation 6: So sánh hiệu năng ba cơ chế invalidation
+
+Đo lường thời gian thực thi của từng cơ chế để hiểu trade-off về performance.
+
+```javascript
+// Variation 6: Performance comparison of invalidation mechanisms
+// Đo thời gian từ lúc gọi invalidate đến lúc verify MISS
+
+// --- Purge performance ---
+warmUntilHit(paths.cached, null, 'perf_purge');
+const purgeStart = Date.now();
+purgeUrl(paths.cached);
+const purgeDone = Date.now();
+const afterPurge = requestCdn('GET', paths.cached, { tags: { case: 'perf_purge_verify' } });
+assertCacheState(afterPurge, 'MISS', 'purge verify');
+const purgeTotal = Date.now() - purgeStart;
+console.log(`purge total time: ${purgeTotal}ms`);  // Thường < 5ms
+
+// --- Ban URL performance ---
+warmUntilHit(paths.productDetail, profiles.guestVNMobileControl, 'perf_banurl');
+warmUntilHit(paths.productDetail, profiles.guestVNMobileVariantA, 'perf_banurl_var');
+const banUrlStart = Date.now();
+banUrl(paths.productDetail);
+const banUrlDone = Date.now();
+const afterBanUrl = requestCdn('GET', paths.productDetail, {
+  profile: profiles.guestVNMobileControl,
+  tags: { case: 'perf_banurl_verify' },
+});
+assertCacheState(afterBanUrl, 'MISS', 'banurl verify');
+const banUrlTotal = Date.now() - banUrlStart;
+console.log(`ban-url total time: ${banUrlTotal}ms`);  // Thường < 10ms (có thể chậm hơn purge)
+
+// --- Ban Tag performance ---
+banUrl(paths.productDetail);
+banUrl(paths.recommendations);
+warmUntilHit(paths.productDetail, profiles.guestVNMobileControl, 'perf_bantag_detail');
+warmUntilHit(paths.recommendations, profiles.guestVNMobileControl, 'perf_bantag_recs');
+const banTagStart = Date.now();
+banTag('product-1');
+const banTagDone = Date.now();
+const afterTagDetail = requestCdn('GET', paths.productDetail, {
+  profile: profiles.guestVNMobileControl,
+  tags: { case: 'perf_bantag_verify_detail' },
+});
+assertCacheState(afterTagDetail, 'MISS', 'bantag verify detail');
+const banTagTotal = Date.now() - banTagStart;
+console.log(`ban-tag total time: ${banTagTotal}ms`);  // Có thể nhanh hoặc chậm tùy index size
+
+// Kết quả điển hình:
+//   purge:   2-5ms    (nhanh nhất — exact hash lookup)
+//   ban-url: 5-15ms   (trung bình — duyệt cache objects)
+//   ban-tag: 3-20ms   (biến thiên — phụ thuộc số lượng object có tag đó)
+```
+
+**Điểm học:** Purge nhanh nhất vì chỉ cần hash lookup O(1). Ban-url và ban-tag có thể chậm hơn tùy thuộc vào số lượng object trong cache và cách Varnish index. Trong production với hàng triệu object, ban-url có thể mất hàng trăm ms.
+
+### Variation 7: Grace period sau invalidation
+
+Kiểm tra hành vi của CDN trong khoảng thời gian ngắn ngay sau invalidation — liệu có race condition giữa invalidate và request không?
+
+```javascript
+// Variation 7: Race condition giữa invalidate và concurrent request
+// (Yêu cầu vus >= 2 để mô phỏng — KHÔNG nên làm trong test correctness)
+
+// Ý tưởng: Gửi request và invalidate cùng lúc
+// Kết quả có thể là:
+//   - Request hoàn thành trước invalidate → HIT (object cũ)
+//   - Invalidate hoàn thành trước request → MISS (object bị xóa)
+//   - Request đến trong lúc đang invalidate → MISS hoặc HIT (không xác định)
+
+// Production pattern để tránh race condition:
+//   1. Invalidate cache
+//   2. Đợi confirmation (hoặc đợi 1-2 giây grace period)
+//   3. Sau đó mới thông báo cho user rằng dữ liệu đã được cập nhật
+
+// Grace period approach trong k6:
+warmUntilHit(paths.cached, null, 'grace_test');
+purgeUrl(paths.cached);
+
+// sleep(0.5) — đợi 500ms grace period
+// (chỉ để demo; trong production, grace period được quản lý bởi event system)
+import { sleep } from 'k6';
+sleep(0.5);
+
+const afterGrace = requestCdn('GET', paths.cached, {
+  tags: { case: 'var7_after_grace' },
+});
+assertCacheState(afterGrace, 'MISS', 'MISS after grace period');
+// Sau grace period, object chắc chắn đã bị xóa
+```
+
+**Điểm học:** Trong hệ thống production, luôn có một "invalidation window" — khoảng thời gian giữa lúc gửi lệnh invalidate và lúc cache thực sự bị xóa. Window này thường rất nhỏ (< 100ms) nhưng vẫn tồn tại. Grace period và confirmation pattern giúp đảm bảo tính nhất quán.
+
+### Bảng tổng hợp tất cả variations
 
 | Variation | Mục tiêu học tập | Cơ chế chính | Độ khó |
 | --- | --- | --- | --- |
@@ -1445,6 +1538,8 @@ banTag('product-1');  // Vẫn OK
 | 3. Multi-tag ban | Xác nhận `banTag` hoạt động khi object có nhiều tag | `banTag(tag)` | Trung bình |
 | 4. Idempotent purge | Xác nhận gọi purge nhiều lần không lỗi | `purgeUrl(url)` | Cơ bản |
 | 5. Idempotent ban | Xác nhận gọi ban nhiều lần không lỗi | `banUrl(url)`, `banTag(tag)` | Cơ bản |
+| 6. Performance comparison | So sánh thời gian thực thi giữa ba cơ chế | Cả ba | Trung bình |
+| 7. Grace period | Hiểu race condition và grace period sau invalidate | `purgeUrl` + `sleep` | Nâng cao |
 
 ---
 
