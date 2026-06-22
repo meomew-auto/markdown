@@ -773,8 +773,46 @@ Không nên viết cứng công thức này như tuyệt đối cho mọi run ng
 scheduled_slots = rate * duration_seconds / timeUnit_seconds
 ```
 
-Lý do: mốc đầu thường start gần `t=0`, mốc sát boundary cuối phụ thuộc timing, và summary rate tính
-trên `summary_runtime_base`. Khi phân tích output, ưu tiên đọc từ metric.
+Lý do: mốc đầu thường start gần `t=0`, mốc sát boundary cuối phụ thuộc timing.
+
+Ví dụ cụ thể — config `rate: 4, timeUnit: "1s", duration: "4s"`:
+
+```text
+Lý thuyết: 4 slot/s × 4s = 16 slot
+
+Timeline thực tế (mốc đầu ở t≈0, gap = 1/4 = 0.25s):
+  t ≈ 0.000s   slot 1
+  t ≈ 0.250s   slot 2
+  t ≈ 0.500s   slot 3
+  ...
+  t ≈ 3.750s   slot 16  ← mốc cuối, (16-1)×0.25 = 3.75s < 4s → OK
+  t = 4.000s   duration hết, không schedule nữa
+
+→ 16 slot, khớp lý thuyết.
+
+Khi nào lệch? Vấn đề nằm ở BIÊN CUỐI, không phải mốc đầu:
+
+  Với rate=4/s, gap=0.25s, các mốc rơi vào: 0, 0.25, 0.50, ..., 3.75, 4.00
+
+  Mốc tại t=4.00s — đúng bằng duration — có được schedule không?
+  → Tùy implementation: nếu check `slot_time < duration` thì KHÔNG (chỉ 16 slot)
+  → Nếu check `slot_time <= duration` thì CÓ (thành 17 slot)
+
+  → Lệch 1 slot chỉ vì cách check biên. Run 4s lệch ~6%, run 300s lệch <0.1%.
+
+Trường hợp khác: rate không chia hết cho duration:
+  rate=3/s, duration=5s → lý thuyết 15 slot
+  Mốc: 0, 0.333, 0.667, ..., 4.667 (slot 15), 5.000 (slot 16?)
+  → Slot 16 ở t=5.000s: có hay không? Lại phụ thuộc biên.
+  → Thực tế có thể 15 hoặc 16 slot.
+```
+
+Vì vậy:
+- `rate × duration` là ước lượng TỐT cho run dài (vài phút), sai số <1%
+- Với run ngắn (vài giây), 1 slot lệch đã vài % → dùng `observed_scheduled_slots`
+  (= N_done + N_drop + N_int) từ metric thì chính xác tuyệt đối
+- Và summary rate tính trên `summary_runtime_base` (khác `duration`), nên
+  không thể lấy `summary_rate × duration` để tính ngược ra scheduled slots
 
 **── `rate × duration` và họ hàng với executor khác ──**
 
