@@ -397,6 +397,38 @@ preAllocatedVUs: 20
 maxVUs: 40
   → Nếu 20 VU không đủ để đạt 60 req/s (mỗi request mất > 333ms),
     k6 có thể scale lên tới 40 VU
+
+##### Phân tích executor: vì sao dùng `constant-arrival-rate` cho case này?
+
+Đây là case thứ 2 trong LB suite dùng open model (sau case 07).
+
+**Yêu cầu của case:**
+
+```text
+1. Rate cố định để test fairness: 60 req/s chính xác trong 12s
+   → Muốn verify "dưới tải ổn định, canary có nhận đúng ~20% traffic không?"
+   → Nếu dùng constant-vus: rate dao động → tỷ lệ canary dao động → không verify được
+   → constant-arrival-rate: rate LUÔN 60/s → sample đủ lớn (720 iter) → tỷ lệ hội tụ
+
+2. Cần sample LỚN và ĐỀU: 720 iteration trong 12s
+   → Tỷ lệ canary chỉ có ý nghĩa thống kê với sample lớn
+   → Rate ổn định đảm bảo sample không bị "cluster" vào lúc server nhanh
+```
+
+**So sánh executor:**
+
+| Executor | Phù hợp? | Vì sao |
+| --- | --- | --- |
+| **constant-arrival-rate** (đang dùng) | ✅ **ĐÚNG** | Rate cố định 60/s. 720 sample deterministic. Open model đảm bảo rate không đổi. |
+| constant-vus | ❌ SAI | Rate dao động theo response time → tỷ lệ canary không ổn định → không verify được fairness. |
+| shared-iterations | ❌ SAI | Cần tổng iter cố định. Fairness cần rate THEO THỜI GIAN để tạo áp lực liên tục. |
+| per-vu-iterations | ❌ SAI | Cần iter/VU cố định. Case này cần sustained rate, không phải quota. |
+| ramping-arrival-rate | ⚠️ Có thể nếu cần ramp | Nếu muốn test "tăng rate đến khi fairness break". Case này dùng rate cố định. |
+
+**Key insight**: Fairness test CẦN rate ổn định. Nếu rate dao động, tỷ lệ
+canary dao động theo → không phân biệt được "fairness sai" vs "sample không
+đủ". `constant-arrival-rate` cho 720 sample đều đặn → tỷ lệ hội tụ về true
+share.
   → Công thức: VUs_needed = rate * avg_iteration_duration
     Với rate=60, nếu mỗi iteration mất 500ms: cần 60 * 0.5 = 30 VU
 ```

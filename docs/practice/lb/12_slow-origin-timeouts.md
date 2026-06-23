@@ -342,6 +342,38 @@ export const options = {
 
 **(a) `lb_timeout_504: ['count>0']`** -- Phải có ít nhất một 504. Threshold này đảm bảo timeout policy **đã thực sự kích hoạt**. Nếu count=0, có thể slow origin đang phản hồi quá nhanh (dưới 150ms), và test không có giá trị vì timeout chưa từng xảy ra.
 
+##### Phân tích executor: vì sao dùng `constant-arrival-rate` cho case này?
+
+Đây là case thứ 3 trong LB suite dùng open model.
+
+**Yêu cầu của case:**
+
+```text
+1. Rate cố định để test timeout: 8 req/s, mỗi request mất >150ms (slow origin)
+   → Nếu dùng constant-vus: VU bận 150ms+ → rate tự nhiên thấp
+   → constant-arrival-rate: ép 8 req/s đều đặn → đảm bảo luôn có request "chờ"
+   → Timeout xảy ra KHI request xếp hàng + origin chậm → cần rate ổn định
+
+2. Cần thấy 504: threshold `lb_timeout_504: ['count>0']` — phải có timeout
+   → Nếu rate không đủ cao, request không bao giờ timeout → test vô nghĩa
+   → Open model đảm bảo rate không giảm dù server đang chậm
+```
+
+**So sánh executor:**
+
+| Executor | Phù hợp? | Vì sao |
+| --- | --- | --- |
+| **constant-arrival-rate** (đang dùng) | ✅ **ĐÚNG** | Rate cố định 8/s. Ép request đến đều → timeout xuất hiện khi origin chậm. |
+| constant-vus | ❌ SAI | Closed model: VU bận → rate giảm → ít request xếp hàng → ít timeout → test yếu. |
+| shared-iterations | ❌ SAI | Cần tổng iter cố định. Timeout test cần rate theo THỜI GIAN. |
+| per-vu-iterations | ❌ SAI | Cần iter/VU cố định. Không phù hợp. |
+| ramping-arrival-rate | ⚠️ Có thể | Nếu muốn test "tăng rate đến khi timeout xuất hiện". |
+
+**Key insight**: Timeout test CẦN open model. Nếu dùng closed model, server
+chậm → VU bận → rate giảm → ít request → ít timeout → test không bắt được
+bug. `constant-arrival-rate` ép rate đều → request xếp hàng → timeout kích
+hoạt → verify 504.
+
 **(b) `lb_timeout_unexpected: ['count==0']`** -- Không được có unexpected status nào. Tất cả request phải là 504. Nếu có dù chỉ 1 unexpected, test fail.
 
 **(c) `http_req_duration{endpoint:lb_timeout_demo}: ['p(95)<250']`** -- 95% request phải hoàn thành dưới 250ms. Tại sao là 250ms mà không phải 150ms?

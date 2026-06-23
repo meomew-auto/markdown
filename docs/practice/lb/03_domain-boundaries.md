@@ -383,6 +383,36 @@ Contract cứng: **100% checks phải pass**. Mỗi request tạo ra 5-6 checks.
 
 Không một request nào được phép thất bại ở tầng HTTP. Lưu ý: `http_req_failed` trong k6 mặc định coi status >= 400 là "failed". Threshold này đảm bảo mọi response đều có status < 400.
 
+##### Phân tích executor: vì sao dùng `per-vu-iterations` cho case này?
+
+Config dùng bare form `vus=1, iterations=1` → `per-vu-iterations`.
+
+**Yêu cầu của case:**
+
+```text
+1. Domain boundary probe: verify request đến đúng service theo domain
+   → 6 request tuần tự (mỗi domain 1 request)
+   → KHÔNG phải load test — là correctness probe, chạy 1 lần đủ
+
+2. 1 VU, 1 iteration: sequential proof
+   → Mỗi request assertion có label → cần tuần tự để đọc kết quả
+   → Nhiều VU: assertion bị trộn → khó debug
+```
+
+**So sánh executor:**
+
+| Executor | Phù hợp? | Vì sao |
+| --- | --- | --- |
+| **per-vu-iterations** (đang dùng) | ✅ **ĐÚNG** | 1 VU × 1 iter. Sequential probe, deterministic. |
+| shared-iterations | ⚠️ Kết quả giống | `vus=1` → output giống. |
+| constant-vus | ❌ SAI | Cần `duration`. Case này là probe 1 lần. |
+| constant-arrival-rate | ❌ SAI | Ép rate. Không cần. |
+| ramping-vus | ❌ SAI | 1 VU ổn định, không ramp. |
+
+**Key insight**: Domain boundary test = "gọi 6 service, verify routing đúng".
+1 lần đủ. Pattern giống CDN correctness: `per-vu-iterations` với `vus=1,
+iterations=1`.
+
 **`tags` block:**
 
 Tags được gắn vào mọi metric mà script tạo ra. Chúng dùng để:

@@ -380,6 +380,40 @@ thresholds: {
 
 Khác với case 07 (nơi `http_req_failed > 0` là expected), case 08 yêu cầu **0% failed request**. Tất cả request đến canary-demo endpoint phải thành công (200), bất kể được route sang stable hay canary.
 
+##### Phân tích executor: vì sao dùng `per-vu-iterations` cho case này?
+
+Config dùng bare form `vus=1, iterations=1` → `per-vu-iterations`. **Đặc biệt:**
+1 iteration chứa 120+ request gửi tuần tự qua vòng lặp `for` bên trong.
+
+**Yêu cầu của case:**
+
+```text
+1. Canary routing proof: forced_stable → forced_canary → weighted_sample
+   → 3 phase TUẦN TỰ bên trong 1 iteration
+   → Mỗi phase có assertion riêng (100% stable, 100% canary, ~20%/80%)
+   → KHÔNG thể dùng nhiều VU — request bị trộn → không verify được tỷ lệ
+
+2. 1 VU, 1 iteration, 120+ request nội bộ:
+   → Dùng vòng lặp for (không dùng k6 iteration loop)
+   → Kiểm soát chính xác thứ tự và số lượng request
+   → Đếm instance_id để verify phân phối canary
+```
+
+**So sánh executor:**
+
+| Executor | Phù hợp? | Vì sao |
+| --- | --- | --- |
+| **per-vu-iterations** (đang dùng) | ✅ **ĐÚNG** | 1 VU × 1 iter. 120+ request tuần tự trong vòng lặp. Deterministic. |
+| constant-vus | ❌ SAI | Nhiều VU → request bị trộn → không verify được tỷ lệ canary. |
+| constant-arrival-rate | ❌ SAI | Ép rate. Case này cần sequence tuần tự 3 phase, không phải rate. |
+| shared-iterations | ⚠️ Kết quả giống | `vus=1` → output giống. Nhưng per-vu-iterations đúng semantic hơn. |
+| ramping-vus | ❌ SAI | Không cần ramp. |
+
+**Key insight**: Canary test = "gọi 120 lần, đếm xem ~20% có vào canary
+không?". Cần TUẦN TỰ và KIỂM SOÁT — 1 VU với vòng lặp nội bộ cho phép đếm
+chính xác. Đây là pattern "1 iteration = N sample request" — khác với pattern
+"1 iteration = 1 request" của CDN correctness.
+
 #### Tags
 
 ```javascript

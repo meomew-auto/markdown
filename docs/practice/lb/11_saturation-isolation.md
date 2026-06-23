@@ -337,6 +337,21 @@ Constant-arrival-rate executor tạo ra áp lực không đổi theo thời gian
 - Constant-arrival-rate đảm bảo slow lane luôn gửi 6 request/giây ngay cả khi mỗi request mất 600ms -- tạo áp lực thực sự lên connection pool.
 - Fast lane cũng dùng constant-arrival-rate để có baseline ổn định: luôn 25 request/giây, p95 baseline có thể đo được chính xác.
 
+**So sánh đầy đủ 5 executor cho case này:**
+
+| Executor | Phù hợp? | Vì sao |
+| --- | --- | --- |
+| **constant-arrival-rate** (đang dùng) | ✅ **ĐÚNG** | Dual-scenario open model. Fast lane 25 req/s, slow lane 6 req/s. Rate cố định đảm bảo áp lực KHÔNG ĐỔI — slow lane không được "nghỉ" khi chậm. |
+| constant-vus | ❌ SAI | Closed model: slow lane chậm → VU bận lâu → rate giảm → áp lực giảm → fast lane không bị ảnh hưởng → test không phát hiện được isolation bug. |
+| ramping-arrival-rate | ⚠️ Có thể | Nếu muốn test "tăng rate đến khi isolation break". Nhưng case này cần rate ổn định để có baseline so sánh. |
+| shared-iterations | ❌ SAI | Cần tổng iter cố định. Isolation test cần rate THEO THỜI GIAN để tạo áp lực liên tục. |
+| per-vu-iterations | ❌ SAI | Cần iter/VU cố định. Không phù hợp. |
+
+**Key insight**: Saturation isolation test CẦN dual-scenario open model. Nếu
+dùng closed model, slow lane tự "giảm ga" khi chậm → không tạo áp lực thật →
+không test được isolation. `constant-arrival-rate` ép cả 2 lane giữ rate — fast
+lane phải "chiến đấu" với slow lane để giữ p95<50ms.
+
 #### 5.3.2 Tại sao `preAllocatedVUs=16` và `maxVUs=32`?
 
 Đây là tham số của constant-arrival-rate executor, không phải của constant-vus:

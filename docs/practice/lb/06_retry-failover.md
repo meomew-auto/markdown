@@ -378,6 +378,41 @@ export const options = {
 
 **(a) `vus: 1`** -- Chỉ cần 1 VU. Tại sao? Vì retry/failover là cơ chế per-request: một request đơn lẻ cũng phải được retry đúng. Không cần concurrent load để chứng minh cơ chế này. Nếu retry hoạt động cho 1 request, nó sẽ hoạt động cho mọi request (vì Nginx xử lý từng request độc lập).
 
+**(b) `iterations: 1`** -- Một iteration chứa toàn bộ kịch bản: gửi request → expect failover → verify upstream thay đổi.
+
+**(c-e)** (tiếp tục phân tích phía dưới)
+
+##### Phân tích executor: vì sao dùng `per-vu-iterations` cho case này?
+
+Config dùng bare form `vus=1, iterations=1` → `per-vu-iterations`.
+
+**Yêu cầu của case:**
+
+```text
+1. Retry/failover proof: 1 request → fail → retry → upstream thay đổi
+   → Sequence TUẦN TỰ: request 1 fail → verify retry → request 2 success
+   → KHÔNG phải load test — là correctness proof của cơ chế failover
+
+2. 1 VU, 1 iteration: toàn bộ kịch bản failover trong 1 lần default()
+   → setup() bật fail mode, default() verify retry → upstream khác
+   → Nhiều VU sẽ race: VU A verify retry, VU B cũng đang gửi → nhiễu
+```
+
+**So sánh executor:**
+
+| Executor | Phù hợp? | Vì sao |
+| --- | --- | --- |
+| **per-vu-iterations** (đang dùng) | ✅ **ĐÚNG** | 1 VU × 1 iter. Sequential failover proof. Deterministic. |
+| shared-iterations | ⚠️ Kết quả giống | `vus=1` → output giống. |
+| constant-vus | ❌ SAI | Cần `duration`. Case này là proof 1 lần, không cần sustained traffic. |
+| constant-arrival-rate | ❌ SAI | Ép rate. Case này cần sequence, không cần rate. |
+| ramping-vus | ❌ SAI | 1 VU ổn định, không ramp. |
+
+**Key insight**: Retry/failover test = "1 request fail → retry → upstream
+khác". Sequential proof, 1 lần đủ. `per-vu-iterations` với `vus=1, iterations=1`.
+
+### 5.4 Phân tích từng dòng -- Phần C: Default function
+
 **(b) `iterations: 1`** -- Chỉ chạy 1 iteration. Tương tự như trên: một lần demo là đủ để chứng minh. Đây là điểm khác biệt quan trọng với hầu hết các case khác (có nhiều iteration). Case 06 là "proof of mechanism", không phải "statistical validation".
 
 **(c) `checks: ['rate==1']`** -- 100% checks phải pass. Với chỉ 1 request, threshold này cực kỳ nghiêm ngặt: nếu bất kỳ check nào fail, toàn bộ test fail. Không có chỗ cho "gần đúng".

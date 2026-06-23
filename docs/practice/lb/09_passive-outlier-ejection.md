@@ -316,6 +316,36 @@ export const options = {
 
 **`tags`**: `scenario: 'lb_passive_outlier_ejection'` để phân biệt trên dashboard/cloud. `target_layer: 'lb'` và `lb_profile: 'full-no-cdn'` để lọc theo topology.
 
+##### Phân tích executor: vì sao dùng `per-vu-iterations` cho case này?
+
+Config dùng bare form `vus=1, iterations=1` → `per-vu-iterations`.
+
+**Yêu cầu của case:**
+
+```text
+1. Outlier ejection proof: reset → request đầu (503→eject) → N request follow-up
+   → Sequence TUẦN TỰ: không thể verify "ejection duy trì" nếu request xen kẽ
+   → Ejection state là SHARED trong Nginx — nhiều VU làm nhiễu
+
+2. 1 VU, 1 iteration: toàn bộ flow ejection trong 1 lần default()
+   → setup() reset state, default() gửi request đầu + N sample
+   → Deterministic: biết chính xác request nào gây eject, request nào verify
+```
+
+**So sánh executor:**
+
+| Executor | Phù hợp? | Vì sao |
+| --- | --- | --- |
+| **per-vu-iterations** (đang dùng) | ✅ **ĐÚNG** | 1 VU × 1 iter. Sequential ejection proof. |
+| shared-iterations | ⚠️ Kết quả giống | `vus=1` → output giống. |
+| constant-vus | ❌ SAI | Cần `duration`. Ejection cần số request chính xác, không phải thời gian. |
+| constant-arrival-rate | ❌ SAI | Ép rate. Case này cần sequence, không cần rate. |
+| ramping-vus | ❌ SAI | 1 VU ổn định, không ramp. |
+
+**Key insight**: Outlier ejection = "1 request fail → Nginx eject → N request
+sau không đến upstream lỗi nữa". Sequential proof, deterministic. Pattern
+giống CDN correctness.
+
 ### 5.5 Helper function: `hasRetriedUpstream(statusHeader)`
 
 ```javascript

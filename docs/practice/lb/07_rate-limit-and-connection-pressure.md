@@ -368,6 +368,42 @@ pressure: {
 - Graceful ramp-down ở cuối scenario
 - Một số request bị drop nếu không đủ VUs (dù `maxVUs` đã được set)
 
+##### Phân tích executor: vì sao dùng `constant-arrival-rate` cho case này?
+
+Đây là case DUY NHẤT trong LB suite dùng `constant-arrival-rate` (open model).
+Khác biệt cơ bản với `constant-vus` (closed model) ở các case khác.
+
+**Yêu cầu của case:**
+
+```text
+1. Rate cố định BẮT BUỘC: 30 req/s chính xác, không phụ thuộc response time
+   → Muốn test "server phản ứng thế nào khi bị ép đúng 30 req/s?"
+   → Nếu dùng constant-vus: rate = vus/iter_time → khi server chậm, rate GIẢM
+   → Với constant-arrival-rate: rate LUÔN 30/s, dù server chậm → tạo áp lực thật
+
+2. Cần thấy 429 (rate limit): nếu server chậm + rate không đổi → queue đầy → 429
+   → Đây là MỤC TIÊU TEST — verify rate limiting hoạt động
+   → Threshold: 'lb_pressure_429' phải count>0 → phải có 429!
+
+3. Open model: iteration được schedule theo rate, KHÔNG đợi iter trước xong
+   → preAllocatedVUs=20, maxVUs=40: cho phép spawn thêm VU khi cần
+```
+
+**So sánh executor:**
+
+| Executor | Phù hợp? | Vì sao |
+| --- | --- | --- |
+| **constant-arrival-rate** (đang dùng) | ✅ **ĐÚNG** | Rate cố định 30/s. Open model — iteration schedule độc lập với completion. Cần thấy 429 khi quá tải. |
+| constant-vus | ❌ SAI | Closed model — rate = vus/iter_time. Khi server chậm, rate GIẢM → không tạo đủ áp lực → không thấy 429. |
+| ramping-arrival-rate | ⚠️ Có thể nếu cần ramp | Nếu muốn test "tăng dần rate đến khi thấy 429". Case này dùng rate cố định → constant-arrival-rate đơn giản hơn. |
+| shared-iterations | ❌ SAI | Cần tổng iter cố định. Case này cần rate THEO THỜI GIAN. |
+| per-vu-iterations | ❌ SAI | Cần iter/VU cố định. Không phù hợp. |
+
+**Key insight**: Rate limit test CẦN open model. Nếu dùng closed model, server
+chậm → VU bận lâu → rate giảm → server hết quá tải → rate limit KHÔNG BAO GIỜ
+kích hoạt. `constant-arrival-rate` ép rate 30/s bất kể server state → tạo áp
+lực thật → verify 429 xuất hiện.
+
 #### Thresholds
 
 ```javascript

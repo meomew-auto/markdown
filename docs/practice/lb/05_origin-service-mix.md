@@ -341,6 +341,38 @@ export const options = {
 
 **(d) Tags** -- `scenario: 'lb_origin_service_mix'` được dùng để filter kết quả trong dashboard. `lb_profile: 'full-no-cdn'` ghi lại topology đã dùng, giúp phân biệt kết quả giữa các lần chạy khác profile.
 
+##### Phân tích executor: vì sao dùng `constant-vus` cho case này?
+
+Config dùng bare form `vus` + `duration` → `constant-vus`.
+
+**Yêu cầu của case:**
+
+```text
+1. Production traffic mix: 12 VU gửi weighted random request tới 5 services
+   → Cần sustained traffic trong 45s với tỷ lệ service tự nhiên
+   → Mỗi VU tự chọn service theo weighted random → mô phỏng user thật
+   → KHÔNG cần rate chính xác — rate tự điều chỉnh theo response time
+
+2. Duration-based: chạy 45s, không phải "N iterations"
+   → Muốn quan sát routing correctness TRONG KHOẢNG THỜI GIAN
+   → Số request là OUTPUT (phản ánh performance), không phải INPUT
+```
+
+**So sánh executor:**
+
+| Executor | Phù hợp? | Vì sao |
+| --- | --- | --- |
+| **constant-vus** (đang dùng) | ✅ **ĐÚNG** | Sustained traffic 45s. VU loop + weighted random. Rate tự nhiên. |
+| constant-arrival-rate | ⚠️ Được nhưng thừa | Ép rate. Case này cần mix tự nhiên, không cần rate target. Thêm complexity. |
+| shared-iterations | ❌ SAI | Cần tổng iter cố định. Case này chạy theo THỜI GIAN, không biết trước số request. |
+| per-vu-iterations | ❌ SAI | Cần iter/VU cố định. Case này loop vô hạn theo duration. |
+| ramping-vus | ❌ SAI | VU ổn định 12, không ramp. |
+
+**Key insight**: Service mix test = "12 user dùng 5 service trong 45s, routing
+có đúng không?". Số lượng request tới mỗi service là OUTPUT (weighted random),
+không phải INPUT. `constant-vus` cho phép VU tự do chọn service và loop tự
+nhiên theo duration.
+
 ### 5.5 Phân tích từng dòng -- Phần D: Default function
 
 ```javascript
