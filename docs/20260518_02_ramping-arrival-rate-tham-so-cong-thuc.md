@@ -875,6 +875,125 @@ JS sandbox). Nếu quan tâm tới tail latency của hệ thống, phải set `
 
 ### 3.1. Đếm slot: tổng số slot trong 1 stage và rate(t) tại mọi thời điểm
 
+#### Bức tranh tổng quan: 3 đại lượng liên hệ với nhau
+
+Cốt lõi của ramping-arrival-rate là **3 đại lượng** luôn đi cùng nhau.
+Hiểu được mối liên hệ giữa chúng thì mọi công thức còn lại là hệ quả.
+
+**── 3 đại lượng ──**
+
+```text
+Đại lượng 1: rate(t) — "nhịp fire slot tại thời điểm t"
+  Đơn vị: iterations/s (hay slot/s)
+  Ý nghĩa: tại thời điểm t, k6 muốn fire NHANH BAO NHIÊU slot mỗi giây
+  VD: rate(1s) = 3/s → tại t=1s, nhịp là 3 slot mỗi giây
+
+Đại lượng 2: slot_interval(t) — "khoảng cách thời gian giữa 2 slot gần t"
+  Đơn vị: s (hay ms)
+  Ý nghĩa: nếu rate giữ nguyên như lúc t, thì 2 slot liên tiếp cách nhau bao lâu
+  Quan hệ: slot_interval(t) = 1 / rate(t)
+  VD: rate=3/s → interval = 1/3 ≈ 0.333s = 333ms
+
+Đại lượng 3: S(t) — "diện tích tích lũy dưới đường rate từ 0 đến t"
+  Đơn vị: slot (số thực, không làm tròn)
+  Ý nghĩa: tổng số slot LÝ THUYẾT đáng lẽ đã fire từ lúc bắt đầu đến thời điểm t
+  Quan hệ: S(t) = ∫₀ᵗ rate(τ) dτ   (tích phân của rate theo thời gian)
+  VD: nếu rate=3/s đều suốt 2s → S(2) = 3×2 = 6 slot
+```
+
+**── Mối liên hệ mấu chốt giữa 3 đại lượng ──**
+
+```text
+                    rate(t)
+                       │
+                       │  slot_interval = 1/rate
+                       ↓
+               slot_interval(t)          ← "slot gần t cách nhau bao xa"
+                       │
+                       │  S(t) = ∫ rate dt
+                       ↓
+                    S(t)                  ← "đáng lẽ đã fire bao nhiêu slot đến lúc t"
+                       │
+                       │  fire khi S(t) chạm số nguyên
+                       ↓
+               slot thứ k fire tại tₖ
+               với S(tₖ) = k            ← "slot #k ra đời lúc nào"
+```
+
+Nói cách khác:
+
+```text
+rate(t) là TỐC ĐỘ (km/h)
+  → slot_interval là THỜI GIAN ĐI 1 KM (h/km) = 1/tốc_độ
+  → S(t) là QUÃNG ĐƯỜNG ĐÃ ĐI (km) = ∫ tốc_độ × dt
+  → fire slot khi quãng đường chạm mốc số nguyên (1km, 2km, 3km...)
+```
+
+**── Bức tranh minh họa: ramp 2→4/s trong 2s ──**
+
+Dùng 1 ví dụ xuyên suốt để thấy 3 đại lượng trên cùng 1 hình:
+
+```text
+ĐỒ THỊ TRÊN: rate(t) = 2 + t  (đường thẳng dốc lên)
+ĐỒ THỊ DƯỚI: S(t) = 2t + t²/2  (đường cong, càng lúc càng dốc)
+
+rate(t)
+  4 |           /|              ← cuối stage: rate=4/s
+  3 |          / |                  interval=250ms (ngắn nhất)
+  2 |_________/  |              ← đầu stage: rate=2/s
+    |         |                   interval=500ms (dài nhất)
+  0 +----+----+----+----► t
+    0   0.5   1.0  1.5  2.0
+
+S(t)
+  6 |                  ●        ← S=6 → fire slot #6 tại t=2.0
+  5 |              ●            ← S=5 → fire slot #5 tại t≈1.74
+  4 |          ●                ← S=4 → fire slot #4 tại t≈1.46
+  3 |      ●                    ← S=3 → fire slot #3 tại t≈1.16
+  2 |  ●                        ← S=2 → fire slot #2 tại t≈0.83
+  1 |●                          ← S=1 → fire slot #1 tại t≈0.45
+  0 +----+----+----+----► t
+    0   0.5   1.0  1.5  2.0
+
+NHẬN XÉT TỪ HÌNH:
+  - rate tăng → interval giảm → S(t) dốc dần → slot DÀY dần
+  - Đầu stage (gần t=0): S(t) thoải → mất ~0.45s mới đủ 1 slot
+  - Cuối stage (gần t=2): S(t) dốc → chỉ ~0.26s đã đủ 1 slot
+  - Tổng 6 slot trong 2s — nhưng PHÂN BỐ KHÔNG ĐỀU
+```
+
+**── Công thức tổng kết ──**
+
+```text
+┌─────────────────────────────────────────────────────────────────┐
+│ slot_interval(t) = 1 / rate(t)                                  │
+│                                                                 │
+│ S(t) = ∫₀ᵗ rate(τ) dτ                                          │
+│                                                                 │
+│ slot thứ k fire tại tₖ, với S(tₖ) = k                           │
+│                                                                 │
+│ Tổng slot 1 stage = S(stageEnd) - S(stageStart)                 │
+│                   = d × (rate_đầu + rate_cuối) / 2              │
+│                   = diện tích hình thang                         │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+Phân biệt 2 chế độ:
+
+```text
+CONSTANT (rate cố định):                    RAMPING (rate thay đổi):
+  rate(t) = const                            rate(t) = λ_prev + slope×t
+  → interval CỐ ĐỊNH                        → interval THAY ĐỔI
+  → S(t) = rate × t (đường thẳng)            → S(t) = ∫ rate dt (đường cong)
+  → ticker bắn đều                           → giải S(t)=k tìm từng tₖ
+  → slot cách đều                             → slot lúc thưa lúc dày
+```
+
+Với bức tranh này, mọi công thức phía dưới là hệ quả tự nhiên:
+- `N_sched = d × (λ_prev + λ_next)/2` ← diện tích hình thang của rate(t)
+- `slot_interval = 1/rate(t)` ← nghịch đảo của rate tại thời điểm t
+- `S(tₖ) = k` ← slot fire khi tích lũy chạm số nguyên
+
 #### Config demo
 
 ```js
