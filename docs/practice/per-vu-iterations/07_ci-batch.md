@@ -123,40 +123,105 @@ PR #3 (server chậm, 0.30s/iter):
 **Kết luận**: Cùng code, 3 lần CI, 3 verdict khác nhau (1 pass, 2 fail).
 Đây là **FLAKY GATE** -- dev mất niềm tin vào CI, bỏ qua gate vì "nó báo sai suốt".
 
-#### Dùng constant-arrival-rate: drop làm sai lệch sample
+#### Dùng constant-arrival-rate: drop làm sai lệch sample — baseline drift
 
 constant-arrival-rate lập lịch iteration theo tần suất cố định:
 
 ```text
-N_sched = rate x duration = 50 x 60 = 3000 slot được lập lịch
-N_done  = N_sched - N_drop
+N_sched = rate × duration = 50 × 60 = 3000 slot được lập lịch
+N_done  = N_sched − N_drop
 ```
 
-Nếu pool VU không đủ để xử lý hết slot đã lập lịch, k6 sẽ **drop** bớt iteration:
+Nếu pool VU không đủ để xử lý hết slot đã lập lịch, k6 sẽ **drop** bớt iteration.
+
+**── Baseline drift là gì? ──**
 
 ```text
-Run #1 (đủ VU, drop=0):
-  iterations.........: 3000
-  http_req_duration p95: 450ms
+Baseline = p95 của lần chạy ĐẦU TIÊN (hoặc lần chuẩn), được lưu làm mốc.
+Gate rule = p95 của PR mới ≤ baseline + 10% → PASS, ngược lại → FAIL.
 
-Run #2 (thiếu VU, drop=200, tỉ lệ 6.7%):
-  iterations.........: 2800
-  http_req_duration p95: 480ms
+Baseline DRIFT xảy ra khi:
+  - Lần #1 (thiết lập baseline): N_done = 2900 → p95 = 480ms
+  - Lần #2 (so với baseline):   N_done = 2700 → p95 = 510ms
+  - Lần #3 (so với baseline):   N_done = 3000 → p95 = 450ms
+
+  → Baseline là 480ms (từ 2900 sample)
+  → Lần #2: 510ms vs 480ms → +6.25% → PASS (dù sample KHÁC 2700≠2900)
+  → Lần #3: 450ms vs 480ms → −6.25% → PASS (dù thực ra code chậm hơn,
+    nhưng 3000 sample cho phân phối đầy đủ hơn ở tail → p95 thấp hơn)
+
+  → Mỗi lần chạy, sample size KHÁC → baseline "trôi" không kiểm soát được
+  → Cùng 1 code, 3 lần chạy cho 3 p95 khác nhau → CI gate thành trò may rủi
 ```
 
-**Tại sao p95 khác nhau dù server giống hệt nhau?**
+**── Minh họa cụ thể: 3 lần CI, 3 số phận khác nhau ──**
 
 ```text
-- 3000 samples -> distribution tail đầy đủ hơn -> p95 đo CHÍNH XÁC hơn
-- 2800 samples -> thiếu 200 sample ở đuôi tail -> p95 bị LỆCH
-- Sự khác biệt p95 (450 vs 480) ĐẾN TỪ sample size,
-  KHÔNG đến từ code change
-- Nhưng CI gate không thể phân biệt -> fail nhầm
+┌────────┬──────────┬──────────┬──────────┬─────────────────────────┐
+│ Lần CI │ N_sched  │ N_drop   │ N_done   │ p95 (cùng server!)      │
+├────────┼──────────┼──────────┼──────────┼─────────────────────────┤
+│  #1    │ 3000     │ 100      │ 2900     │ 480ms ← lưu làm baseline│
+│  #2    │ 3000     │ 300      │ 2700     │ 510ms → +6.25% → PASS   │
+│  #3    │ 3000     │ 0        │ 3000     │ 450ms → −6.25% → PASS   │
+│  #4    │ 3000     │ 500      │ 2500     │ 530ms → +10.4% → FAIL   │
+└────────┴──────────┴──────────┴──────────┴─────────────────────────┘
+
+CÙNG 1 SERVER, CÙNG 1 CODE — nhưng:
+  - Lần #2: PASS vì +6.25% < 10%
+  - Lần #4: FAIL vì +10.4% > 10%
+  - Không lần nào thực sự "đúng" hay "sai" — tất cả đều là nhiễu từ sample size
 ```
 
-Tỉ lệ drop còn **biến thiên theo từng lần CI** (phụ thuộc VU pool, scheduler
-internal) -> mỗi lần drop % khác -> mỗi lần sample size khác -> p95 không
-thể so sánh được giữa các PR.
+**── Tại sao sample size khác làm p95 thay đổi? ──**
+
+```text
+p95 = giá trị tại percentile thứ 95 của tập sample đã sắp xếp
+
+Với 3000 sample (đủ):
+  Sorted latencies: [100, 120, 135, ..., 480, 510, 520, 800, 1200]
+  p95 = sample thứ 0.95 × 3000 = sample thứ 2850 → 480ms
+  → Tail ĐẦY ĐỦ: các sample chậm đều được ghi nhận
+
+Với 2500 sample (thiếu 500):
+  Sorted latencies: [100, 120, 135, ..., 490, 530, 580]
+  p95 = sample thứ 0.95 × 2500 = sample thứ 2375 → 530ms
+  → Tail BỊ CỤT: 500 sample bị drop có thể là sample CHẬM NHẤT
+    (vì drop xảy ra khi VU quá tải — lúc server đang chậm)
+  → p95 bị ĐẨY LÊN do thiếu sample nhanh ở tail
+
+  Drop KHÔNG ngẫu nhiên — drop tập trung vào lúc server chậm nhất
+  → Sample bị mất là sample QUAN TRỌNG NHẤT (các giá trị ở tail)
+  → p95 trên tập đã drop là CON SỐ ẢO, không phản ánh đúng server
+```
+
+**── Hệ quả cho CI gate ──**
+
+```text
+Ngày 1: Dev push code, CI chạy, drop 3% → p95=490ms vs baseline 480ms → PASS
+Ngày 2: Dev push CODE CŨ (không đổi), CI chạy lại, drop 10% → p95=530ms → FAIL
+  → Dev hoang mang: "Hôm qua pass, hôm nay fail, code không đổi???"
+  → Mất 2 giờ debug → phát hiện ra do CI runner bận → drop nhiều hơn
+  → Dev mất niềm tin vào CI gate → tắt gate hoặc ignore
+
+Ngày 3: Dev push code THỰC SỰ CHẬM HƠN (+15% latency)
+  CI chạy, drop 0% (VU pool rảnh) → p95=490ms → PASS
+  → GATE BÁO PASS CHO CODE CHẬM HƠN — FALSE NEGATIVE
+  → Bug performance lọt vào production
+```
+
+**── So sánh với per-vu-iterations ──**
+
+```text
+per-vu-iterations: N_done = 1000 (TUYỆT ĐỐI, không drop)
+  → 1000 sample MỖI LẦN, không bao giờ lệch
+  → p95 luôn đo trên CÙNG 1 cỡ mẫu
+  → Baseline ỔN ĐỊNH: nếu p95 tăng → CHẮC CHẮN do code, không phải do sample
+
+constant-arrival-rate: N_done = 2500~3000 (BIẾN THIÊN theo drop)
+  → Mỗi lần 1 cỡ mẫu khác → p95 không so sánh được
+  → Baseline TRÔI: p95 thay đổi dù code không đổi
+  → CI gate = MAY RỦI
+```
 
 #### Dùng shared-iterations: gần đúng nhưng phân phối lệch
 
