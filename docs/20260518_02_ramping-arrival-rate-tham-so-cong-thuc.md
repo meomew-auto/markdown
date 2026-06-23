@@ -1007,6 +1007,38 @@ Bước 0 — Xác định 2 hàm gốc:
   Mọi con số phía dưới đều từ 2 hàm này mà ra.
 ```
 
+**── Giải thích: các mốc thời gian trong bảng lấy từ đâu ──**
+
+Có 2 loại mốc thời gian trong bảng trace, cần phân biệt rõ:
+
+```text
+LOẠI 1 — Mốc LẤY MẪU (0.1, 0.2, 0.3, ...):
+  Đây là các mốc do TA CHỌN, cách đều 0.1s, để "chụp ảnh" S(t) tại đó.
+  Mục đích: thấy S(t) tăng dần như thế nào giữa các lần fire slot.
+  → Tại sao chọn 0.1s? Vì nó đủ nhỏ để thấy S thay đổi, đủ lớn để
+    bảng không quá dài. Có thể chọn 0.05s hay 0.2s — không ảnh hưởng
+    kết quả slot fire, chỉ ảnh hưởng độ mịn của bảng.
+
+LOẠI 2 — Mốc FIRE SLOT (0.449, 0.828, 1.162, 1.464, 1.742, 2.000):
+  Đây là các mốc do GIẢI PHƯƠNG TRÌNH S(t) = k mà ra, KHÔNG do ta chọn.
+  Mục đích: đây là thời điểm CHÍNH XÁC slot #k ra đời.
+
+  Cách giải S(t) = k cho ramp 2→4/s:
+    S(t) = 2t + t²/2 = k
+    → t² + 4t - 2k = 0
+    → t = -2 + √(4 + 2k)   (chỉ lấy nghiệm dương)
+
+    k=1: t = -2 + √(4+2)  = -2 + √6  = -2 + 2.449 = 0.449s
+    k=2: t = -2 + √(4+4)  = -2 + √8  = -2 + 2.828 = 0.828s
+    k=3: t = -2 + √(4+6)  = -2 + √10 = -2 + 3.162 = 1.162s
+    k=4: t = -2 + √(4+8)  = -2 + √12 = -2 + 3.464 = 1.464s
+    k=5: t = -2 + √(4+10) = -2 + √14 = -2 + 3.742 = 1.742s
+    k=6: t = -2 + √(4+12) = -2 + √16 = -2 + 4     = 2.000s
+
+  → Đây mới là thời điểm THẬT k6 fire slot, tính từ công thức gốc.
+  → Các mốc 0.1, 0.2, 0.3... chỉ là "chụp ảnh" S(t) giữa các lần fire.
+```
+
 **── Bảng trace: từng bước thời gian, S(t) tích lũy ra sao ──**
 
 ```text
