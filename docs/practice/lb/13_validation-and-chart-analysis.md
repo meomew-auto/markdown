@@ -829,35 +829,21 @@ Results: 100 x 200, 20 x 429
 | Default env VUs | 6-16 VUs (case 04), 12 VUs (case 05) | Rate limit bắt đầu từ ~120 concurrent |
 | Default duration | 20-45s | Đủ dài để trigger rate limit window |
 
-### 11.4. Khuyến nghị
+### 11.4. Kết luận sau fix
 
-**Cho test harness**:
+Fix đã được verify bằng default run, không cần tuned env:
 
-1. **Giảm default env cho case 04/05**:
-   ```powershell
-   $env:LB_CACHEABLE_WARMUP_VUS = "1"
-   $env:LB_CACHEABLE_MEASUREMENT_VUS = "2"
-   $env:LB_CACHEABLE_WARMUP_DURATION = "5s"
-   $env:LB_CACHEABLE_MEASUREMENT_DURATION = "10s"
-   $env:LB_MIX_VUS = "2"
-   $env:LB_MIX_DURATION = "10s"
-   ```
-   Đây là tuned values đã được verify pass.
+```text
+full-no-cdn default runtime: exit 0
+case 04: checks 6535/6535, http_req_failed 0.00% (0/1307)
+case 05: checks 4625/4625, http_req_failed 0.00% (0/925)
+```
 
-2. **Hoặc: nâng/disable rate limit cho `/api/sim/products` trong `full-no-cdn` correctness profile**:
-   - Rate limit hiện tại có thể quá chặt cho mục đích correctness testing.
-   - Cân nhắc tăng `rate=<cao hơn>` trong Nginx config cho path này.
+Khuyến nghị còn lại chỉ là vận hành tài liệu/debug:
 
-3. **Hoặc: split thành hai mode**:
-   - Correctness mode: không pressure. Case 04/05 chứng minh routing đúng, cacheable read đi origin.
-   - Pressure mode riêng: giống case 07, test rate limit behavior.
-
-**Cho người đọc kết quả**:
-
-- Không kết luận "LB route sai" khi thấy case 04/05 fail default.
-- Luôn kiểm tra `X-Upstream-Service` trên request failed.
-- Nếu upstream vẫn đúng -> không phải route bug.
-- Dùng tuned run để verify correctness; dùng default run để biết rate limit threshold.
+- Giữ historical analysis này để nếu 04/05 tái xuất hiện 429, team biết kiểm tra `X-Upstream-Service` trước khi kết luận route bug.
+- Không cần tuned env cho CI correctness gate nữa.
+- Nếu sau này muốn test pressure trên `/api/sim/products`, nên tạo case pressure riêng thay vì làm 04/05 fail.
 
 ---
 
@@ -922,8 +908,8 @@ Tuần 4: Chạy case 11-12 (Isolation, Timeout)
 | --- | --- | --- |
 | `lb-app` profile (case 01-02) | Level 1 | PASS -- smoke + distribution verified |
 | `full-no-cdn` route/inspect | Level 2 | PASS -- 37/37 routes verified |
-| `full-no-cdn` tuned runtime (case 03-12) | Level 4 | PASS -- full contract verified |
-| `full-no-cdn` default runtime (case 04/05) | Level 2-3 | FAIL -- contract mismatch cần giải quyết |
+| `full-no-cdn` default runtime (case 03-12) | Level 4 | PASS -- full contract verified after 04/05 fix |
+| Historical 04/05 issue | Level 2-3 lesson | FIXED -- default run no longer needs tuned env |
 | CI/CD integration | Chưa triển khai | Pending |
 
 ---
@@ -977,24 +963,24 @@ Các pattern fail phổ biến trong lần chạy đầu tiên:
 2. **Sai TargetLayer**: Dùng `TargetLayer=full` thay vì `full-no-cdn` -> X-Cache xuất hiện.
    - **Fix**: Kiểm tra `X-Cache` absent trong preflight. Dùng đúng `TargetLayer`.
 
-3. **Default env quá cao cho case 04/05**: Rate limit trên products path.
-   - **Fix**: Dùng tuned env hoặc chạy case 04/05 riêng với VUs thấp.
+3. **Historical 04/05 rate-limit issue**: Trước fix, default env làm products path trả 429.
+   - **Trạng thái hiện tại**: Đã fix; default full-no-cdn pass. Nếu tái xuất hiện, kiểm `X-Upstream-Service` và status distribution.
 
 4. **Ejection state cũ chưa reset (case 09)**:
    - **Fix**: Tăng `LB_EJECTION_RESET_WAIT_SECONDS` nếu fail_timeout > 5s.
 
-### 13.4. Tuned vs default run considerations
+### 13.4. Historical tuned vs default comparison
 
-| Khía cạnh | Default run | Tuned run |
-| --- | --- | --- |
-| Mục đích | Phát hiện contract mismatch | Verify correctness thuần túy |
-| Case 04/05 VUs | 6-16 (case 04), 12 (case 05) | 1-2 |
-| Case 04/05 duration | 20-45s | 5-10s |
-| Kết quả case 04/05 | FAIL (rate limit) | PASS |
-| Giá trị | Cho biết rate limit threshold | Cho biết routing đúng |
-| Nên dùng khi nào? | Capacity/contract discovery | CI/CD correctness gate |
+| Khía cạnh | Trước fix: default run | Trước fix: tuned run | Sau fix: default run |
+| --- | --- | --- | --- |
+| Mục đích | Phát hiện contract mismatch | Verify correctness thuần túy | CI/CD correctness gate chính |
+| Case 04/05 VUs | 6-16 (case 04), 12 (case 05) | 1-2 | default values |
+| Case 04/05 duration | 20-45s | 5-10s | default values |
+| Kết quả case 04/05 | FAIL do 429 | PASS | PASS |
+| Giá trị | Bài học debug về rate-limit | Chứng minh route đúng | Chứng minh fix đã ổn định |
+| Nên dùng khi nào? | Chỉ để đọc historical issue | Không cần cho gate chính | Dùng mặc định |
 
-Khuyến nghị: **Chạy cả hai**. Default run để biết contract boundary (rate limit threshold). Tuned run để verify routing correctness. Không bỏ default run chỉ vì nó fail -- failure đó chứa thông tin giá trị.
+Kết luận hiện tại: không cần chạy tuned env để pass nữa. Giữ bảng này như audit trail để hiểu vì sao từng có failure và cách phân biệt route bug với pressure/rate-limit behavior.
 
 ---
 
@@ -1007,10 +993,8 @@ Khuyến nghị: **Chạy cả hai**. Default run để biết contract boundary
 | Entrypoint + Distribution | `lb-app` | 01, 02 | **PASS 2/2** | Nginx public entrypoint hoạt động; multi-instance distribution verified |
 | Route/Inspect | `full-no-cdn` | preflight | **PASS** | 37/37 routes pass; inspect exit 0 |
 | Domain boundaries | `full-no-cdn` | 03 | **PASS** | 6 service boundaries verified |
-| Cacheable read (default) | `full-no-cdn` | 04 | FAIL | Contract mismatch: rate limit trên products_list |
-| Service mix (default) | `full-no-cdn` | 05 | FAIL | Contract mismatch: rate limit trên products_list |
-| Cacheable read (tuned) | `full-no-cdn` | 04 | **PASS** | Routing correctness verified với low VUs |
-| Service mix (tuned) | `full-no-cdn` | 05 | **PASS** | Routing correctness verified với low VUs |
+| Cacheable read (default after fix) | `full-no-cdn` | 04 | **PASS** | 6535/6535, HTTP failed 0.00%; historical 429 issue fixed |
+| Service mix (default after fix) | `full-no-cdn` | 05 | **PASS** | 4625/4625, HTTP failed 0.00%; historical 429 issue fixed |
 | Retry/Failover | `full-no-cdn` | 06 | **PASS** | `X-LB-Failover=faulty->stable` verified |
 | Pressure shedding | `full-no-cdn` | 07 | **PASS** | 200 + expected 429; unexpected = 0 |
 | Weighted canary | `full-no-cdn` | 08 | **PASS** | Forced channels + weighted band verified |
@@ -1018,14 +1002,14 @@ Khuyến nghị: **Chạy cả hai**. Default run để biết contract boundary
 | Canary fairness | `full-no-cdn` | 10 | **PASS** | Canary share 12.62% in expected band |
 | Saturation isolation | `full-no-cdn` | 11 | **PASS** | Fast lane p95 ~4ms despite slow lane ~616ms |
 | Slow timeout | `full-no-cdn` | 12 | **PASS** | 504 timeout; `X-LB-Timeout-Policy=read_timeout=150ms` |
-| **Tổng kết `full-no-cdn` tuned** | `full-no-cdn` | 03-12 | **PASS 10/10** | Full contract verified |
-| **Tổng kết toàn bộ suite (tuned)** | both | 01-12 | **PASS 12/12** | Tất cả LB capability cases pass |
+| **Tổng kết `full-no-cdn` default sau fix** | `full-no-cdn` | 03-12 | **PASS 10/10** | Full contract verified with default runner |
+| **Tổng kết toàn bộ suite default sau fix** | both | 01-12 | **PASS 12/12** | Tất cả LB capability cases pass |
 
 ### 14.2. Actionable issues
 
 | # | Issue | Ưu tiên | Hành động |
 | --- | --- | --- | --- |
-| 1 | Case 04/05 default env quá cao, đụng rate limit | Trung bình | Giảm default `LB_CACHEABLE_*` và `LB_MIX_*` env vars trong runner script hoặc case-catalog |
+| 1 | Historical case 04/05 unexpected 429 | Done | Verified fixed: default full-no-cdn now passes case 04/05 with 0.00% HTTP failed |
 | 2 | Chưa có CI/CD integration | Thấp | Tích hợp `run-lb-capabilities.ps1` vào pipeline; chạy sau mỗi lần deploy Nginx config |
 | 3 | Chưa có dashboard export cho audit | Thấp | Thêm `--out json` và `--summary-export` cho từng case; lưu output artifacts |
 
@@ -1091,4 +1075,4 @@ Khuyến nghị: **Chạy cả hai**. Default run để biết contract boundary
 
 ---
 
-> **Tổng kết**: LB / Gateway validation khác biệt cơ bản với cả executor validation và CDN validation. Trong khi executor hỏi "hệ thống nhanh không?" và CDN hỏi "cache có đúng không?", LB validation hỏi "Nginx route, failover, canary, pressure, và timeout có đúng contract không?". Ba câu hỏi bổ trợ nhau và đều cần thiết trước khi deploy lên production. 12 LB cases trong series này bao phủ toàn bộ Gateway contract: từ public entrypoint cơ bản, app instance distribution, service boundary routing, sustained origin traffic, retry/failover, rate/connection pressure, weighted canary routing, passive outlier ejection, canary fairness under load, saturation isolation, đến slow origin timeout policy. Mỗi case là một mảnh ghép của bức tranh "public Gateway correctness". Evidence chính không phải là status 200 -- mà là upstream signal, custom counters, và header proof. Case 04/05 default fail là contract mismatch, không phải route bug. Case 07 và 12 có `http_req_failed` cao nhưng pass vì expected non-200 đã được phân loại chính xác qua custom counters.
+> **Tổng kết**: LB / Gateway validation khác biệt cơ bản với cả executor validation và CDN validation. Trong khi executor hỏi "hệ thống nhanh không?" và CDN hỏi "cache có đúng không?", LB validation hỏi "Nginx route, failover, canary, pressure, và timeout có đúng contract không?". Ba câu hỏi bổ trợ nhau và đều cần thiết trước khi deploy lên production. 12 LB cases trong series này bao phủ toàn bộ Gateway contract: từ public entrypoint cơ bản, app instance distribution, service boundary routing, sustained origin traffic, retry/failover, rate/connection pressure, weighted canary routing, passive outlier ejection, canary fairness under load, saturation isolation, đến slow origin timeout policy. Mỗi case là một mảnh ghép của bức tranh "public Gateway correctness". Evidence chính không phải là status 200 -- mà là upstream signal, custom counters, và header proof. Historical issue 04/05 unexpected 429 đã được verify fixed bằng default full-no-cdn run mới. Case 07 và 12 có `http_req_failed` cao nhưng pass vì expected non-2xx đã được phân loại chính xác qua custom counters.
