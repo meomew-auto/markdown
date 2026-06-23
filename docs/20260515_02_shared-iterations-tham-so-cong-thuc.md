@@ -2181,6 +2181,76 @@ iterations_per_vu_i ≈ ratio_i × iterations
 VU đó) chia cho (tổng 1/thời gian của tất cả VU)". VU nhanh nhận nhiều,
 VU chậm nhận ít.
 
+##### Thay số vào công thức
+
+Lấy demo 3 VU: VU0 `sleep(1)`, VU1 `sleep(2)`, VU2 `sleep(3)`, tổng
+`iterations = 90`.
+
+```text
+Cho:  t_0 = 1.0s,  t_1 = 2.0s,  t_2 = 3.0s
+      iterations = 90
+
+────────────────────────────────────────────────────────────
+VU0 (nhanh nhất):
+
+           1/t_0               1/1.0
+  ratio₀ = ────────  =  ───────────────────
+           Σ(1/t_j)      1/1.0 + 1/2.0 + 1/3.0
+
+            1.000             1.000
+          = ─────  =  ───────────────────
+            1.833       1.000 + 0.500 + 0.333
+
+          = 0.546  →  54.6%
+
+  iter_VU0 = ratio₀ × iterations
+           = 0.546 × 90
+           = 49.1
+           ≈ 49 iter
+
+────────────────────────────────────────────────────────────
+VU1 (vừa):
+
+           1/t_1               1/2.0
+  ratio₁ = ────────  =  ───────────────────
+           Σ(1/t_j)      1/1.0 + 1/2.0 + 1/3.0
+
+            0.500
+          = ─────
+            1.833
+
+          = 0.273  →  27.3%
+
+  iter_VU1 = 0.273 × 90
+           = 24.6
+           ≈ 25 iter
+
+────────────────────────────────────────────────────────────
+VU2 (chậm nhất):
+
+           1/t_2               1/3.0
+  ratio₂ = ────────  =  ───────────────────
+           Σ(1/t_j)      1/1.0 + 1/2.0 + 1/3.0
+
+            0.333
+          = ─────
+            1.833
+
+          = 0.182  →  18.2%
+
+  iter_VU2 = 0.182 × 90
+           = 16.4
+           ≈ 16 iter
+
+────────────────────────────────────────────────────────────
+Kiểm tra:  49 + 25 + 16 = 90 ✓  (khớp iterations config)
+           ratio: 0.546 + 0.273 + 0.182 = 1.001 ≈ 1.0 ✓
+```
+
+> **Mẹo nhớ**: Mẫu số `Σ(1/t_j)` giống nhau cho TẤT CẢ các VU. Chỉ cần
+> tính 1 lần rồi chia từng `1/t_i` cho nó. Đừng tính lại mẫu số cho
+> từng VU — vừa thừa vừa dễ sai.
+
 ##### Tại sao có công thức này?
 
 Gốc của công thức đến từ cơ chế **atomic counter** trong
