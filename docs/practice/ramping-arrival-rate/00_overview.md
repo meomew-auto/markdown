@@ -300,6 +300,79 @@ Diễn giải quan trọng:
 - Multi-step cases có http_reqs > iterations là expected: case 04 = 3 calls/event, case 05 mix 1/2 calls/event.
 ```
 
+## ⭐ 2 bài tiêu biểu nhất để dạy ramping-arrival-rate
+
+Trong 7 case, đây là 2 bài **thực tế hay gặp nhất** và **bao quát toàn bộ tinh thần executor**:
+
+### Bài 1: Case 02 — Login burst recovery (`02_campaign-ingress-spike.md`)
+
+**Vì sao chọn làm bài nền tảng:**
+
+```text
+Login burst là pattern PHỔ BIẾN NHẤT trong open model có stage:
+push notification → hàng ngàn user mở app cùng lúc →
+auth service nhận burst → burst tan → hệ thống hồi phục.
+```
+
+| Tiêu chí | Giá trị dạy |
+| --- | --- |
+| **Business scenario** | 9:00 AM push notification "Flash sale!" → 500K devices nhận → user mở app → auth service nhận burst login/me/refresh. Burst đạt peak 24 arrivals/s rồi tắt dần. |
+| **Tinh thần executor** | Open model với stage curve: arrival rate tăng theo lịch, backend chậm không tự giảm rate. VU là worker capacity. `dropped_iterations` = primary signal. |
+| **Burst + Recovery** | Dạy rằng arrival curve có 3 phase: ramp-up (tăng rate), burst peak (giữ rate cao), recovery (rate giảm về 0). Học viên phải đọc output THEO PHASE. |
+| **Mixed operations trong burst** | Login, me, refresh — 3 operation type với latency profile khác nhau. `http_reqs` per operation phải đọc riêng. |
+| **Độ khó** | ⭐⭐ — Open model + stage curve, nhưng flow auth quen thuộc. |
+
+**Dạy trong bao lâu:** 40-50 phút — open model stage curve, burst/recovery pattern, VU demand dynamics.
+
+### Bài 2: Case 06 — Cache/Feed wave (`06_feed-ingress-ramp.md`)
+
+**Vì sao chọn làm bài nâng cao:**
+
+```text
+Đây là case dạy Little's Law bằng DATA THẬT:
+peak 36 arrivals/s (cao nhất series) nhưng chỉ cần ~1 active VU.
+Bài học "rate cao không đồng nghĩa cần nhiều VU" —
+đối nghịch hoàn toàn với Case 04 constant-arrival-rate.
+```
+
+| Tiêu chí | Giá trị dạy |
+| --- | --- |
+| **Business scenario** | Users mở app → homefeed load. Personalized homefeed + recommendations. Traffic curve: 4 → 12 → 36 → 8 → 0/s. Peak 36/s. Read-only, cache-friendly. |
+| **Tinh thần executor** | Little's Law: `L = λ × W`. λ=36/s cao, nhưng W rất thấp (~5ms vì read path cache hit) → L ≈ 36 × 0.005 = 0.18 → chỉ cần 1 VU. **Ngược với Case 04 CAR (rate thấp nhưng cần nhiều VU vì external latency).** |
+| **Little's Law** | Dạy công thức `VU ≈ λ × W` với W là HTTP latency thực tế. Học viên tự tính được VU cần thiết từ rate và latency. |
+| **Contrast với CAR-04** | Đây là cặp đối nghịch hoàn hảo: CAR-04 (5/s cần 15 VU vì W cao) vs RAR-06 (36/s cần 1 VU vì W thấp). Hai case cùng dạy VU sizing từ 2 phía. |
+| **Độ khó** | ⭐⭐ — Little's Law cần giải thích kỹ, nhưng data rất trực quan. |
+
+**Dạy trong bao lâu:** 40-50 phút — Little's Law, W_effective từ latency thật, contrast với CAR-04.
+
+### Lộ trình dạy 2 bài
+
+```text
+Buổi 1 (nền tảng): Case 02 Login burst recovery
+  1. Mental model: open model + stage curve
+  2. Burst pattern: ramp-up → peak → recovery → drain
+  3. VU demand: vì sao VU tăng theo rate, không phải user count
+  4. Phase-aware reading: login spike vs keepalive steady
+  5. Demo: chạy burst 1→24→0/s, xem VU chart và drop count
+
+Buổi 2 (nâng cao): Case 06 Cache/Feed wave
+  1. Little's Law: L = λ × W
+  2. Tính VU từ latency thật: 36/s × 5ms = 0.18 VU → 1 VU đủ
+  3. Contrast: CAR-04 (5/s cần 15 VU) vs RAR-06 (36/s cần 1 VU)
+  4. Vì sao read path cache-friendly → W thấp → ít VU
+  5. Demo: chạy 36/s feed wave, xem VU chart (chỉ 1 VU active!)
+```
+
+### Vì sao không chọn các case khác?
+
+| Case | Vì sao không chọn làm bài chính? |
+| --- | --- |
+| 01 Campaign warmup surge | Tốt (campaign pattern), nhưng giống Case 02 về stage structure. Case 02 (login burst) trực quan hơn — ai cũng biết "bấm vào notification". |
+| 03 Payment webhook wave | Hay (external webhook, idempotency), nhưng đặc thù (payment). Case 02 phổ biến hơn. |
+| 04 Checkout flash-sale wave | Rất hay (multi-step, VU sizing), nhưng nên dạy như bonus case. Case 06 (Little's Law) độc đáo hơn về mặt lý thuyết. |
+| 05 Report job ingress ramp | Đây là "STAR TEACHING CASE" — deliberately designed to FAIL. Rất giá trị, nhưng nên để học viên tự khám phá sau khi đã nắm 2 bài chính. Case fail dạy bài học "vì sao drop xảy ra". |
+| 07 Production spike mix | Capstone mixed services. Nên để học viên tự làm sau Case 02 + 06. |
+
 ## Thứ tự đề xuất học
 
 ```text

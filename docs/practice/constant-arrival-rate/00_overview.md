@@ -396,6 +396,76 @@ Dashboard bucket có thể downsample/aggregate; phải reconcile bằng sum đ�
 - Full validation + chart analysis: `docs/practice/constant-arrival-rate/08_validation-and-chart-analysis.md`
 - Source pack: `E:\Projects\k6\k6-metrics-server\load-target\k6\constant-arrival-rate\README.md`
 
+## ⭐ 2 bài tiêu biểu nhất để dạy constant-arrival-rate
+
+Trong 7 case, đây là 2 bài **thực tế hay gặp nhất** và **bao quát toàn bộ tinh thần executor**:
+
+### Bài 1: Case 01 — Storefront RPS contract (`01_storefront-rps-contract.md`)
+
+**Vì sao chọn làm bài nền tảng:**
+
+```text
+Đây là "canonical example" của constant-arrival-rate —
+dạy SLA/RPS contract và open model fundamentals.
+```
+
+| Tiêu chí | Giá trị dạy |
+| --- | --- |
+| **Business scenario** | Products service có SLA: "xử lý 20 browse/list arrivals/s trong 45s, lỗi < 1%, không drop request". Đây là cam kết kinh doanh, không phải ước lượng. |
+| **Tinh thần executor** | Open model: k6 cố START 20 iterations/s theo lịch cố định. Backend chậm → iteration lâu hơn → cần nhiều VU hơn → nếu thiếu VU → `dropped_iterations` tăng. Rate KHÔNG tự giảm như closed model. |
+| **Open vs Closed model** | Đây là bài học **quan trọng nhất**: so sánh trực tiếp constant-vus (closed: backend chậm → RPS giảm) vs constant-arrival-rate (open: backend chậm → drop tăng). Học viên phải thuộc sự khác biệt này. |
+| **VU sizing** | `required_vus ≈ lambda × W_effective` = 20/s × 0.15s = 3 VU. Nhưng production cần buffer (preAllocatedVUs=12). Dạy công thức VU sizing cơ bản. |
+| **Độ khó** | ⭐⭐ — Cần hiểu open model, arrival slot, VU là worker không phải user. |
+
+**Dạy trong bao lâu:** 40-50 phút — open model concept, SLA contract, VU sizing cơ bản.
+
+### Bài 2: Case 04 — Checkout order intake (`04_checkout-order-intake.md`)
+
+**Vì sao chọn làm bài nâng cao:**
+
+```text
+Đây là case dạy bài học QUAN TRỌNG NHẤT của constant-arrival-rate:
+"rate thấp không đồng nghĩa cần ít VU".
+```
+
+| Tiêu chí | Giá trị dạy |
+| --- | --- |
+| **Business scenario** | Checkout service: chỉ 5 arrivals/s (thấp nhất series), mỗi event có 2 API + external payment latency 40ms + 20ms. Yêu cầu preAllocatedVUs=15, maxVUs=40 — cao gấp 3 lần rate! |
+| **Tinh thần executor** | `VU sizing = lambda × W_effective`. Lambda=5/s thấp, nhưng W_effective cao (~145ms có external latency) → cần nhiều VU. Khi external chậm, W_effective tăng → VU demand tăng → nếu thiếu → drop. |
+| **External dependency** | Dạy rằng external latency (payment gateway, SMS, email) làm tăng W_effective → cần nhiều VU hơn để giữ arrival contract. Đây là pattern CỰC KỲ phổ biến trong production. |
+| **Drop detection** | `dropped_iterations > 0` + VU sát max → thiếu worker capacity. Phân biệt: drop do external chậm (tăng VU) vs drop do backend lỗi (sửa backend). |
+| **Độ khó** | ⭐⭐⭐ — Cần hiểu VU sizing với external latency, phân biệt nguyên nhân drop. |
+
+**Dạy trong bao lâu:** 45-55 phút — VU sizing nâng cao, external dependency, drop analysis.
+
+### Lộ trình dạy 2 bài
+
+```text
+Buổi 1 (nền tảng): Case 01 Storefront RPS contract
+  1. Mental model: arrival slot = contract, VU = worker
+  2. Open vs Closed model: so sánh trực tiếp với constant-vus
+  3. Công thức VU sizing: lambda × W_effective
+  4. Đọc output: scheduled_slots, dropped_iterations, iterations
+  5. Demo: chạy 20/s × 45s, xem VU chart và drop count
+
+Buổi 2 (nâng cao): Case 04 Checkout order intake
+  1. VU sizing với external latency: rate thấp ≠ cần ít VU
+  2. W_effective breakdown: HTTP latency + external wait + processing
+  3. Drop analysis: phân biệt drop do external chậm vs backend lỗi
+  4. Headroom planning: preAllocatedVUs vs maxVUs
+  5. Demo: chạy 5/s với external latency, quan sát VU demand
+```
+
+### Vì sao không chọn các case khác?
+
+| Case | Vì sao không chọn làm bài chính? |
+| --- | --- |
+| 02 Auth token validation | Tốt (internal proxy traffic), nhưng pattern giống Case 01 (read ingress). Case 01 + 04 phủ rộng hơn (read + write với external). |
+| 03 Cart write intake | Hay (write intake), nhưng gần với Case 01 về pattern. Case 04 có external dependency — bài học độc đáo hơn. |
+| 05 Report API ingress | Rất hay (async + dashboard mix), nhưng phức tạp. Nên dạy như case thứ 3 nếu còn thời gian. Case 04 dễ tiếp cận hơn. |
+| 06 Cacheable feed ingress | Tốt (read-heavy, high rate), nhưng Case 01 đã dạy read ingress rồi. Case 04 dạy thêm external latency. |
+| 07 Production ingress mix | Hay (capstone), nhưng nên để học viên tự khám phá sau khi đã nắm Case 01 + 04. Case 07 là "bài tổng hợp", không phải bài dạy. |
+
 ## Thứ tự đề xuất đọc/làm
 
 ```text

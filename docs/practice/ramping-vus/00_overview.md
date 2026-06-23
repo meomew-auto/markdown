@@ -356,6 +356,77 @@ Ghi chú:
 - Case 07 đã pass ở đúng peak 30 VUs.
 <!-- REAL_RUN_SUMMARY_END -->
 
+## ⭐ 2 bài tiêu biểu nhất để dạy ramping-vus
+
+Trong 7 case, đây là 2 bài **thực tế hay gặp nhất** và **bao quát toàn bộ tinh thần executor**:
+
+### Bài 1: Case 01 — Daily traffic curve (`01_daily-traffic-curve.md`)
+
+**Vì sao chọn làm bài nền tảng:**
+
+```text
+Daily traffic curve là pattern PHỔ BIẾN NHẤT trong production:
+sáng tăng, trưa peak, chiều giảm. Mọi hệ thống có người dùng
+theo giờ hành chính đều có pattern này.
+```
+
+| Tiêu chí | Giá trị dạy |
+| --- | --- |
+| **Business scenario** | Traffic ngày thường: 2 → 8 → 24 → 12 → 2 VUs. Products/cart/order mixed flow. Người dùng tăng dần sáng, đạt peak, rồi giảm chiều. |
+| **Tinh thần executor** | Staged active user pool (closed model). `stages[].target` là absolute VU count. Ramp-up/plateau/ramp-down qua 5 stages. Iterations/RPS là OUTPUT. |
+| **Stage semantics** | Dạy `stage.target` là absolute value (không phải delta), `stage.duration` là thời gian chuyển tiếp (không phải thời gian giữ). Đây là lỗi hay mắc nhất. |
+| **Closed model backpressure** | Khi VU tăng đến peak 24, iter/s có thể flatten dù VU vẫn tăng → dạy đọc tín hiệu saturation. |
+| **Độ khó** | ⭐⭐ — Stage config cần cẩn thận, nhưng flow quen thuộc. |
+
+**Dạy trong bao lâu:** 35-45 phút — stage config, absolute target, closed model dưới ramp.
+
+### Bài 2: Case 03 — Login wave (`03_login-wave.md`)
+
+**Vì sao chọn làm bài nâng cao:**
+
+```text
+Login wave dạy operation mix THAY ĐỔI THEO PHASE —
+một bài học mà không case nào khác trong toàn bộ 6 executor dạy được.
+```
+
+| Tiêu chí | Giá trị dạy |
+| --- | --- |
+| **Business scenario** | Đầu ngày: nhân viên login hàng loạt (1 → 12 → 28 → 5 VUs). Ramp-up: nhiều login. Plateau: toàn bộ là session validation + refresh. Cooldown: không có login mới. |
+| **Tinh thần executor** | Operation mix KHÔNG cố định — thay đổi theo phase. Login chỉ xảy ra ở iteration đầu mỗi VU. Refresh mỗi 5 iter. Session validation mỗi iter. → `http_reqs` per operation PHẢI đọc theo phase, không đọc aggregate. |
+| **Phase-aware analysis** | Đây là bài học **độc nhất**: ramp-up thấy spike login latency, plateau chỉ thấy keepalive latency. Nếu đọc aggregate, spike login bị "pha loãng" bởi keepalive. |
+| **Session state** | Token sống qua nhiều iteration, refresh không cần login lại — dạy stateful VU trong staged concurrency. |
+| **Độ khó** | ⭐⭐⭐ — Phase-aware analysis, operation mix thay đổi, stateful session. |
+
+**Dạy trong bao lâu:** 45-55 phút — phase-aware thinking, operation mix dynamics.
+
+### Lộ trình dạy 2 bài
+
+```text
+Buổi 1 (nền tảng): Case 01 Daily traffic curve
+  1. Mental model: staged active users, closed model
+  2. Stage config: startVUs, target (absolute), duration
+  3. Đọc output: VU chart phải theo stage shape, iter/s theo VU
+  4. Saturation signal: VU tăng + iter/s flat
+  5. Demo: chạy curve 2→8→24→12→2, xem dashboard timeline
+
+Buổi 2 (nâng cao): Case 03 Login wave
+  1. Operation mix per phase: login ở ramp-up, keepalive ở plateau
+  2. Phase-aware analysis: lọc theo phase, không đọc aggregate
+  3. Stateful VU: session sống qua nhiều iteration
+  4. Auth service pattern: login spike vs keepalive steady
+  5. Demo: chạy login wave, xem auth latency theo phase
+```
+
+### Vì sao không chọn các case khác?
+
+| Case | Vì sao không chọn làm bài chính? |
+| --- | --- |
+| 02 Campaign launch spike | Hay (spike mạnh 1→36), nhưng pattern giống Case 01 (ramp-up/peak/down). Case 01 phổ biến hơn (daily curve). |
+| 04 Checkout ramp | Tốt (order/payment dưới ramp), nhưng giống Case 01 về stage pattern. Case 03 có operation mix thay đổi — độc đáo hơn. |
+| 05 Reporting ramp | Hay (backoffice, low VU heavy endpoint), nhưng 1→5→14 nhỏ. Case 01 phổ biến hơn. |
+| 06 Cart recovery wave | Hay (notification-driven wave), nhưng đặc thù (marketing). Case 03 (login wave) phổ biến hơn — mọi app đều có. |
+| 07 Production traffic curve | Capstone tốt, nhưng nên để học viên tự làm sau khi đã nắm Case 01 + 03. |
+
 ## Thứ tự đề xuất học
 
 ```text
