@@ -66,27 +66,27 @@ Vì sao per-vu đảm bảo?
   - Tập mẫu khác -> baseline drift
 ```
 
-**── Phan tich chi tiet: sai nhu the nao khi dung sai executor ──**
+**── Phân tích chi tiết: sai như thế nào khi dùng sai executor ──**
 
-#### Dung constant-vus: count = vus x duration / iter_time -- KHONG on dinh
+#### Dùng constant-vus: count = vus x duration / iter_time -- KHÔNG ổn định
 
-Cong thuc tinh so iteration cua constant-vus:
+Công thức tính số iteration của constant-vus:
 
 ```text
 count = vus x duration / iter_time
 
-Trong do:
-  vus       = so VU co dinh (vd: 10)
-  duration  = thoi gian chay (vd: 60s)
-  iter_time = thoi gian trung binh 1 iteration (bao gom request + sleep)
+Trong đó:
+  vus       = số VU cố định (vd: 10)
+  duration  = thời gian chạy (vd: 60s)
+  iter_time = thời gian trung bình 1 iteration (bao gồm request + sleep)
 ```
 
-**iter_time KHONG phai hang so** -- no phu thuoc vao:
-- Do tre server (CPU load, GC pause, connection pool)
-- Do tre mang (network jitter, packet loss)
-- Thoi diem chay (giao cao diem vs thap diem)
+**iter_time KHÔNG phải hằng số** -- nó phụ thuộc vào:
+- Độ trễ server (CPU load, GC pause, connection pool)
+- Độ trễ mạng (network jitter, packet loss)
+- Thời điểm chạy (giờ cao điểm vs thấp điểm)
 
-Voi concrete numbers: `vus=10, duration=60s, iter_time dao dong 0.2s-0.3s`:
+Với concrete numbers: `vus=10, duration=60s, iter_time dao động 0.2s-0.3s`:
 
 ```text
 iter_time = 0.20s  ->  count = 10 x 60 / 0.20 = 3000 iter
@@ -94,100 +94,100 @@ iter_time = 0.25s  ->  count = 10 x 60 / 0.25 = 2400 iter
 iter_time = 0.30s  ->  count = 10 x 60 / 0.30 = 2000 iter
 ```
 
-Bien do: **2000-3000 iteration**, chenh lech **+-20%** chi vi server dao dong, KHONG phai code thay doi.
+Biên độ: **2000-3000 iteration**, chênh lệch **+-20%** chỉ vì server dao động, KHÔNG phải code thay đổi.
 
-**Demo output -- 3 CI runs voi CUNG code, chi khac thoi diem chay:**
+**Demo output -- 3 CI runs với CÙNG code, chỉ khác thời điểm chạy:**
 
 ```text
 PR #1 (server nhanh, 0.20s/iter):
   iterations.........: 3000
   http_reqs..........: 6000
   http_req_duration p95: 450ms
-  -> CI luu baseline tu lan nay
+  -> CI lưu baseline từ lần này
 
-PR #2 (server binh thuong, 0.25s/iter):
+PR #2 (server bình thường, 0.25s/iter):
   iterations.........: 2400
   http_reqs..........: 4800
   http_req_duration p95: 520ms
   -> Gate so p95 (520ms) vs baseline (450ms) -> +15.5% -> FAIL
-  -> Nhung code KHONG doi! Server chi hoi ban hon.
+  -> Nhưng code KHÔNG đổi! Server chỉ hơi bận hơn.
 
-PR #3 (server cham, 0.30s/iter):
+PR #3 (server chậm, 0.30s/iter):
   iterations.........: 2000
   http_reqs..........: 4000
   http_req_duration p95: 580ms
   -> Gate so p95 (580ms) vs baseline (450ms) -> +28.9% -> FAIL
-  -> Lai code KHONG doi. Server GPU/CPU dang chay tac vu khac.
+  -> Lại code KHÔNG đổi. Server GPU/CPU đang chạy tác vụ khác.
 ```
 
-**Ket luan**: Cung code, 3 lan CI, 3 verdict khac nhau (1 pass, 2 fail).
-Day la **FLAKY GATE** -- dev mat niem tin vao CI, bo qua gate vi "no bao sai suot".
+**Kết luận**: Cùng code, 3 lần CI, 3 verdict khác nhau (1 pass, 2 fail).
+Đây là **FLAKY GATE** -- dev mất niềm tin vào CI, bỏ qua gate vì "nó báo sai suốt".
 
-#### Dung constant-arrival-rate: drop lam sai lech sample
+#### Dùng constant-arrival-rate: drop làm sai lệch sample
 
-constant-arrival-rate lap lich iteration theo tan suat co dinh:
+constant-arrival-rate lập lịch iteration theo tần suất cố định:
 
 ```text
-N_sched = rate x duration = 50 x 60 = 3000 slot duoc lap lich
+N_sched = rate x duration = 50 x 60 = 3000 slot được lập lịch
 N_done  = N_sched - N_drop
 ```
 
-Neu pool VU khong du de xu ly het slot da lap lich, k6 se **drop** bot iteration:
+Nếu pool VU không đủ để xử lý hết slot đã lập lịch, k6 sẽ **drop** bớt iteration:
 
 ```text
-Run #1 (du VU, drop=0):
+Run #1 (đủ VU, drop=0):
   iterations.........: 3000
   http_req_duration p95: 450ms
 
-Run #2 (thieu VU, drop=200, ti le 6.7%):
+Run #2 (thiếu VU, drop=200, tỉ lệ 6.7%):
   iterations.........: 2800
   http_req_duration p95: 480ms
 ```
 
-**Tai sao p95 khac nhau du server giong het nhau?**
+**Tại sao p95 khác nhau dù server giống hệt nhau?**
 
 ```text
-- 3000 samples -> distribution tail day du hon -> p95 do CHINH XAC hon
-- 2800 samples -> thieu 200 sample o duoi tail -> p95 bi LECH
-- Su khac biet p95 (450 vs 480) DEN TU sample size,
-  KHONG den tu code change
-- Nhung CI gate khong the phan biet -> fail nhamm
+- 3000 samples -> distribution tail đầy đủ hơn -> p95 đo CHÍNH XÁC hơn
+- 2800 samples -> thiếu 200 sample ở đuôi tail -> p95 bị LỆCH
+- Sự khác biệt p95 (450 vs 480) ĐẾN TỪ sample size,
+  KHÔNG đến từ code change
+- Nhưng CI gate không thể phân biệt -> fail nhầm
 ```
 
-Ti le drop con **bien thien theo tung lan CI** (phu thuoc VU pool, scheduler
-internal) -> moi lan drop % khac -> moi lan sample size khac -> p95 khong
-the so sanh duoc giua cac PR.
+Tỉ lệ drop còn **biến thiên theo từng lần CI** (phụ thuộc VU pool, scheduler
+internal) -> mỗi lần drop % khác -> mỗi lần sample size khác -> p95 không
+thể so sánh được giữa các PR.
 
-#### Dung shared-iterations: gan dung nhung phan phoi lech
+#### Dùng shared-iterations: gần đúng nhưng phân phối lệch
 
-shared-iterations co count co dinh, nhung phan phoi iteration giua cac VU
-**khong deu** -- VU nhanh lay nhieu iter, VU cham lay it:
+shared-iterations có count cố định, nhưng phân phối iteration giữa các VU
+**không đều** -- VU nhanh lấy nhiều iter, VU chậm lấy ít:
 
 ```text
 1000 iter chia 10 VU:
   VU#1 (nhanh): 200 iter
   VU#2:          150 iter
   ...
-  VU#10 (cham):   20 iter
+  VU#10 (chậm):   20 iter
 ```
 
-Hau qua: **RPS khong deu** -> latency profile khac -> p95 bi skew boi VU nhanh.
-VU chay 200 iter tao ra nhieu sample latency thap, lam p95 "dep" ao.
+Hậu quả: **RPS không đều** -> latency profile khác -> p95 bị skew bởi VU nhanh.
+VU chạy 200 iter tạo ra nhiều sample latency thấp, làm p95 "đẹp" ảo.
 
-**Bang so sanh tong hop -- WRONG vs CORRECT:**
+**Bảng so sánh tổng hợp -- WRONG vs CORRECT:**
 
-| Executor | Count | Deterministic? | Sample size | p95 so sanh duoc? |
+| Executor | Count | Deterministic? | Sample size | p95 so sánh được? |
 | --- | ---: | --- | --- | --- |
-| **per-vu-iterations** | 1000 +-0 | TUYET DOI | Luon 1000 | CO -- cung co mau |
-| constant-vus | 2000-3000 | KHONG | Bien thien +-20% | KHONG |
-| constant-arrival-rate | 2800-3000 | KHONG (drop) | Bien thien theo drop | KHONG |
-| shared-iterations | 1000 +-0 | CO | Luon 1000 | GAN -- nhung RPS lech |
-| ramping-vus | bien thien theo stage | KHONG | Khong xac dinh | KHONG |
-| ramping-arrival-rate | bien thien theo stage | KHONG | Khong xac dinh | KHONG |
+| **per-vu-iterations** | 1000 +-0 | TUYỆT ĐỐI | Luôn 1000 | CÓ -- cùng cỡ mẫu |
+| constant-vus | 2000-3000 | KHÔNG | Biến thiên +-20% | KHÔNG |
+| constant-arrival-rate | 2800-3000 | KHÔNG (drop) | Biến thiên theo drop | KHÔNG |
+| shared-iterations | 1000 +-0 | CÓ | Luôn 1000 | GẦN -- nhưng RPS lệch |
+| ramping-vus | biến thiên theo stage | KHÔNG | Không xác định | KHÔNG |
+| ramping-arrival-rate | biến thiên theo stage | KHÔNG | Không xác định | KHÔNG |
 
-**Tom lai**: Chi per-vu-iterations dam bao **count tuyet doi + RPS deu**,
-2 dieu kien BAT BUOC de CI gate khong bao nham. Cac executor khac deu
-dan den flaky gate -- cung code, khac verdict -- gay mat niem tin vao CI.
+**Tóm lại**: Chỉ per-vu-iterations đảm bảo **count tuyệt đối + RPS đều**,
+2 điều kiện BẮT BUỘC để CI gate không báo nhầm. Các executor khác đều
+dẫn đến flaky gate -- cùng code, khác verdict -- gây mất niềm tin vào CI.
 
 ### Yeu cau (b): REPRODUCIBLE RPS (tai tai lap duoc, khong flaky)
 

@@ -65,42 +65,42 @@ Vì sao per-vu đảm bảo?
   - Test "pass" giả vì không tạo được same-user race
 ```
 
-**── Phan tich chi tiet: sai nhu the nao khi dung sai executor ──**
+**── Phân tích chi tiết: sai như thế nào khi dùng sai executor ──**
 
-#### Dung constant-vus: 10 VU nhung khong ai la "cung user"
+#### Dùng constant-vus: 10 VU nhưng không ai là "cùng user"
 
-Khi chay `constant-vus` voi `vus: 10, duration: "30s"`, k6 tao pool 10 VU.
-Moi VU sau moi iter se nhan user-id MOI — khong co rang buoc VU-user co dinh.
+Khi chạy `constant-vus` với `vus: 10, duration: "30s"`, k6 tạo pool 10 VU.
+Mỗi VU sau mỗi iter sẽ nhận user-id MỚI — không có ràng buộc VU-user cố định.
 
-**Timeline thuc te cua VU#1 trong pool 10 VU:**
+**Timeline thực tế của VU#1 trong pool 10 VU:**
 
 ```text
-t=0.0s:  VU#1 nhan iter, chon user_3  -> http.batch(3 request) -> cart user_3
-         [3 request SONG SONG, nhung CHI 1 lan duy nhat cho user_3]
-t=0.3s:  VU#1 nhan iter moi, chon user_7  -> http.batch(3 request) -> cart user_7
-t=0.6s:  VU#1 nhan iter moi, chon user_1  -> http.batch(3 request) -> cart user_1
-t=0.9s:  VU#1 nhan iter moi, chon user_5  -> http.batch(3 request) -> cart user_5
-t=1.2s:  VU#1 nhan iter moi, chon user_9  -> http.batch(3 request) -> cart user_9
+t=0.0s:  VU#1 nhận iter, chọn user_3  -> http.batch(3 request) -> cart user_3
+         [3 request SONG SONG, nhưng CHỈ 1 lần duy nhất cho user_3]
+t=0.3s:  VU#1 nhận iter mới, chọn user_7  -> http.batch(3 request) -> cart user_7
+t=0.6s:  VU#1 nhận iter mới, chọn user_1  -> http.batch(3 request) -> cart user_1
+t=0.9s:  VU#1 nhận iter mới, chọn user_5  -> http.batch(3 request) -> cart user_5
+t=1.2s:  VU#1 nhận iter mới, chọn user_9  -> http.batch(3 request) -> cart user_9
 ...
-t=30s:   VU#1 da chay ~100 iter, MOI LAN LA MOT USER KHAC
-         -> user_3 chi bi VU#1 goi DUNG 1 LAN (3 request song song)
-         -> user_3 khong bao gio nhan 10 burst × 3 request tu CUNG 1 VU
+t=30s:   VU#1 đã chạy ~100 iter, MỖI LẦN LÀ MỘT USER KHÁC
+         -> user_3 chỉ bị VU#1 gọi ĐÚNG 1 LẦN (3 request song song)
+         -> user_3 không bao giờ nhận 10 burst × 3 request từ CÙNG 1 VU
 ```
 
-Trong khi do, cac VU#2..VU#10 cung dang lam y het — moi VU nhay lung tung qua cac user.
+Trong khi đó, các VU#2..VU#10 cũng đang làm y hệt — mỗi VU nhảy lung tung qua các user.
 
-**Cong thuc:**
+**Công thức:**
 
 ```text
-so_lan_ghi_song_song_moi_user ≈ tong_iter / so_user
-                              = 300 / 10 = 30 lan ghi/user
+số_lần_ghi_song_song_mỗi_user ≈ tổng_iter / số_user
+                              = 300 / 10 = 30 lần ghi/user
 
-Nhung 30 lan ghi nay TRAI DEU trong 30s, KHONG dong thoi.
-Moi burst chi co 3 request song song (trong cung 1 iter).
-=> Moi user chi nhan 1-3 burst tu 1 VU bat ky, khong phai 10 burst nhu thiet ke.
+Nhưng 30 lần ghi này TRẢI ĐỀU trong 30s, KHÔNG đồng thời.
+Mỗi burst chỉ có 3 request song song (trong cùng 1 iter).
+=> Mỗi user chỉ nhận 1-3 burst từ 1 VU bất kỳ, không phải 10 burst như thiết kế.
 
-Race condition can 10 dot × 3 request SONG SONG cung user.
-constant-vus tao 10 dot × 3 request nhung KHAC user -> race KHONG XAY RA.
+Race condition cần 10 đợt × 3 request SONG SONG cùng user.
+constant-vus tạo 10 đợt × 3 request nhưng KHÁC user -> race KHÔNG XẢY RA.
 ```
 
 **Demo output:**
@@ -112,80 +112,80 @@ CORRECT (per-vu-iterations, vus=10, iterations=10):
   ...
   cart_total_match: 10/10 ✓
   cart_total_lost:  0      ✓
-  -> Moi user deu nhan DU 10 burst. Race da THUC SU xay ra.
-  -> Neu co bug: cart_total_lost > 0 -> PHAT HIEN DUOC.
+  -> Mỗi user đều nhận ĐỦ 10 burst. Race đã THỰC SỰ xảy ra.
+  -> Nếu có bug: cart_total_lost > 0 -> PHÁT HIỆN ĐƯỢC.
 
 WRONG (constant-vus, vus=10, duration=30s):
-  [console] user_0: 12 items  (chi 4 iter roi vao user nay)
-  [console] user_3: 45 items  (15 iter roi vao, nhung trai deu 30s)
-  [console] user_7: 6 items   (2 iter roi vao)
+  [console] user_0: 12 items  (chỉ 4 iter rơi vào user này)
+  [console] user_3: 45 items  (15 iter rơi vào, nhưng trải đều 30s)
+  [console] user_7: 6 items   (2 iter rơi vào)
   ...
   cart_total_match: 10/10 ✓   <- FALSE PASS!
   cart_total_lost:  0      ✓   <- FALSE PASS!
-  -> Khong user nao nhan 10 burst × 3 request SONG SONG.
-  -> Race condition CHUA TUNG XAY RA.
-  -> Test "pass" nhung KHONG CHUNG MINH DUOC GI.
-  -> Neu cart service THUC SU co bug race -> test nay BO QUA.
+  -> Không user nào nhận 10 burst × 3 request SONG SONG.
+  -> Race condition CHƯA TỪNG XẢY RA.
+  -> Test "pass" nhưng KHÔNG CHỨNG MINH ĐƯỢC GÌ.
+  -> Nếu cart service THỰC SỰ có bug race -> test này BỎ QUA.
 ```
 
-#### Dung shared-iterations: iter phan phoi lech
+#### Dùng shared-iterations: iter phân phối lệch
 
-`shared-iterations` chia 100 iter cho 10 VU, nhung KHONG DEU. VU nhanh nhan nhieu,
-VU cham nhan it. Moi VU lai la user khac -> phan phoi iter theo user cang lech.
+`shared-iterations` chia 100 iter cho 10 VU, nhưng KHÔNG ĐỀU. VU nhanh nhận nhiều,
+VU chậm nhận ít. Mỗi VU lại là user khác -> phân phối iter theo user càng lệch.
 
-**Timeline thuc te:**
+**Timeline thực tế:**
 
 ```text
-VU#1 (nhanh, latency thap):  50 iter -> 50 burst cho 1 user duy nhat
+VU#1 (nhanh, latency thấp):  50 iter -> 50 burst cho 1 user duy nhất
 VU#2:                        15 iter -> 15 burst
-VU#3..VU#7:                  moi VU 3-8 iter
-VU#8 (cham, latency cao):    5 iter  -> 5 burst
+VU#3..VU#7:                  mỗi VU 3-8 iter
+VU#8 (chậm, latency cao):    5 iter  -> 5 burst
 VU#9:                        2 iter
-VU#10:                       0 iter  -> user nay KHONG DUOC TEST!
+VU#10:                       0 iter  -> user này KHÔNG ĐƯỢC TEST!
 
-Tong: 50+15+... = 100 iter ✓ (du ve so luong)
+Tổng: 50+15+... = 100 iter ✓ (đủ về số lượng)
 
-Nhung:
-  - user cua VU#1 bi "hammer" 50 burst -> neu co race, user nay de trigger nhat
-  - user cua VU#10 khong he duoc goi -> hoan toan BO SOT
-  - Cac user khac chi 3-8 burst -> KHONG DU 10 burst nhu thiet ke
+Nhưng:
+  - user của VU#1 bị "hammer" 50 burst -> nếu có race, user này dễ trigger nhất
+  - user của VU#10 không hề được gọi -> hoàn toàn BỎ SÓT
+  - Các user khác chỉ 3-8 burst -> KHÔNG ĐỦ 10 burst như thiết kế
 
-=> Ket qua TEST KHONG DAI DIEN. Khong the ket luan "10 user deu an toan"
-   khi co user khong duoc test, co user bi test qua nhieu.
+=> Kết quả TEST KHÔNG ĐẠI DIỆN. Không thể kết luận "10 user đều an toàn"
+   khi có user không được test, có user bị test quá nhiều.
 ```
 
-**Van de goc:** van la "moi VU la user khac". Ngay ca VU#1 nhan 50 burst cho
-cung 1 user, 50 burst do CHAY TUAN TU (VU#1 chi co 1 luong, het iter nay
-moi toi iter sau). 3 request/http.batch thi song song, nhung 50 burst thi
-noi tiep nhau -> day la CONCURRENT WITHIN ITER, khong phai CONCURRENT
+**Vấn đề gốc:** vẫn là "mỗi VU là user khác". Ngay cả VU#1 nhận 50 burst cho
+cùng 1 user, 50 burst đó CHẠY TUẦN TỰ (VU#1 chỉ có 1 luồng, hết iter này
+mới tới iter sau). 3 request/http.batch thì song song, nhưng 50 burst thì
+nối tiếp nhau -> đây là CONCURRENT WITHIN ITER, không phải CONCURRENT
 ACROSS ITERS.
 
 ```text
 shared-iterations:
-  ✓ Co the tao race trong 1 iter (3 request song song)
-  ✗ Khong tao 10 DOT race doc lap nhu thiet ke
-  ✗ Phan phoi lech -> 1 so user khong duoc test
-  ✗ Khong user nao nhan DUNG 10 burst nhu per-vu dam bao
+  ✓ Có thể tạo race trong 1 iter (3 request song song)
+  ✗ Không tạo 10 ĐỢT race độc lập như thiết kế
+  ✗ Phân phối lệch -> 1 số user không được test
+  ✗ Không user nào nhận ĐÚNG 10 burst như per-vu đảm bảo
 ```
 
-#### Dung arrival-rate: khong kiem soat duoc user nao bi race
+#### Dùng arrival-rate: không kiểm soát được user nào bị race
 
-`constant-arrival-rate` chi quan tam toc do (iter/s), khong quan tam identity.
-Iter den voi VU nao ranh -> user-id tuy y -> khong dam bao moi user 10 burst.
+`constant-arrival-rate` chỉ quan tâm tốc độ (iter/s), không quan tâm identity.
+Iter đến với VU nào rảnh -> user-id tùy ý -> không đảm bảo mỗi user 10 burst.
 
-**Bang so sanh output voi 4 executor:**
+**Bảng so sánh output với 4 executor:**
 
-| Executor | Moi user 10 burst? | Cung user trong 1 burst? | Race xay ra? | Phat hien duoc lost-update? |
+| Executor | Mỗi user 10 burst? | Cùng user trong 1 burst? | Race xảy ra? | Phát hiện được lost-update? |
 | --- | --- | --- | --- | --- |
-| **per-vu-iterations** | ✓ DUNG 10 burst/user | ✓ http.batch cung user | ✓ THUC SU | ✓ Phat hien neu co bug |
-| constant-vus | ✗ Ngau nhien 1-15 burst | ✓ Trong 1 iter | △ It, khong du burst | ✗ FALSE PASS |
-| shared-iterations | ✗ Lech 0-50 burst | ✓ Trong 1 iter | △ 1 user bi hammer, user khac bo sot | ✗ Test khong dai dien |
-| constant-arrival-rate | ✗ Khong kiem soat | ✓ Trong 1 iter | △ Ngau nhien | ✗ Khong kiem soat duoc |
+| **per-vu-iterations** | ✓ ĐÚNG 10 burst/user | ✓ http.batch cùng user | ✓ THỰC SỰ | ✓ Phát hiện nếu có bug |
+| constant-vus | ✗ Ngẫu nhiên 1-15 burst | ✓ Trong 1 iter | △ Ít, không đủ burst | ✗ FALSE PASS |
+| shared-iterations | ✗ Lệch 0-50 burst | ✓ Trong 1 iter | △ 1 user bị hammer, user khác bỏ sót | ✗ Test không đại diện |
+| constant-arrival-rate | ✗ Không kiểm soát | ✓ Trong 1 iter | △ Ngẫu nhiên | ✗ Không kiểm soát được |
 
-> **Tom lai:** 3 executor kia deu co the tao race TRONG 1 ITER (vi van dung
-> `http.batch()`), nhung KHONG dam bao "10 DOT race doc lap, moi dot 3 request
-> song song, cho TUNG user". Chi per-vu-iterations moi dam bao dieu kien do.
-> Day la ly do "cart race test" BUOC PHAI chon per-vu-iterations.
+> **Tóm lại:** 3 executor kia đều có thể tạo race TRONG 1 ITER (vì vẫn dùng
+> `http.batch()`), nhưng KHÔNG đảm bảo "10 ĐỢT race độc lập, mỗi đợt 3 request
+> song song, cho TỪNG user". Chỉ per-vu-iterations mới đảm bảo điều kiện đó.
+> Đây là lý do "cart race test" BUỘC PHẢI chọn per-vu-iterations.
 
 ### Yeu cau (b): DU BURST DE TRIGGER LOST UPDATE
 

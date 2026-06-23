@@ -64,198 +64,198 @@ Vì sao per-vu đảm bảo điều này?
   - Audit cho kết quả SAI: 100 fresh thay vì 20 fresh + 80 reuse
 ```
 
-**── Phan tich chi tiet: sai nhu the nao khi dung sai executor ──**
+**── Phân tích chi tiết: sai như thế nào khi dùng sai executor ──**
 
-#### Dung constant-vus: idempotency key bi ghi de
+#### Dùng constant-vus: idempotency key bị ghi đè
 
-Van de cot loi: constant-vus co **VU pool**. VU khong gan co dinh vao customer.
-Iter nay VU #3 xu ly customer A, iter sau VU #3 xu ly customer D.
-Bien per-VU (nhu `idempotencyKey`) bi **ghi de** khi VU chuyen customer.
+Vấn đề cốt lõi: constant-vus có **VU pool**. VU không gắn cố định vào customer.
+Iter này VU #3 xử lý customer A, iter sau VU #3 xử lý customer D.
+Biến per-VU (như `idempotencyKey`) bị **ghi đè** khi VU chuyển customer.
 
-Timeline cu the voi 3 VU, 6 customer, 5 iter/VU (constant-vus, duration):
+Timeline cụ thể với 3 VU, 6 customer, 5 iter/VU (constant-vus, duration):
 
 ```text
-[VU pool co 3 VU: VU #1, VU #2, VU #3. 6 customer can test: A, B, C, D, E, F]
+[VU pool có 3 VU: VU #1, VU #2, VU #3. 6 customer cần test: A, B, C, D, E, F]
 
-t=0.0s | VU #3 bat dau iter moi -> pick customer A
+t=0.0s | VU #3 bắt đầu iter mới -> pick customer A
        |   __VU=3, __ITER=0 -> idempotencyKey="idem-3-order-A-..."
        |   POST confirm -> charge FRESH cho customer A
-       |   BIEN MODULE-LEVEL cua VU #3: {key: "idem-3-order-A", firstResp: {...A...}}
+       |   BIẾN MODULE-LEVEL của VU #3: {key: "idem-3-order-A", firstResp: {...A...}}
 
-t=0.3s | VU #3 iter tiep theo -> van nghi la customer A nhung...
-       |   __VU=3, __ITER=1 -> idempotencyKey="idem-3-order-A-..." (VAN key cu)
-       |   POST confirm -> server thay key cu -> REUSE (dung!)
-       |   --> co ve OK o iter 0->1
+t=0.3s | VU #3 iter tiếp theo -> vẫn nghĩ là customer A nhưng...
+       |   __VU=3, __ITER=1 -> idempotencyKey="idem-3-order-A-..." (VẪN key cũ)
+       |   POST confirm -> server thấy key cũ -> REUSE (đúng!)
+       |   --> có vẻ OK ở iter 0->1
 
-t=0.6s | VU #3 iter tiep -> HE THONG PICK CUSTOMER MOI
-       |   __VU=3, __ITER=2 -> nhung bay gio customer D duoc assign cho VU #3
-       |   idempotencyKey BI TINH LAI = "idem-3-order-D-..."
-       |   --> KEY MOI HOAN TOAN, KHONG con la key cua customer A
-       |   --> Server thay key moi -> charge FRESH cho customer D (sai!)
+t=0.6s | VU #3 iter tiếp -> HỆ THỐNG PICK CUSTOMER MỚI
+       |   __VU=3, __ITER=2 -> nhưng bây giờ customer D được assign cho VU #3
+       |   idempotencyKey BỊ TÍNH LẠI = "idem-3-order-D-..."
+       |   --> KEY MỚI HOÀN TOÀN, KHÔNG còn là key của customer A
+       |   --> Server thấy key mới -> charge FRESH cho customer D (sai!)
 
-t=0.9s | VU #3 iter tiep -> lai customer B
+t=0.9s | VU #3 iter tiếp -> lại customer B
        |   __VU=3, __ITER=3 -> idempotencyKey="idem-3-order-B-..."
-       |   --> LAI key moi -> LAI charge fresh
+       |   --> LẠI key mới -> LẠI charge fresh
 
-t=1.2s | VU #3 iter tiep -> lai customer A tro lai!
+t=1.2s | VU #3 iter tiếp -> lại customer A trở lại!
        |   __VU=3, __ITER=4 -> idempotencyKey="idem-3-order-A-..."
-       |   --> key CUNG TEN nhung BIEN MODULE-LEVEL da bi ghi de o iter 2,3
-       |   --> firstResponseSnapshot da la cua customer D/B, KHONG con cua A
-       |   --> Neu key tinh lai giong cu -> server REUSE nhung
-       |       firstResponseSnapshot SAI -> verify response THAT BAI
+       |   --> key CÙNG TÊN nhưng BIẾN MODULE-LEVEL đã bị ghi đè ở iter 2,3
+       |   --> firstResponseSnapshot đã là của customer D/B, KHÔNG còn của A
+       |   --> Nếu key tính lại giống cũ -> server REUSE nhưng
+       |       firstResponseSnapshot SAI -> verify response THẤT BẠI
 ```
 
-**Cong thuc du kien sai**:
+**Công thức dự kiến sai**:
 
 ```js
-// VOI CONSTANT-VUS (sai):
-// Moi VU bi xao tron customer sau moi iter
-// --> moi iter gan nhu LUON tinh key moi (vi customer thay doi)
-// --> Hau het request tro thanh FRESH charge
+// VỚI CONSTANT-VUS (sai):
+// Mỗi VU bị xáo trộn customer sau mỗi iter
+// --> mỗi iter gần như LUÔN tính key mới (vì customer thay đổi)
+// --> Hầu hết request trở thành FRESH charge
 
-// Du kien:
-//   idem_fresh_count ≈ vus × expected_iters_per_vu  (gan nhu 100% fresh)
-//   idem_reuse_count ≈ 0                            (gan nhu khong reuse)
+// Dự kiến:
+//   idem_fresh_count ≈ vus × expected_iters_per_vu  (gần như 100% fresh)
+//   idem_reuse_count ≈ 0                            (gần như không reuse)
 //
-// Vi du: vus=20, expected ~5 iter/VU trong duration
-//   idem_fresh_count ≈ 100  (sai, dung ra phai 20)
-//   idem_reuse_count ≈ 0    (sai, dung ra phai 80)
+// Ví dụ: vus=20, expected ~5 iter/VU trong duration
+//   idem_fresh_count ≈ 100  (sai, đúng ra phải 20)
+//   idem_reuse_count ≈ 0    (sai, đúng ra phải 80)
 ```
 
-**Demo output: per-vu (dung) vs constant-vus (sai)**:
+**Demo output: per-vu (đúng) vs constant-vus (sai)**:
 
 ```text
-=== DUNG executor: per-vu-iterations ===
+=== ĐÚNG executor: per-vu-iterations ===
 iterations.............: 100
-idem_fresh_count.......: 20     ← 1 fresh per customer, DUNG
-idem_reuse_count.......: 80     ← 4 retry per customer, DUNG
-checks_succeeded.......: 100%   ← tat ca retry tra cung response
+idem_fresh_count.......: 20     ← 1 fresh per customer, ĐÚNG
+idem_reuse_count.......: 80     ← 4 retry per customer, ĐÚNG
+checks_succeeded.......: 100%   ← tất cả retry trả cùng response
 http_req_failed........: 0.00%
-=> KET LUAN: idempotency contract DUNG. API an toan.
+=> KẾT LUẬN: idempotency contract ĐÚNG. API an toàn.
 
 === SAI executor: constant-vus (duration=30s) ===
-iterations.............: 112    ← so iter khong con 100 nua (duration-based)
-idem_fresh_count.......: 97     ← GAN 100% fresh, SAI HOAN TOAN
-idem_reuse_count.......: 15     ← chi 15 reuse, nhung phan lon la TRUNG HOP
-                                 (VU tinh co gap lai customer cu)
-checks_succeeded.......: 62%    ← rat nhieu verify that bai vi
-                                 firstResponseSnapshot bi ghi de
+iterations.............: 112    ← số iter không còn 100 nữa (duration-based)
+idem_fresh_count.......: 97     ← GẦN 100% fresh, SAI HOÀN TOÀN
+idem_reuse_count.......: 15     ← chỉ 15 reuse, nhưng phần lớn là TRÙNG HỢP
+                                 (VU tình cờ gặp lại customer cũ)
+checks_succeeded.......: 62%    ← rất nhiều verify thất bại vì
+                                 firstResponseSnapshot bị ghi đè
 http_req_failed........: 0.00%
-=> KET LUAN (SAI): double-charge! 97 fresh nhung chi co 20 customer
-   --> 77 lan charge LAP. Bug "tien bac" gia.
-   --> Thuc te backend VAN DUNG, nhung TEST BAO LOI do sai executor.
+=> KẾT LUẬN (SAI): double-charge! 97 fresh nhưng chỉ có 20 customer
+   --> 77 lần charge LẶP. Bug "tiền bạc" giả.
+   --> Thực tế backend VẪN ĐÚNG, nhưng TEST BÁO LỖI do sai executor.
 ```
 
-#### Dung shared-iterations: iter phan phoi khong deu
+#### Dùng shared-iterations: iter phân phối không đều
 
-shared-iterations chia 100 iteration cho VU pool. VU nao nhanh thi lay
-nhieu iter, VU cham lay it. Khong dam bao moi customer retry du 5 lan.
+shared-iterations chia 100 iteration cho VU pool. VU nào nhanh thì lấy
+nhiều iter, VU chậm lấy ít. Không đảm bảo mỗi customer retry đủ 5 lần.
 
-Timeline voi 20 customer, iterations=100, vus=10:
+Timeline với 20 customer, iterations=100, vus=10:
 
 ```text
-[VU pool 10 VU. 100 iteration chung, VU nao xong truoc lay iter moi.]
+[VU pool 10 VU. 100 iteration chung, VU nào xong trước lấy iter mới.]
 
-t=0.00s | VU #1-#10 cung start, moi VU pick 1 customer ngau nhien
+t=0.00s | VU #1-#10 cùng start, mỗi VU pick 1 customer ngẫu nhiên
         | VU #1: customer_3, iter 0 -> charge fresh
         | VU #4: customer_7, iter 0 -> charge fresh
         | VU #7: customer_12, iter 0 -> charge fresh
         | ...
 
-t=0.05s | VU #3 nhanh nhat, xong iter -> lay iter moi
-        |   -> LAI customer_3 -> key cu -> reuse OK
-        | VU #1 cung xong -> lay iter moi
-        |   -> customer_3 (customer_3 duoc test NHIEU)
+t=0.05s | VU #3 nhanh nhất, xong iter -> lấy iter mới
+        |   -> LẠI customer_3 -> key cũ -> reuse OK
+        | VU #1 cũng xong -> lấy iter mới
+        |   -> customer_3 (customer_3 được test NHIỀU)
 
-t=0.10s | VU #3, #1, #5, #8 lien tuc lay iter
+t=0.10s | VU #3, #1, #5, #8 liên tục lấy iter
         |   -> customer_3, customer_5, customer_3, customer_1...
-        |   -> cac VU nhanh THONG TRI, customer cua ho duoc retry nhieu
+        |   -> các VU nhanh THỐNG TRỊ, customer của họ được retry nhiều
 
-t=0.50s | 100 iteration het. Phan phoi thuc te:
-        |   customer_3:  8 retry  (7 reuse, qua nhieu!)
+t=0.50s | 100 iteration hết. Phân phối thực tế:
+        |   customer_3:  8 retry  (7 reuse, quá nhiều!)
         |   customer_5:  7 retry  (6 reuse)
         |   customer_1:  6 retry  (5 reuse)
-        |   customer_12: 1 retry  (0 reuse, KHONG DU DE TEST!)
-        |   customer_7:  0 retry  (CHUA TUNG CO ITER 1)
+        |   customer_12: 1 retry  (0 reuse, KHÔNG ĐỦ ĐỂ TEST!)
+        |   customer_7:  0 retry  (CHƯA TỪNG CÓ ITER 1)
         |   customer_15: 0 retry
         |   customer_19: 0 retry
-        |   ... 6 customer khac chi 1-2 retry
+        |   ... 6 customer khác chỉ 1-2 retry
 ```
 
-**Demo output voi shared-iterations**:
+**Demo output với shared-iterations**:
 
 ```text
 === SAI executor: shared-iterations (iterations=100, vus=10) ===
 iterations.............: 100
-idem_fresh_count.......: 35     ← QUÁ CAO: nhieu customer bi tinh la fresh
-                                 vi VU khac lay iter cua customer do
-idem_reuse_count.......: 65     ← phan bo KHONG DEU giua customer
-checks_succeeded.......: 78%    ← verify that bai o customer it retry
+idem_fresh_count.......: 35     ← QUÁ CAO: nhiều customer bị tính là fresh
+                                 vì VU khác lấy iter của customer đó
+idem_reuse_count.......: 65     ← phân bổ KHÔNG ĐỀU giữa customer
+checks_succeeded.......: 78%    ← verify thất bại ở customer ít retry
 http_req_failed........: 0.00%
 
-Phan bo retry thuc te (khong doc duoc tu output, chi quan sat log):
-  customer_3:  charge 1 lan, 7 retry (OK, nhung du thua)
-  customer_7:  charge 1 lan, 0 retry (KHONG TEST DUOC)
-  customer_12: charge 1 lan, 1 retry (test chua du)
-  customer_15: charge 1 lan, 0 retry (KHONG TEST DUOC)
-  customer_19: charge 1 lan, 0 retry (KHONG TEST DUOC)
+Phân bổ retry thực tế (không đọc được từ output, chỉ quan sát log):
+  customer_3:  charge 1 lần, 7 retry (OK, nhưng dư thừa)
+  customer_7:  charge 1 lần, 0 retry (KHÔNG TEST ĐƯỢC)
+  customer_12: charge 1 lần, 1 retry (test chưa đủ)
+  customer_15: charge 1 lần, 0 retry (KHÔNG TEST ĐƯỢC)
+  customer_19: charge 1 lần, 0 retry (KHÔNG TEST ĐƯỢC)
 
-=> KET LUAN (SAI): idem_fresh_count=35 nhung thuc chat khong phai
-   35 customer bi double-charge. Day la customer KHAC NHAU cung bi
-   tinh fresh vi VU khong gan co dinh. Output khong the dung de
-   ket luan idempotency. 6/20 customer KHONG he duoc retry -> bo
-   sot kha nang bug o nhung customer nay.
+=> KẾT LUẬN (SAI): idem_fresh_count=35 nhưng thực chất không phải
+   35 customer bị double-charge. Đây là customer KHÁC NHAU cũng bị
+   tính fresh vì VU không gắn cố định. Output không thể dùng để
+   kết luận idempotency. 6/20 customer KHÔNG hề được retry -> bỏ
+   sót khả năng bug ở những customer này.
 ```
 
-#### Dung arrival-rate: identity roi VU
+#### Dùng arrival-rate: identity rời VU
 
-constant-arrival-rate va ramping-arrival-rate la rate-driven: k6 chi
-dam bao toc do request (iter/s), KHONG dam bao VU nao xu ly customer nao.
+constant-arrival-rate và ramping-arrival-rate là rate-driven: k6 chỉ
+đảm bảo tốc độ request (iter/s), KHÔNG đảm bảo VU nào xử lý customer nào.
 
 ```text
-Van de:
-  - VU duoc spawn/spin down lien tuc theo rate
-  - KHONG co khai niem "VU gan voi customer" trong arrival-rate
-  - Iter cua cung mot customer co the duoc 3 VU khac nhau chay
-  - Module-level state MAT hoan toan vi moi VU la isolate moi
+Vấn đề:
+  - VU được spawn/spin down liên tục theo rate
+  - KHÔNG có khái niệm "VU gắn với customer" trong arrival-rate
+  - Iter của cùng một customer có thể được 3 VU khác nhau chạy
+  - Module-level state MẤT hoàn toàn vì mỗi VU là isolate mới
 
 Timeline:
   t=0.0s | VU #7 spawn -> pick customer A, iter 0
          |   idempotencyKey="idem-7-order-A"
-         |   POST -> fresh charge -> VU #7 bi destroy
+         |   POST -> fresh charge -> VU #7 bị destroy
 
-  t=0.3s | VU #12 spawn (VU #7 da bi destroy tu lau)
-         |   pick customer A, iter 1 (can cung key)
-         |   NHUNG VU #12 la isolate MOI -> KHONG co bien tu VU #7
-         |   idempotencyKey BI TINH LAI = "idem-12-order-A" (KHAC!)
-         |   POST -> server thay key MOI -> charge FRESH lan 2
+  t=0.3s | VU #12 spawn (VU #7 đã bị destroy từ lâu)
+         |   pick customer A, iter 1 (cần cùng key)
+         |   NHƯNG VU #12 là isolate MỚI -> KHÔNG có biến từ VU #7
+         |   idempotencyKey BỊ TÍNH LẠI = "idem-12-order-A" (KHÁC!)
+         |   POST -> server thấy key MỚI -> charge FRESH lần 2
 
-  => MOI LAN RETRY LA MOT FRESH CHARGE MOI
-  => idempotency audit VO NGHIA: 100% fresh, 0% reuse
+  => MỖI LẦN RETRY LÀ MỘT FRESH CHARGE MỚI
+  => idempotency audit VÔ NGHĨA: 100% fresh, 0% reuse
 ```
 
-**Bang so sanh output du kien voi 4 executor**:
+**Bảng so sánh output dự kiến với 4 executor**:
 
 ```text
 +--------------------------+----------+----------+----------+-------------+
-| Executor                 | Fresh    | Reuse    | Checks   | Dung de    |
+| Executor                 | Fresh    | Reuse    | Checks   | Dùng để    |
 |                          | count    | count    | pass     | audit?     |
 +--------------------------+----------+----------+----------+-------------+
-| per-vu-iterations        | 20       | 80       | 100%     | CO         |
-| constant-vus             | ~97      | ~15      | ~62%     | KHONG      |
-| shared-iterations        | ~35      | ~65      | ~78%     | KHONG      |
-| arrival-rate             | ~100     | ~0       | ~0%      | KHONG      |
+| per-vu-iterations        | 20       | 80       | 100%     | CÓ         |
+| constant-vus             | ~97      | ~15      | ~62%     | KHÔNG      |
+| shared-iterations        | ~35      | ~65      | ~78%     | KHÔNG      |
+| arrival-rate             | ~100     | ~0       | ~0%      | KHÔNG      |
 +--------------------------+----------+----------+----------+-------------+
 
-Giai thich:
-  per-vu-iterations:    1 VU = 1 customer, key stable, iter du -> audit DUNG
-  constant-vus:         VU pool xao tron -> key bi ghi de -> fresh ao
-  shared-iterations:    iter phan phoi lech -> nhieu customer 0 retry
-  arrival-rate:         VU spawn/despawn lien tuc -> identity MAT HOAN TOAN
+Giải thích:
+  per-vu-iterations:    1 VU = 1 customer, key stable, iter đủ -> audit ĐÚNG
+  constant-vus:         VU pool xáo trộn -> key bị ghi đè -> fresh ảo
+  shared-iterations:    iter phân phối lệch -> nhiều customer 0 retry
+  arrival-rate:         VU spawn/despawn liên tục -> identity MẤT HOÀN TOÀN
 
-=> CHI per-vu-iterations cho ra output idem_fresh_count=20, idem_reuse_count=80
-   la CON SO TUYET DOI de ket luan. Cac executor khac deu cho ra fresh count
-   ao, khong phan biet duoc "double-charge that" vs "fresh do sai executor".
+=> CHỈ per-vu-iterations cho ra output idem_fresh_count=20, idem_reuse_count=80
+   là CON SỐ TUYỆT ĐỐI để kết luận. Các executor khác đều cho ra fresh count
+   ảo, không phân biệt được "double-charge thật" vs "fresh do sai executor".
 ```
 
 ### Yêu cầu (b): MỖI CUSTOMER RETRY ĐỦ N LẦN
