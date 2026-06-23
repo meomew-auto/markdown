@@ -381,6 +381,76 @@ Diễn giải quan trọng:
 
 Nếu muốn test rate-limit/catalog pressure riêng, nên tạo case khác hoặc variation riêng, không dùng CV-01 baseline.
 
+## ⭐ 2 bài tiêu biểu nhất để dạy constant-vus
+
+Trong 7 case, đây là 2 bài **thực tế hay gặp nhất** và **bao quát toàn bộ tinh thần executor**:
+
+### Bài 1: Case 01 — Business-hours storefront (`01_business-hours-storefront.md`)
+
+**Vì sao chọn làm bài nền tảng:**
+
+```text
+Đây là "canonical example" của constant-vus — mô phỏng chính xác
+câu hỏi "Nếu có N active users trong T phút thì hệ thống ra sao?"
+```
+
+| Tiêu chí | Giá trị dạy |
+| --- | --- |
+| **Business scenario** | Giờ kinh doanh bình thường: 20 shoppers active, browse products, xem detail, thêm cart, thỉnh thoảng checkout. Think time 1s mô phỏng user thật đọc/xem. |
+| **Tinh thần executor** | Fixed active user pool (20 VU) trong fixed duration (5 phút). Mỗi VU loop `default()` liên tục. Iterations/RPS là OUTPUT — không phải target. Backend chậm → throughput tự giảm (closed model). |
+| **Closed model insight** | Đây là bài học quan trọng nhất: closed model nghĩa là `rate ≈ vus / loop_duration`. Khi backend chậm, loop_duration tăng → RPS tự giảm. Đó là TÍN HIỆU, không phải bug. |
+| **Think time** | `sleep(1s)` mô phỏng user đọc sản phẩm — dạy rằng think time làm giảm throughput có chủ ý, và đó là expected behavior. |
+| **Độ khó** | ⭐ — Flow quen thuộc, single service focus, dễ đọc output. |
+
+**Dạy trong bao lâu:** 30-40 phút — mental model closed model, vus/duration là input, iterations/RPS là output.
+
+### Bài 2: Case 07 — Production mixed baseline (`07_production-mixed-baseline.md`)
+
+**Vì sao chọn làm bài nâng cao:**
+
+```text
+Đây là case "tổng hợp" — trộn nhiều service trong 1 pool VU,
+dạy cách đọc baseline và phát hiện service nào kéo hệ thống.
+```
+
+| Tiêu chí | Giá trị dạy |
+| --- | --- |
+| **Business scenario** | 30 active mixed users: browse products, add cart, checkout, auth, report — tất cả cùng lúc. Mỗi VU loop qua hỗn hợp operation theo weight. |
+| **Tinh thần executor** | Một pool VU duy nhất phục vụ nhiều service. Latency/error phải đọc THEO SERVICE (dùng tag `service`, `operation`), không đọc aggregate. |
+| **Service bottleneck detection** | Dạy cách aggregate p95 có thể che giấu bottleneck: p95 tổng đẹp nhưng report-service p95 xấu → phải lọc theo tag. Đây là kỹ năng **đọc dashboard thực tế**. |
+| **Baseline concept** | Output của case này là BASELINE để so sánh với ramping-vus và arrival-rate tests sau này. Dạy học viên "baseline để làm gì". |
+| **Độ khó** | ⭐⭐ — Cần biết filter theo tag, hiểu weight distribution, phân biệt aggregate vs per-service. |
+
+**Dạy trong bao lâu:** 40-50 phút — mixed workload, tag-based analysis, baseline concept.
+
+### Lộ trình dạy 2 bài
+
+```text
+Buổi 1 (nền tảng): Case 01 Business-hours storefront
+  1. Mental model: fixed active users, duration, closed model
+  2. Input vs Output: vus+duration → iterations+RPS
+  3. Think time: vì sao sleep(1s) là expected
+  4. Đọc dashboard: VUs flat, iter/s dao động theo backend
+  5. Demo: chạy thật 20 VU × 5 phút, xem dashboard
+
+Buổi 2 (nâng cao): Case 07 Production mixed baseline
+  1. Mixed workload: weight distribution, operation mix
+  2. Tag-based analysis: lọc theo service/operation
+  3. Aggregate vs per-service: phát hiện bottleneck ẩn
+  4. Baseline: ghi nhận số để so sánh sau này
+  5. Demo: chạy thật 30 VU mixed, xem dashboard theo tag
+```
+
+### Vì sao không chọn các case khác?
+
+| Case | Vì sao không chọn làm bài chính? |
+| --- | --- |
+| 02 Session keepalive | Tốt (auth stability), nhưng hẹp về service (chỉ auth). Case 01 (storefront) phủ nhiều service hơn. |
+| 03 Active cart editing | Hay (write pressure), nhưng gần với Case 01 về pattern. Nên dùng làm bonus case. |
+| 04 Checkout trickle | Tốt (order steady), nhưng 8 VU — scale nhỏ, ít kịch tính hơn Case 01. |
+| 05 Personalized homefeed | Hay (personalization), nhưng là read-only — Case 01 có cả read + write (cart/checkout). |
+| 06 Backoffice report users | Tốt (backoffice pattern), nhưng 6 VU — quá nhỏ để làm bài đại diện. Case 07 có report branch trong mixed pool. |
+
 ## Thứ tự đề xuất học
 
 ```text

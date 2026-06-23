@@ -322,6 +322,76 @@ Tail VUs tụt có thể chỉ nghĩa là backlog gần hết.
 | 06 | Report export batch | Create/status-poll/download report jobs | `60 jobs: create 60 + status polls >=60 + download 60` |
 | 07 | CI verification batch | Fixed API checklist | `100 jobs × 1 API = 100 calls` |
 
+## ⭐ 2 bài tiêu biểu nhất để dạy shared-iterations
+
+Trong 7 case, đây là 2 bài **thực tế hay gặp nhất** và **bao quát toàn bộ tinh thần executor**:
+
+### Bài 1: Case 01 — Catalog audit (`01_catalog-audit.md`)
+
+**Vì sao chọn làm bài nền tảng:**
+
+```text
+Đây là "hello world" của shared-iterations.
+```
+
+| Tiêu chí | Giá trị dạy |
+| --- | --- |
+| **Business scenario** | Sau deploy catalog, audit 80 SKU — mỗi SKU = 1 job, mỗi job = 2 HTTP requests (list + detail) |
+| **Tinh thần executor** | Fixed backlog (80 jobs) được drain bởi worker pool (8 VU). Worker nhanh lấy thêm job, worker chậm làm ít hơn — đúng mô hình worker queue. |
+| **Identity mapping** | Dùng `exec.scenario.iterationInTest` (0..79) để map job → SKU. KHÔNG dùng `__VU` vì worker identity ≠ business identity. Đây là bài học **quan trọng nhất** của shared-iterations. |
+| **Công thức áp dụng** | Công thức 1 (chia kho), Công thức 3 (T_est), Công thức 5 (VU sizing) — cả 5 công thức TOP đều demo được trên case này. |
+| **Output validation** | `shared_jobs_total == 80`, `shared_jobs_failed == 0`, `iterations == 80` — pass/fail rõ ràng, không ambiguous. |
+| **Độ khó** | ⭐ — Single service, 2 API calls per job, không async, không external dependency. |
+
+**Dạy trong bao lâu:** 30-45 phút — đi từ "vì sao cần shared-iterations", qua identity mapping, đến đọc output.
+
+### Bài 2: Case 06 — Report export batch (`06_report-export-batch.md`)
+
+**Vì sao chọn làm bài nâng cao:**
+
+```text
+Đây là case "thực chiến" nhất — async job lifecycle với polling,
+đúng pattern của mọi hệ thống backend có job queue.
+```
+
+| Tiêu chí | Giá trị dạy |
+| --- | --- |
+| **Business scenario** | 60 report export jobs, mỗi job: create → poll status đến khi complete → download artifact. Đây là pattern của **mọi** async backend job (export, import, build, deploy, encode, ML training...). |
+| **Tinh thần executor** | Fixed backlog (60 jobs), worker pool (6 VU). Nhưng mỗi job kéo dài vì **polling loop** — worker bị giữ lâu hơn. → Dạy VU sizing: pool 6 VU cho 60 job async. |
+| **Polling pattern** | Không phải 1 HTTP request = 1 job. Mỗi job có create + N lần poll status + download. Tổng API calls > iterations. Đây là bài học **phân biệt iteration vs API call**. |
+| **Công thức áp dụng** | Công thức 1 (chia kho với polling — t_i không đều vì mỗi job cần số poll khác nhau), Công thức 3 (T_est với W_effective > HTTP latency). |
+| **Output validation** | `report_job_create == 60`, `report_job_download == 60`, `report_job_status >= 60` — verify đủ lifecycle, không chỉ count iterations. |
+| **Độ khó** | ⭐⭐⭐ — Multi-step async flow, polling loop, `202 processing` là expected (không phải bug). |
+
+**Dạy trong bao lâu:** 45-60 phút — polling pattern cần thời gian để học viên hiểu "202 không phải lỗi".
+
+### Lộ trình dạy 2 bài
+
+```text
+Buổi 1 (nền tảng): Case 01 Catalog audit
+  1. Mental model: fixed backlog + worker pool
+  2. Identity mapping: iterationInTest vs __VU
+  3. Đọc output: iterations, shared_jobs_total, checks
+  4. Demo: chạy thật, xem dashboard
+
+Buổi 2 (nâng cao): Case 06 Report export batch
+  1. Async job lifecycle: create → poll → download
+  2. Polling pattern: vì sao API calls > iterations
+  3. VU sizing với async job: W_effective bao gồm polling wait
+  4. Đọc output: kiểm đủ lifecycle (create/status/download counts)
+  5. So sánh với Case 01: sync vs async job
+```
+
+### Vì sao không chọn các case khác?
+
+| Case | Vì sao không chọn làm bài chính? |
+| --- | --- |
+| 02 Order reconciliation | Tốt, nhưng giống Case 01 về pattern (2 API/job), khác biệt chính là business domain. Case 01 + 06 phủ rộng hơn. |
+| 03 Payment webhook drain | Hay (duplicate handling, idempotency), nhưng trùng tinh thần batch drain. Nên dạy như bonus case nếu còn thời gian. |
+| 04 Cart cleanup | Giống Case 01 (2 API/job: PATCH + GET), ít khác biệt về pattern. |
+| 05 Cache warm | 1 API/job đơn giản, không có identity mapping phức tạp — quá đơn giản để làm bài đại diện. |
+| 07 CI verification batch | Hay (5 operation types, split đều), nhưng gần với Case 01 về độ phức tạp. Case 06 có async pattern độc đáo hơn. |
+
 ## Thứ tự đề xuất học
 
 ```text
