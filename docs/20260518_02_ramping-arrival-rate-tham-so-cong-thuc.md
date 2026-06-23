@@ -1248,19 +1248,97 @@ k6 KHÔNG tự fire slot tại t=0
 k6 CHỜ đến lúc tích lũy đủ 1 event nguyên đầu tiên
 ```
 
-Mini ví dụ với `startRate=0, stage 1 ramp 0 → 4/s trong 2s`:
+Vị trí slot đầu tiên phụ thuộc vào `startRate`. Phân tích 2 trường hợp:
+
+**── Case A: startRate = 0 ──**
+
+Rate bắt đầu từ 0 → diện tích tích lũy ban đầu = 0, cần thời gian để đạt 1.
+
+Mini ví dụ: `startRate=0, stage 1 ramp 0 → 4/s trong 2s`:
 
 ```text
-t=0s   : tích lũy = 0           -> chưa fire
-t=0.5s : tích lũy = 0.25        -> chưa đủ 1
-t=1.0s : tích lũy = 1.0         -> fire slot đầu tại t=1.0s
-t=1.5s : tích lũy = 2.25        -> fire slot 2
-t=2.0s : tích lũy = 4.0         -> fire các slot còn lại
+rate(t) = 0 + (4-0)/2 × t = 2t
+
+Diện tích tích lũy đến thời điểm t:
+  S(t) = ∫ rate(t) dt = ∫ 2t dt = t²
+
+  t=0s   : S(0) = 0² = 0           → chưa đủ 1, chưa fire
+  t=0.5s : S(0.5) = 0.25            → chưa đủ 1
+  t=1.0s : S(1.0) = 1.0             → fire slot đầu tiên tại t=1.0s
+  t=√2≈1.414s: S = 2.0             → fire slot thứ 2
+  t=√3≈1.732s: S = 3.0             → fire slot thứ 3
+  t=2.0s : S(2.0) = 4.0             → fire slot thứ 4
 ```
 
-→ slot đầu lệch khỏi `t=0` khi `startRate < target stage 1`. So
-`scheduled_total` với completed lệch 1 slot ở biên là bình thường,
-chưa chắc do drop/interrupt.
+Đặc điểm khi `startRate=0`:
+```text
+- Slot đầu luôn LỆCH xa khỏi t=0 (vd 1s trong ví dụ trên)
+- Nửa đầu stage thưa (interval lớn), nửa cuối dày dần
+- Tổng slot vẫn = diện tích = 4 slot
+- scheduled_total so với completed có thể lệch 1 slot ở biên
+```
+
+**── Case B: startRate > 0 ──**
+
+Rate bắt đầu > 0 → diện tích tích lũy NGAY từ t=0, slot đầu đến sớm hơn nhiều.
+
+Ví dụ 1: `startRate=2/s, stage 1 ramp 2 → 4/s trong 2s`:
+```text
+rate(t) = 2 + t   (slope = 1)
+
+Diện tích tích lũy:
+  S(t) = ∫ (2 + t) dt = 2t + t²/2
+
+  t=0s   : S(0) = 0                     → chưa đủ 1
+  t=0.45s: S(0.45) ≈ 0.9 + 0.1 = 1.0   → fire slot đầu tại t≈0.45s
+  t=0.83s: S(0.83) ≈ 1.66 + 0.34 = 2.0 → fire slot thứ 2
+  t=1.16s: S ≈ 2.32 + 0.67 = 3.0       → fire slot thứ 3
+  t=1.46s: S ≈ 2.92 + 1.07 = 4.0       → fire slot thứ 4
+  t=1.74s: S ≈ 3.48 + 1.51 = 5.0       → fire slot thứ 5
+  t=2.0s : S = 4 + 2 = 6.0              → fire slot thứ 6
+```
+
+So sánh với case A (startRate=0):
+```text
+               Case A (startRate=0)    Case B (startRate=2)
+               ────────────────────    ────────────────────
+Slot đầu tại   t ≈ 1.0s                t ≈ 0.45s
+Slot thứ 2     t ≈ 1.414s              t ≈ 0.83s
+Slot cuối      t = 2.0s                t = 2.0s
+Tổng slot      4                       6
+
+→ startRate > 0: slot đầu đến SỚM hơn (~0.45s thay vì 1s)
+→ Tổng slot nhiều hơn (6 vs 4) vì diện tích hình thang lớn hơn
+```
+
+Ví dụ 2: `startRate=10/s, stage 1 ramp 10 → 20/s trong 2s`:
+```text
+rate(t) = 10 + 5t
+
+  t=0s: rate=10/s → slot_interval ≈ 100ms
+  → Slot đầu fire rất sớm, gần như ngay sau t=0
+  → Khác biệt rõ nhất với startRate=0
+```
+
+**── Bảng so sánh 2 case ──**
+
+| | startRate = 0 | startRate > 0 |
+|---|---|---|
+| rate tại t=0 | 0/s | startRate |
+| Diện tích tại t=0 | 0 | 0 (nhưng tăng ngay) |
+| Slot đầu tiên | Trễ (có thể > 1s) | Sớm (phụ thuộc startRate) |
+| Khoảng cách slot đầu/cuối | Chênh lớn (thưa→dày) | Chênh ít hơn |
+| Ảnh hưởng đến scheduled_total | Có thể lệch 1 slot | Thường khớp hơn |
+| Dùng khi nào | "Khởi động từ 0", cold start | Đã có traffic nền, warm start |
+
+Điểm cần nhớ:
+```text
+- Slot đầu KHÔNG fire tại t=0, kể cả startRate > 0
+- Nhưng startRate càng cao, slot đầu càng gần t=0
+- startRate=0 làm slot đầu trễ nhất có thể
+- Lệch 1 slot ở biên là bình thường với startRate=0,
+  không nhất thiết do drop/interrupt
+```
 
 **Caveat 3: không có `ticker_period` cố định**
 
