@@ -267,6 +267,63 @@ export const options = {
 
 Với `vus: 1`, mỗi VU chạy tuần tự. `iterations: 24` nghĩa là default function chạy đúng 24 lần rồi dừng. Điều này cho ra số lượng request chính xác và deterministic, phù hợp với correctness test. `duration` phù hợp hơn cho sustained load test (như case 01).
 
+##### Phân tích executor: vì sao dùng `shared-iterations` cho case này?
+
+Config hiện tại dùng bare form `vus` + `iterations` — k6 tự động chọn
+`shared-iterations`. Đây là lựa chọn ĐÚNG cho CDN variant-keys. Phân tích vì sao:
+
+**Yêu cầu của case CDN variant-keys:**
+
+```text
+1. Deterministic sequence: Mỗi sub-proof cần chuỗi chính xác
+   banUrl → base MISS → base HIT → variant MISS → variant HIT
+   → Trình tự request QUYẾT ĐỊNH kết quả test
+   → KHÔNG phải: "gửi request liên tục trong X giây"
+   → KHÔNG phải: "mỗi VU chạy đúng N lần riêng"
+
+2. Single-VU bắt buộc: 1 VU duy nhất chạy tuần tự
+   → Nhiều VU sẽ đảo thứ tự request giữa base và variant
+   → VU1 gửi base, VU2 gửi variant → không biết ai MISS trước
+   → Mô hình "một người kiểm tra từng bước một"
+
+3. Số iteration CỐ ĐỊNH:
+   → Cần chạy đúng 24 lần, mỗi lần = 1 vòng đủ 5 sub-proofs
+   → Tổng request = 24 × 25 = 600 request (xác định trước)
+   → Không phụ thuộc vào response time hay tốc độ mạng
+```
+
+**So sánh executor cho case này:**
+
+| Executor | Phù hợp? | Vì sao |
+| --- | --- | --- |
+| **shared-iterations** (đang dùng) | ✅ **ĐÚNG** | Tổng iteration CỐ ĐỊNH (24). Mỗi iteration chạy tuần tự toàn bộ 5 sub-proofs. Số request deterministic. 1 VU đảm bảo trình tự không bị đảo. |
+| constant-vus | ❌ SAI | Cần duration cố định. Case này không biết trước thời gian — 1 iteration mất ~400ms, 24 iteration mất ~9.6s, nhưng đây là OUTPUT không phải INPUT. `duration='10s'` có thể cắt ngang iteration đang chạy dở → sequence MISS/HIT bị đứt. |
+| constant-arrival-rate | ❌ SAI | Ép rate cố định. Case này KHÔNG cần rate — mỗi request phải đợi request trước hoàn thành để đọc cache state. Thêm `preAllocatedVUs`, `maxVUs` là complexity vô ích. |
+| per-vu-iterations | ⚠️ Được nhưng dư thừa | Với `vus: 1`, `per-vu-iterations` cho kết quả GIỐNG HỆT `shared-iterations`. Nhưng ý nghĩa semantic khác: `per-vu-iterations` ngụ ý "mỗi VU có workload riêng", trong khi case này là "1 tác vụ chung, 1 người làm". Dùng `shared-iterations` phản ánh đúng ý định hơn. |
+| ramping-vus | ❌ SAI | Cần thay đổi VU theo stage. Case này chỉ cần VU ỔN ĐỊNH = 1. Thêm stage là vô nghĩa — có thể gây ra lúc có 2+ VU làm hỏng sequence. |
+
+**Tóm tắt luồng quyết định:**
+
+```text
+Cần số iteration CỐ ĐỊNH (không phải thời gian)?
+  ├── YES → Cần deterministic sequence (trình tự quan trọng)?
+  │           ├── YES → shared-iterations, vus=1
+  │           │         (mỗi iteration = 1 lần chạy đủ kịch bản)
+  │           └── NO  → shared-iterations hoặc per-vu-iterations
+  └── NO  → Cần sustained traffic trong khoảng thời gian?
+              ├── YES → constant-vus (hoặc constant-arrival-rate nếu cần rate chính xác)
+              └── NO  → xem lại yêu cầu
+
+CDN variant-keys: "24 iteration cố định, sequence deterministic, 1 VU" → shared-iterations ✓
+```
+
+> **Ghi nhớ**: CDN variant-keys test quan tâm "cache key có split đúng cho từng
+> dimension không?", không quan tâm "chạy được bao nhiêu request mỗi giây?".
+> Số iteration (24) được chọn để có đủ sample phát hiện intermittent cache key
+> issue, không phải để tạo load. Mỗi iteration là một lần chứng minh độc lập
+> — iteration càng nhiều, confidence càng cao.
+> → Dùng shared-iterations với vus=1, đọc `checks` sau run để biết tỷ lệ pass.
+
 ### 5.4. Phần 3: exerciseVariant() helper
 
 Đây là trái tim của script. Một function tổng quát chạy pattern 4 bước cho mỗi dimension:

@@ -182,6 +182,66 @@ export const options = {
 | `thresholds.checks` | `['rate==1']` | **Hard threshold**: Nếu bất kỳ check nào fail, k6 exit code khác 0. Đây là yêu cầu bắt buộc. |
 | `tags.scenario` | `'cdn_bypass_rules'` | Tag để phân biệt trong dashboard/cloud output. |
 
+##### Phân tích executor: vì sao dùng `shared-iterations` cho case này?
+
+Config hiện tại dùng bare form `vus` + `iterations` — k6 tự động chọn
+`shared-iterations`. Đây là lựa chọn ĐÚNG cho CDN bypass-rules. Phân tích vì sao:
+
+**Yêu cầu của case CDN bypass-rules:**
+
+```text
+1. Correctness proof, không phải load test:
+   → Mỗi scenario cần 2 request liên tiếp (first + second)
+   → 4 scenarios × 2 request = 8 request tổng cộng
+   → KHÔNG phải: "gửi request liên tục trong X giây"
+   → KHÔNG phải: "mỗi VU chạy N lần riêng"
+
+2. Sequence quan trọng: first → second (cùng scenario)
+   → Lần 1: xác nhận not HIT (bypass hoạt động)
+   → Lần 2: xác nhận VẪN not HIT (không phải "chưa kịp cache")
+   → Nếu đảo thứ tự hoặc chạy song song, không phân biệt được
+     "MISS vì bypass" và "MISS vì chưa warm"
+
+3. Chạy ĐÚNG 1 lần là đủ:
+   → Case này là binary proof: bypass hoạt động hoặc không
+   → Không cần sample size lớn như variant-keys (case 02 cần 24 iterations)
+   → 1 iteration = 8 request = đủ chứng minh 4 bypass rules
+```
+
+**So sánh executor cho case này:**
+
+| Executor | Phù hợp? | Vì sao |
+| --- | --- | --- |
+| **shared-iterations** (đang dùng) | ✅ **ĐÚNG** | Tổng iteration CỐ ĐỊNH (1). Mỗi VU chạy đúng 1 lần default function. 8 request tuần tự, deterministic. Đơn giản nhất có thể. |
+| constant-vus | ❌ SAI | Cần duration cố định. Case này không có duration — không biết trước chạy trong bao lâu và cũng không cần biết. `duration='5s'` sẽ lặp đi lặp lại 4 scenarios không cần thiết — gây nhiễu (POST cart add bị gọi nhiều lần). |
+| constant-arrival-rate | ❌ SAI | Ép rate cố định. Case này KHÔNG cần rate — request gửi tuần tự, mỗi request phụ thuộc vào kết quả request trước. Thêm complexity không cần thiết. |
+| per-vu-iterations | ⚠️ Được nhưng dư thừa | Với `vus: 1`, `per-vu-iterations` cho kết quả GIỐNG HỆT. Nhưng `shared-iterations` phản ánh đúng ý định: "1 tác vụ chung cần hoàn thành", không phải "mỗi VU có workload riêng". |
+| ramping-vus | ❌ SAI | Cần thay đổi VU theo stage. Case này chỉ cần VU = 1 ổn định. Không có kịch bản ramp-up/ramp-down. |
+
+**Tóm tắt luồng quyết định:**
+
+```text
+Cần chạy đúng 1 lần, không lặp?
+  ├── YES → Cần deterministic sequence (trình tự first→second quan trọng)?
+  │           ├── YES → shared-iterations, vus=1, iterations=1
+  │           │         (chạy 1 lần, đủ 4 scenario, rồi dừng)
+  │           └── NO  → shared-iterations hoặc per-vu-iterations
+  └── NO  → Cần sustained traffic?
+              ├── YES → constant-vus
+              └── NO  → Cần tổng iter cố định > 1?
+                          ├── YES → shared-iterations
+                          └── NO  → xem lại yêu cầu
+
+CDN bypass-rules: "1 lần, 8 request, sequence quan trọng" → shared-iterations ✓
+```
+
+> **Ghi nhớ**: CDN bypass test là binary proof — "bypass có hoạt động không?"
+> Không cần sample size, không cần duration, không cần concurrency. Một lần
+> chạy với 8 request tuần tự đủ để khẳng định hoặc phủ định. Nếu muốn test
+> stability (bypass có bị "trôi" sau 100 lần không?), tăng `iterations` lên
+> 100 — vẫn dùng `shared-iterations`, vẫn `vus=1`.
+> → Dùng shared-iterations, iterations=1, đọc `checks` sau run.
+
 ### 5.3. Hàm `exerciseRepeatedBypass` — trái tim của script
 
 ```javascript
