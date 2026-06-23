@@ -60,6 +60,162 @@ Vì sao per-vu đảm bảo?
   - Không có concept "cùng user qua 20 thao tác"
 ```
 
+**── Phân tích chi tiết từng nguyên nhân ──**
+
+#### Nguyên nhân 1: VU pool tái sử dụng → token bị ghi đè
+
+Với `constant-vus` và `arrival-rate`, VU được quản lý theo POOL — không có
+ràng buộc "VU nào phải chạy iteration nào". 1 VU có thể chạy iter của user A
+rồi ngay sau đó chạy iter của user B.
+
+```text
+Timeline minh họa với constant-vus (VU=2):
+
+  Iter #1: scheduler giao cho VU #1
+    VU #1 bắt đầu chạy → login user A → token_A = "tA1"
+    Lưu token vào biến per-VU của VU #1
+
+  Iter #2: scheduler giao cho VU #2
+    VU #2 bắt đầu chạy → login user B → token_B = "tB1"
+    Lưu token vào biến per-VU của VU #2
+
+  Iter #3: scheduler giao cho VU #1 (VU #1 vừa rảnh)
+    VU #1 đọc token từ biến per-VU → được "tA1" ✓
+    → Dùng token của user A → ĐÚNG
+
+  Iter #4: scheduler giao cho VU #2
+    VU #2 xong iter trước → rảnh → nhận iter mới
+    Nhưng lần này scheduler giao iter của USER C!
+    → VU #2 login user C → token_C = "tC1"
+    → token_B bị GHI ĐÈ bởi token_C
+    → Nếu sau đó VU #2 nhận iter của user B → token đã là của C → SAI
+```
+
+Vấn đề cốt lõi: **scheduler không biết "VU này đang là user nào"**. Nó chỉ
+thấy "VU rảnh → giao việc". VU có thể đang mang state của user A nhưng lại
+được giao iter của user B.
+
+```text
+So sánh với per-vu-iterations:
+  VU #1: iter 0=login, iter 1=dùng, iter 2=dùng, ..., iter 19=logout
+  → TẤT CẢ iter của VU #1 đều là CÙNG 1 USER
+  → Token không bao giờ bị ghi đè vì không có user khác xen vào
+
+  Đây là khác biệt MẤU CHỐT:
+    per-vu:        VU ↔ user (1-1, cố định)
+    constant-vus:  VU ↔ iter  (n-n, scheduler giao tự do)
+```
+
+#### Nguyên nhân 2: Biến global → mọi VU share 1 token
+
+Nếu dùng biến global (khai báo ngoài `export default function`) để lưu token:
+
+```js
+// ❌ SAI — biến global, mọi VU share
+let accessToken = null;
+let refreshToken = null;
+
+export default function () {
+  if (!accessToken) {
+    const tokens = login();
+    accessToken = tokens.access;   // ← GHI ĐÈ GLOBAL
+    refreshToken = tokens.refresh;
+  }
+  // ...
+}
+```
+
+```text
+Timeline minh họa:
+
+  VU #1 chạy iter đầu:
+    accessToken = null → login user A → accessToken = "tA1"
+
+  VU #2 chạy iter đầu (gần như đồng thời):
+    accessToken = "tA1" (đã có!) → KHÔNG login → dùng token của user A
+    → VU #2 tưởng mình là user A nhưng thực ra là user B
+    → Tất cả request của VU #2 dùng sai token
+
+  VU #1 chạy iter tiếp theo:
+    accessToken có thể đã bị VU #2 (hoặc VU #3) ghi đè
+    → VU #1 mất token của user A → 401 bất ngờ
+    → Refresh bằng refreshToken — nhưng refreshToken cũng bị ghi đè rồi
+```
+
+```text
+Kết quả: tất cả VU dùng chung 1 cặp token — không thể test được:
+  - User A login → user B dùng ké token A
+  - User B refresh → user A mất token
+  - Không phân biệt được lỗi của user nào
+
+→ Biến global PHÁ VỠ isolation giữa các VU
+→ Mọi VU đều thấy cùng 1 giá trị → không có "user riêng"
+```
+
+Biến global cũng gây vấn đề với `shared-iterations`:
+
+```text
+Với shared-iterations (VU=3, iterations=30):
+  Iter #1: VU #1 login user A → globalToken = "tA1"
+  Iter #2: VU #2 thấy globalToken != null → dùng ké "tA1"
+  Iter #3: VU #3 thấy globalToken != null → dùng ké "tA1"
+  ...
+  Iter #10: VU #1 refresh → globalToken = "tA2"
+  → Không ai biết VU nào đang là user nào
+  → Tất cả chen nhau đọc/ghi cùng 1 biến
+```
+
+#### Nguyên nhân 3: Không có concept "cùng user qua N thao tác"
+
+`constant-vus` và `arrival-rate` được thiết kế để **đo throughput** — tạo ra
+dòng request liên tục với rate nhất định. Chúng không có khái niệm "phiên
+làm việc" (session) của 1 user.
+
+```text
+Điều constant-vus/arrival-rate LÀM ĐƯỢC:
+  → "Tạo 100 request/giây để đo server chịu tải bao nhiêu"
+  → Mỗi request là ĐỘC LẬP — không cần nhớ state của request trước
+  → VU nào rảnh thì nhận việc, không quan tâm "ai đã làm gì trước đó"
+
+Điều constant-vus/arrival-rate KHÔNG LÀM ĐƯỢC:
+  → "User A login → duyệt 9 trang → token expire → refresh → duyệt tiếp"
+  → Cần NHỚ state qua 20 iteration: đã login chưa, token gì, đã refresh lần nào
+  → Cần ĐẢM BẢO 20 iteration đó do CÙNG 1 VU thực hiện
+
+→ Đây là 2 MỤC ĐÍCH TEST KHÁC NHAU:
+    Load test:    "server chịu được bao nhiêu request/giây?"
+    Lifecycle test: "1 user trải qua 20 thao tác có bị lỗi gì không?"
+```
+
+**── Bảng so sánh: ai làm được gì ──**
+
+```text
+┌──────────────────────────┬──────────────┬──────────────┬────────────────┐
+│ Yêu cầu                   │ per-vu       │ constant-vus │ arrival-rate   │
+├──────────────────────────┼──────────────┼──────────────┼────────────────┤
+│ Token riêng mỗi user      │ ✓ (1 VU=1    │ ✗ (pool ghi  │ ✗ (identity    │
+│                           │   user)      │   đè token)  │   rời VU)      │
+├──────────────────────────┼──────────────┼──────────────┼────────────────┤
+│ Token sống qua nhiều iter │ ✓ (biến per- │ ✗ (mỗi iter  │ ✗ (mỗi iter   │
+│                           │   VU tồn tại │   là độc lập)│   là độc lập)  │
+│                           │   qua iter)  │              │                │
+├──────────────────────────┼──────────────┼──────────────┼────────────────┤
+│ Cùng user qua N thao tác  │ ✓ (N iter =  │ ✗ (không có  │ ✗ (không có   │
+│                           │   lifecycle) │   lifecycle) │   lifecycle)  │
+├──────────────────────────┼──────────────┼──────────────┼────────────────┤
+│ Tạo race condition        │ ✓ (dùng     │ ✗ (không     │ ✗ (không      │
+│ (concurrent refresh)      │   batch)    │   kiểm soát  │   kiểm soát   │
+│                           │             │   được user) │   được user)  │
+├──────────────────────────┼──────────────┼──────────────┼────────────────┤
+│ Đo throughput             │ ✗ (iter cố  │ ✓ (đo        │ ✓ (đo chính   │
+│                           │   định, ko  │   latency)   │   xác rate)   │
+│                           │   quan tâm) │              │                │
+└──────────────────────────┴──────────────┴──────────────┴────────────────┘
+
+→ Mỗi executor có 1 MỤC ĐÍCH RIÊNG. Không ai "tốt hơn" ai — chỉ là
+  "đúng tool cho đúng việc".
+```
+
 ### Yêu cầu (b): CHẠY ĐỦ ITER ĐỂ TOKEN EXPIRE + REFRESH
 
 **Ý nghĩa**: Phải chạy đủ số thao tác để token thật sự expire, rồi verify

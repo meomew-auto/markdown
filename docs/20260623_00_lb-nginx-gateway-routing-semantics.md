@@ -72,12 +72,12 @@ status 200 without X-LB-Failover in case 06 = chưa chứng minh failover
 ## 5. Kết quả validation hiện tại
 
 - `lb-app`: pass 2/2.
-- `full-no-cdn` routing/inspect: pass.
-- `full-no-cdn` default runtime: fail ở case 04/05 do `/api/sim/products` trả unexpected 429 dưới traffic mặc định.
-- `full-no-cdn` tuned correctness run: pass 03-12 khi giảm tải case 04/05.
-- Cases 06-12 pass với semantics riêng: expected 429 ở case 07, expected 504 ở case 12.
+- `full-no-cdn` health/routing/inspect: pass.
+- `full-no-cdn` default runtime sau fix: pass 10/10 cho cases 03-12.
+- Case 04/05 từng fail vì `/api/sim/products` trả unexpected 429 dưới traffic mặc định; đã recheck lại và verify fixed.
+- Cases 07/12 vẫn có non-2xx expected theo đúng semantics riêng: expected 429 ở case 07, expected 504 ở case 12.
 
-Điểm cần BE/test-harness xem: case 04/05 đang là correctness cases nhưng default traffic shape đủ cao để chạm pressure/rate-limit của `products_list`. Nên giảm default load, nâng/disable limit cho correctness profile, hoặc tách pressure mode riêng.
+Kết luận hiện tại: LB/Gateway layer đã xanh với default runner ở cả hai profile (`lb-app` và `full-no-cdn`).
 
 ## 6. Chart reading
 

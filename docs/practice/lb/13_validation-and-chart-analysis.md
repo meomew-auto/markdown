@@ -94,14 +94,14 @@ $env:LB_DISTRIBUTION_ITERATIONS = "60"
 $env:MIN_LB_INSTANCES = "2"
 
 # Case 04 (origin cacheable read)
-$env:LB_CACHEABLE_WARMUP_VUS = "6"       # default; giảm còn 1 cho tuned run
-$env:LB_CACHEABLE_MEASUREMENT_VUS = "16" # default; giảm còn 2 cho tuned run
-$env:LB_CACHEABLE_WARMUP_DURATION = "20s" # default; giảm còn 5s cho tuned run
+$env:LB_CACHEABLE_WARMUP_VUS = "6"
+$env:LB_CACHEABLE_MEASUREMENT_VUS = "16"
+$env:LB_CACHEABLE_WARMUP_DURATION = "20s"
 $env:LB_CACHEABLE_MEASUREMENT_DURATION = "30s"
 
 # Case 05 (origin service mix)
-$env:LB_MIX_VUS = "12"       # default; giảm còn 2 cho tuned run
-$env:LB_MIX_DURATION = "45s" # default; giảm còn 10s cho tuned run
+$env:LB_MIX_VUS = "12"
+$env:LB_MIX_DURATION = "45s"
 
 # Case 07 (pressure)
 $env:LB_PRESSURE_RATE = "30"
@@ -133,17 +133,11 @@ $env:LB_TIMEOUT_RATE = "8"
 ./scripts/run-lb-capabilities.ps1 -Profile full-no-cdn -InspectOnly
 ./scripts/run-lb-capabilities.ps1 -Profile full-no-cdn
 
-# Targeted diagnosis / tuned run cho case 04/05
+# Targeted diagnosis nếu cần chạy riêng case 04/05
 ./scripts/run-lb-capabilities.ps1 -Profile full-no-cdn -Scenarios 04-origin-cacheable-read
 ./scripts/run-lb-capabilities.ps1 -Profile full-no-cdn -Scenarios 05-origin-service-mix
 
-# Tuned env cho 04/05
-$env:LB_CACHEABLE_WARMUP_VUS = "1"
-$env:LB_CACHEABLE_MEASUREMENT_VUS = "2"
-$env:LB_CACHEABLE_WARMUP_DURATION = "5s"
-$env:LB_CACHEABLE_MEASUREMENT_DURATION = "10s"
-$env:LB_MIX_VUS = "2"
-$env:LB_MIX_DURATION = "10s"
+# Recheck sau fix: default full-no-cdn, không dùng tuned env
 ./scripts/run-lb-capabilities.ps1 -Profile full-no-cdn
 ```
 
@@ -342,8 +336,8 @@ Nếu không có tagging, aggregate metric sẽ bị trộn lẫn và không th�
 | 2 | 02 App distribution | Thấp | Cần thấy nhiều `instance_id`. Chỉ cần `ScaleApp 2` và sample đủ. |
 | 3 | 03 Domain boundaries | Trung bình thấp | 6 service boundaries, nhưng mỗi cái chỉ cần đúng upstream. |
 | 4 | 06 Retry/failover | Trung bình thấp | Chỉ 1 request, nhưng cần header failover. |
-| 5 | 04 Origin cacheable read | Trung bình | Cần sustained traffic, nhưng dễ đụng rate limit. Cần tuned env. |
-| 6 | 05 Origin service mix | Trung bình | Production-like mix, nhiều endpoint, dễ đụng rate limit như case 04. |
+| 5 | 04 Origin cacheable read | Trung bình | Cần sustained traffic; trước đây từng đụng rate limit nhưng default run sau fix đã pass. |
+| 6 | 05 Origin service mix | Trung bình | Production-like mix, nhiều endpoint; default run sau fix đã pass 0% HTTP failed. |
 | 7 | 08 Weighted canary | Trung bình | Forced channels + weighted sample; cần hiểu dải thống kê. |
 | 8 | 12 Slow origin timeout | Trung bình cao | `http_req_failed=100%` dễ gây hiểu nhầm; cần đọc custom counter. |
 | 9 | 07 Rate/pressure | Cao | `http_req_failed=65%` dễ gây hiểu nhầm; cần phân loại expected 429. |
@@ -391,19 +385,18 @@ Cách tránh:
   - Verify body role = "stable" (không phải "faulty").
 ```
 
-**Dễ false negative nhất: Case 04/05 (Origin cacheable read / Service mix -- default run)**
+**Historical false negative: Case 04/05 trước fix**
 
 ```text
-Tại sao:
-  - Default load cao gây 429 trên products_list.
-  - http_req_failed cao -> nhìn như bug.
+Trước fix:
+  - Default load gây 429 trên products_list.
+  - http_req_failed cao -> nhìn như route bug.
   - Nhưng routing vẫn đúng: X-Upstream-Service=products-service.
   - False negative: kết luận "LB route sai" trong khi thực tế là contract mismatch.
 
-Cách tránh:
-  - Kiểm tra X-Upstream-Service trên cả request failed.
-  - Dùng tuned env để isolate correctness khỏi pressure.
-  - Đọc pattern: nếu chỉ products_list fail, các endpoint khác vẫn pass -> không phải route bug toàn cục.
+Sau fix:
+  - Default full-no-cdn pass case 04/05 với http_req_failed 0%.
+  - Pattern này được giữ lại như bài học debug: nếu gặp lại 429, kiểm tra upstream header trước khi kết luận route bug.
 ```
 
 **Dễ false negative thứ hai: Case 12 (Slow origin timeout)**
@@ -426,8 +419,8 @@ Cách tránh:
 | 01 | Không (app) | Không | Không | Không | 0.00% |
 | 02 | Không (app) | Cần `ScaleApp 2` | Không | Không | 0.00% |
 | 03 | Có (6 services) | Không | Không | Không | 0.00% |
-| 04 | Có (products) | Rate limit state | Không | Có (rate limit từ case trước) | 0.00% (expected); >0 nếu default load |
-| 05 | Có (6 services) | Rate limit state | Không | Có (rate limit từ case trước) | 0.00% (expected); >0 nếu default load |
+| 04 | Có (products) | Sustained products traffic | Không | Có thể bị ảnh hưởng nếu rate-limit window bẩn | 0.00% expected; default run sau fix đạt 0.00% |
+| 05 | Có (6 services) | Production-like service mix | Không | Có thể bị ảnh hưởng nếu rate-limit window bẩn | 0.00% expected; default run sau fix đạt 0.00% |
 | 06 | Có (lb-stable-origin) | Faulty origin available | Không | Không | 0.00% |
 | 07 | Có (lb-pressure-backend) | Pressure config | Có (rate limit window) | Không đáng kể | ~65% (expected) |
 | 08 | Có (lb-canary-backend) | Canary split config | Không | Không | 0.00% |
@@ -522,21 +515,23 @@ Cách đọc đúng: filter p95 theo tag endpoint.
   - http_req_duration{endpoint:lb_isolation_slow_demo} -> p95 ~616ms
 ```
 
-### 7.7. Case 04/05 default fail: contract mismatch, không phải route bug
+### 7.7. Case 04/05: historical default failure đã được fix
 
 ```text
-Bản chất: Default VU/duration của case 04/05 quá cao cho products path rate limit.
-Hậu quả: products_list trả 429, kéo check fail.
-Nhưng:   429 response vẫn có X-Upstream-Service=products-service -> route đúng.
+Trước fix:
+  Default VU/duration của case 04/05 làm products_list trả 429.
+  429 response vẫn có X-Upstream-Service=products-service -> route đúng.
+  Kết luận cũ: contract mismatch giữa correctness case và pressure/rate-limit behavior.
 
-Đây là contract mismatch giữa:
-  - Case assertion: "tất cả request phải 200" (correctness contract)
-  - Thực tế runtime: "products path có rate limit, trả 429 khi quá tải" (protection contract)
+Sau fix:
+  Chạy lại default full-no-cdn, không dùng tuned env.
+  Case 04: checks 6535/6535, http_req_failed 0.00%.
+  Case 05: checks 4625/4625, http_req_failed 0.00%.
+  Full profile 03-12: exit 0, pass 10/10.
 
-Giải pháp:
-  1. Giảm default env để case 04/05 không đụng rate limit (tuned run).
-  2. Hoặc: case 04/05 encode expected 429 như case 07.
-  3. Hoặc: split correctness mode và pressure mode riêng.
+Kết luận hiện tại:
+  Issue 04/05 đã verify fixed.
+  Không còn cần tuned env để pass correctness suite mặc định.
 ```
 
 ---
@@ -607,7 +602,7 @@ LB / Gateway validation:
 
 | Chart | Case liên quan | Cách đọc |
 | --- | --- | --- |
-| Checks rate over time | Tất cả | Phải 100% trừ khi đang diagnose failure; drop ở 04/05 default cho thấy contract mismatch. |
+| Checks rate over time | Tất cả | Phải 100% trừ khi đang diagnose failure; sau fix 04/05 default cũng phải giữ 100%. |
 | HTTP failed rate | 04, 05, 07, 12 | 04/05 expected 0%; 07 expected cao do 429; 12 expected 100% do 504. |
 | HTTP status codes | 07, 12 | 07 phải chỉ 200/429; 12 phải 504; status khác là bug. |
 | HTTP duration by endpoint | 11, 12 | Fast lane p95 thấp, slow lane p95 cao; timeout p95 gần 150ms. |
@@ -626,29 +621,31 @@ LB / Gateway validation:
 | Canary chart với sample nhỏ | Cần dải min/max, không đòi đúng 15.00%. |
 | Hit ratio | Không liên quan đến LB validation (không có cache layer). |
 
-### 9.3. Cách đọc failure default 04/05 trên chart
+### 9.3. Cách đọc chart của issue cũ 04/05 và trạng thái sau fix
 
-Pattern expected khi case 04/05 fail do rate-limit:
+Pattern cũ khi case 04/05 fail do rate-limit:
 
 ```text
 checks rate drop khỏi 100%
 http_req_failed spike (22% case 04, 19% case 05)
 status chart xuất hiện 429 (không có trong expected)
 fail chỉ tập trung ở endpoint products_list
-các endpoint khác (home, users, cart...) vẫn 200
+các endpoint khác vẫn 200
 X-Upstream-Service của request failed vẫn là products-service
 ```
 
-**Kết luận đúng**: Không phải gateway route sai. Traffic correctness case đang đụng pressure policy của products path. Đây là contract mismatch, không phải LB bug.
+Kết luận cũ đúng: không phải gateway route sai; đó là contract mismatch giữa correctness case và pressure policy.
 
-**So sánh với chart của tuned run**:
+Pattern sau fix trong default run:
 
 ```text
-checks rate = 100% từ đầu đến cuối
-http_req_failed = 0% cho cả case 04 và 05
-status chart chỉ có 200
-Tất cả endpoint pass
+case 04 checks = 6535/6535, http_req_failed = 0.00%
+case 05 checks = 4625/4625, http_req_failed = 0.00%
+status chart chỉ có expected success cho 04/05
+không còn 429 unexpected trên products_list
 ```
+
+Kết luận hiện tại: fix đã được verify bằng default full-no-cdn suite, không cần tuned env để pass 04/05.
 
 ### 9.4. Cách export evidence
 
@@ -770,7 +767,7 @@ Dựa trên kinh nghiệm chạy thực tế:
 
 | Loại lỗi | Case thường gặp | Tần suất | Mức độ nghiêm trọng |
 | --- | --- | --- | --- |
-| Contract mismatch (rate limit) | 04, 05 (default run) | Cao | Trung bình -- fix bằng tuned env |
+| Historical contract mismatch (rate limit) | 04, 05 trước fix | Đã fix | Giữ làm bài học debug; default run hiện đã pass |
 | Sai TargetLayer (X-Cache present) | Tất cả `full-no-cdn` | Trung bình (first run) | Cao -- toàn bộ proof bị vô hiệu |
 | Route config sai | 03, 05 | Thấp | Cao -- request đến sai service |
 | Stack chưa sẵn sàng | Tất cả | Trung bình (first run) | Thấp -- đợi stack healthy là xong |
@@ -780,11 +777,11 @@ Dựa trên kinh nghiệm chạy thực tế:
 
 ---
 
-## 11. Case 04/05 contract mismatch analysis
+## 11. Historical case 04/05 contract mismatch analysis
 
-### 11.1. Vấn đề
+### 11.1. Vấn đề cũ và trạng thái hiện tại
 
-Default case 04 (`04-origin-cacheable-read.js`) và case 05 (`05-origin-service-mix.js`) không pass trong profile `full-no-cdn` với cấu hình mặc định.
+Trước fix, default case 04 (`04-origin-cacheable-read.js`) và case 05 (`05-origin-service-mix.js`) không pass trong profile `full-no-cdn` với cấu hình mặc định. Sau fix, chạy lại default profile `full-no-cdn` đã pass 10/10; case 04/05 hiện xanh.
 
 **Evidence từ default run**:
 
