@@ -231,26 +231,86 @@ Nhưng:
 
 **Ý nghĩa**: 80 iteration phải map sang 80 SKU KHÁC NHAU. Nếu map sai, dù count = 80, coverage vẫn thiếu.
 
-**Bug identity mapping là gì?**
+##### Trước hết: 1 job = 2 HTTP requests cho 1 SKU
+
+Mỗi iteration audit **1 SKU** bằng cách gọi **2 HTTP requests liên tiếp**:
+
+```js
+// 1 iter = audit 1 SKU
+export default function () {
+  // Lấy SKU cho iter này (identity mapping — xem bên dưới)
+  const sku = pickSkuForThisIteration();
+
+  // Request 1: gọi LIST page — kiểm tra SKU có trong catalog không
+  const listRes = http.get(`/api/products?page=${page}&size=50`);
+  check(listRes, { "list 200": (r) => r.status === 200 });
+  // Tìm SKU trong response JSON...
+
+  // Request 2: gọi DETAIL page — kiểm tra chi tiết SKU có đúng không
+  const detailRes = http.get(`/api/products/${sku}`);
+  check(detailRes, { "detail 200": (r) => r.status === 200 });
+  check(detailRes, { "detail has name": (r) => r.json("name") !== "" });
+  check(detailRes, { "detail has price": (r) => r.json("price") > 0 });
+}
+```
 
 ```text
-Trường hợp ĐÚNG — identity từ iterationInTest:
-  iter #0  -> SKU #0  (audit list + detail)
-  iter #1  -> SKU #1
-  iter #2  -> SKU #2
-  ...
-  iter #79 -> SKU #79
-  → 80 SKU unique được audit ✓
+1 iteration = list request + detail request = audit xong 1 SKU
+80 iterations = 80×2 = 160 HTTP requests = audit đủ 80 SKU
+```
 
-Trường hợp SAI — identity từ __VU:
-  VU=1: __VU=1 -> SKU=1 (lặp lại 15 lần)
-  VU=2: __VU=2 -> SKU=2 (lặp lại 12 lần)
-  ...
-  VU=8: __VU=8 -> SKU=8 (lặp lại 8 lần)
+→ Đây là lý do case này cần **2 HTTP requests trong 1 iter**: vì audit 1 SKU
+cần kiểm cả 2 nơi (có trong list không? + detail có đúng không?). Thiếu 1
+trong 2 là audit không hoàn chỉnh.
+
+##### Identity mapping: làm sao để iter #0 luôn map vào SKU #0?
+
+**Vấn đề**: Có mảng `SKUS = [SKU_0, SKU_1, ..., SKU_79]`. Mỗi iteration
+phải pick ĐÚNG 1 SKU từ mảng này để audit. **Pick theo cái gì?**
+
+```text
+Có 2 cách pick — 1 ĐÚNG, 1 SAI:
+
+Cách ĐÚNG — identity từ iterationInTest (global counter):
+  ┌──────────┬─────────────────────┬──────────────────────────┐
+  │ Iter #   │ iterationInTest     │ SKU được audit           │
+  ├──────────┼─────────────────────┼──────────────────────────┤
+  │ iter #0  │ 0                   │ SKUS[0] → SKU #0         │
+  │ iter #1  │ 1                   │ SKUS[1] → SKU #1         │
+  │ iter #2  │ 2                   │ SKUS[2] → SKU #2         │
+  │ ...      │ ...                 │ ...                      │
+  │ iter #79 │ 79                  │ SKUS[79] → SKU #79       │
+  └──────────┴─────────────────────┴──────────────────────────┘
+  → 80 iteration = 80 SKU KHÁC NHAU ✓
+  → Coverage = 80/80 = 100%
+
+  Code:
+    const skuIndex = exec.scenario.iterationInTest % SKUS.length;
+    const sku = SKUS[skuIndex];
+
+Cách SAI — identity từ __VU (per-VU counter):
+  ┌──────────┬──────────┬──────────────────────────┐
+  │ VU       │ __VU     │ SKU được audit           │
+  ├──────────┼──────────┼──────────────────────────┤
+  │ VU #1    │ 1        │ SKUS[1] → luôn SKU #1    │
+  │ VU #2    │ 2        │ SKUS[2] → luôn SKU #2    │
+  │ ...      │ ...      │ ...                      │
+  │ VU #8    │ 8        │ SKUS[8] → luôn SKU #8    │
+  └──────────┴──────────┴──────────────────────────┘
+  → VU=1 audit SKU#1 lặp 15 lần, VU=2 audit SKU#2 lặp 12 lần, ...
   → Chỉ 8 SKU được audit (lặp đi lặp lại)
   → 72 SKU còn lại KHÔNG BAO GIỜ được audit
-  → Dù iterations = 80, coverage thật chỉ = 8/80 = 10%
+  → Coverage thật = 8/80 = 10%
+
+  Code (SAI — đừng dùng):
+    const skuIndex = __VU % SKUS.length;   // ← SAI!
+    const sku = SKUS[skuIndex];
 ```
+
+**Tóm lại**: Identity mapping = "chọn SKU nào cho iteration này?". Phải dùng
+global counter (`iterationInTest`) chứ không dùng per-VU counter (`__VU`).
+Đây là bug ĐỘC LẬP với executor — dùng executor nào cũng có thể mắc nếu
+chọn sai counter.
 
 **3 nguyên nhân kỹ thuật của bug identity mapping**:
 
@@ -555,6 +615,87 @@ Không ai fail test vì VU=4 chỉ làm 2 job.
 | Khi nào fail vì phân phối? | Không bao giờ | Nếu VU nào không đủ N iter |
 
 **Cách phát hiện**: nếu learner fail test vì "VU distribution không đều", giải thích lại mental model worker pool. Invariant là `sum(iterations_per_vu) == JOBS`, không phải `iterations_per_vu == JOBS / vus`.
+
+---
+
+##### Cách fix chuẩn: code mẫu cho shared-iterations
+
+Tổng kết fix cho cả 4 nguyên nhân trên — đây là pattern CHUẨN để identity mapping
+luôn đúng với shared-iterations:
+
+```js
+import exec from "k6/execution";
+import { sleep, check } from "k6";
+import http from "k6/http";
+
+// ─── Danh sách SKU cố định ─────────────────────────────────
+const SKUS = [
+  "SKU-001", "SKU-002", "SKU-003", /* ... */ "SKU-080"
+];
+const TOTAL_SKUS = SKUS.length;  // 80
+
+export const options = {
+  scenarios: {
+    catalog_audit: {
+      executor: "shared-iterations",
+      vus: 8,
+      iterations: TOTAL_SKUS,     // = 80 — khớp số SKU
+      maxDuration: "2m",          // đủ rộng để không bị cắt
+    },
+  },
+};
+
+export default function () {
+  // ─── FIX: DÙNG iterationInTest, KHÔNG dùng __VU ──────────
+  const skuIndex = exec.scenario.iterationInTest;  // 0, 1, 2, ..., 79
+  const sku = SKUS[skuIndex];
+
+  // ─── 1 iter = audit 1 SKU: list + detail ─────────────────
+  // Request 1: list page
+  const listRes = http.get(
+    `http://localhost:3100/api/sim/products?sku_prefix=${sku}&size=20`
+  );
+  check(listRes, {
+    "list returns 200": (r) => r.status === 200,
+  });
+
+  // Request 2: detail page
+  const detailRes = http.get(
+    `http://localhost:3100/api/sim/products/${sku}?delay=0.01`
+  );
+  check(detailRes, {
+    "detail returns 200": (r) => r.status === 200,
+  });
+
+  sleep(0.1);
+}
+```
+
+**Vì sao pattern này fix được tất cả 4 nguyên nhân?**
+
+```text
+Nguyên nhân 1 (coverage gap):
+  → iterations = TOTAL_SKUS → luôn audit ĐỦ, không dư không thiếu
+  → Không phụ thuộc duration hay latency
+
+Nguyên nhân 2 (wrong identity mapping):
+  → Dùng exec.scenario.iterationInTest (global counter 0..79)
+  → iter #0 → SKUS[0], iter #1 → SKUS[1], ...
+  → Mỗi SKU được audit đúng 1 lần, không lặp, không sót
+
+Nguyên nhân 3 (list/detail asymmetry):
+  → 2 HTTP requests trong cùng 1 iter, tag riêng operation
+  → check() riêng cho từng request → biết ngay list fail hay detail fail
+  → Không gộp chung http_req_failed
+
+Nguyên nhân 4 (worker skew):
+  → Không cần fix — đây là hành vi MONG ĐỢI của shared-iterations
+  → VU nhanh làm nhiều, VU chậm làm ít → tổng vẫn đủ 80
+  → Chỉ cần sum(iter_per_vu) = 80, không cần mỗi VU = 10
+```
+
+> **1 dòng để nhớ**: `exec.scenario.iterationInTest` — global job index, dùng
+> nó làm index vào mảng data. KHÔNG dùng `__VU`.
 
 ---
 
