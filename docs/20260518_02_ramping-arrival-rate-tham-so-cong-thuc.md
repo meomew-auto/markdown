@@ -1305,17 +1305,41 @@ Rate bắt đầu từ 0 → diện tích tích lũy ban đầu = 0, cần thờ
 Mini ví dụ: `startRate=0, stage 1 ramp 0 → 4/s trong 2s`:
 
 ```text
-rate(t) = 0 + (4-0)/2 × t = 2t
+Bước 1 — Xác định rate(t):
+  lambda_prev = 0, lambda_next = 4, duration = 2s
+  slope = (4 - 0) / 2 = 2
+  rate(t) = 0 + 2t = 2t
 
-Diện tích tích lũy đến thời điểm t:
-  S(t) = ∫ rate(t) dt = ∫ 2t dt = t²
+Bước 2 — Tính S(t) = ∫ rate(t) dt:
+  S(t) = ∫ 2t dt = t²
 
-  t=0s   : S(0) = 0² = 0           → chưa đủ 1, chưa fire
-  t=0.5s : S(0.5) = 0.25            → chưa đủ 1
-  t=1.0s : S(1.0) = 1.0             → fire slot đầu tiên tại t=1.0s
-  t=√2≈1.414s: S = 2.0             → fire slot thứ 2
-  t=√3≈1.732s: S = 3.0             → fire slot thứ 3
-  t=2.0s : S(2.0) = 4.0             → fire slot thứ 4
+  Đây là diện tích dưới đường rate(t) từ 0 đến t.
+  S(t) cho biết "đáng lẽ đã fire bao nhiêu slot đến lúc t".
+
+Bước 3 — Giải phương trình S(t) = k cho từng slot:
+  t² = k  →  t = √k  (chỉ lấy nghiệm dương)
+
+  k=1: t = √1 = 1.000s  → slot #1 fire tại t=1.000s
+  k=2: t = √2 ≈ 1.414s  → slot #2 fire tại t=1.414s
+  k=3: t = √3 ≈ 1.732s  → slot #3 fire tại t=1.732s
+  k=4: t = √4 = 2.000s  → slot #4 fire tại t=2.000s
+
+  (k=0 không fire vì t=0, S(0)=0, chưa có slot nào)
+
+Bước 4 — Kiểm tra lại bằng cách thế ngược:
+  S(1.000) = 1.0² = 1.0 ✓
+  S(1.414) = 1.414² = 2.0 ✓
+  S(1.732) = 1.732² = 3.0 ✓
+  S(2.000) = 2.0² = 4.0 ✓
+```
+
+Tóm tắt timeline:
+```text
+  t=0s     : S=0    → chưa fire
+  t=1.000s : S=1.0  → fire slot #1
+  t=1.414s : S=2.0  → fire slot #2
+  t=1.732s : S=3.0  → fire slot #3
+  t=2.000s : S=4.0  → fire slot #4
 ```
 
 Đặc điểm khi `startRate=0`:
@@ -1331,19 +1355,49 @@ Diện tích tích lũy đến thời điểm t:
 Rate bắt đầu > 0 → diện tích tích lũy NGAY từ t=0, slot đầu đến sớm hơn nhiều.
 
 Ví dụ 1: `startRate=2/s, stage 1 ramp 2 → 4/s trong 2s`:
-```text
-rate(t) = 2 + t   (slope = 1)
 
-Diện tích tích lũy:
+```text
+Bước 1 — Xác định rate(t):
+  lambda_prev = 2, lambda_next = 4, duration = 2s
+  slope = (4 - 2) / 2 = 1
+  rate(t) = 2 + 1t = 2 + t
+
+Bước 2 — Tính S(t) = ∫ rate(t) dt:
   S(t) = ∫ (2 + t) dt = 2t + t²/2
 
-  t=0s   : S(0) = 0                     → chưa đủ 1
-  t=0.45s: S(0.45) ≈ 0.9 + 0.1 = 1.0   → fire slot đầu tại t≈0.45s
-  t=0.83s: S(0.83) ≈ 1.66 + 0.34 = 2.0 → fire slot thứ 2
-  t=1.16s: S ≈ 2.32 + 0.67 = 3.0       → fire slot thứ 3
-  t=1.46s: S ≈ 2.92 + 1.07 = 4.0       → fire slot thứ 4
-  t=1.74s: S ≈ 3.48 + 1.51 = 5.0       → fire slot thứ 5
-  t=2.0s : S = 4 + 2 = 6.0              → fire slot thứ 6
+Bước 3 — Giải phương trình S(t) = k cho từng slot:
+  2t + t²/2 = k
+  → t² + 4t - 2k = 0  (nhân 2 vế cho 2)
+  → t = [-4 + √(16 + 8k)] / 2   (công thức nghiệm, chỉ lấy nghiệm dương)
+  → t = -2 + √(4 + 2k)
+
+  Tính từng k:
+  ┌─────┬────────────────────┬──────────────────┬──────────────────┐
+  │  k  │ phép tính          │ t (chính xác)    │ t (xấp xỉ)       │
+  ├─────┼────────────────────┼──────────────────┼──────────────────┤
+  │  1  │ -2 + √(4+2)        │ -2 + √6          │ -2+2.449 = 0.449s│
+  │  2  │ -2 + √(4+4)        │ -2 + √8          │ -2+2.828 = 0.828s│
+  │  3  │ -2 + √(4+6)        │ -2 + √10         │ -2+3.162 = 1.162s│
+  │  4  │ -2 + √(4+8)        │ -2 + √12         │ -2+3.464 = 1.464s│
+  │  5  │ -2 + √(4+10)       │ -2 + √14         │ -2+3.742 = 1.742s│
+  │  6  │ -2 + √(4+12)       │ -2 + √16         │ -2+4 = 2.000s    │
+  └─────┴────────────────────┴──────────────────┴──────────────────┘
+
+Bước 4 — Kiểm tra lại bằng cách thế ngược:
+  k=1: S(0.449) = 2×0.449 + 0.449²/2 = 0.898 + 0.101 = 0.999 ≈ 1 ✓
+  k=2: S(0.828) = 2×0.828 + 0.828²/2 = 1.656 + 0.343 = 1.999 ≈ 2 ✓
+  k=6: S(2.000) = 2×2 + 2²/2 = 4 + 2 = 6.000 ✓
+```
+
+Timeline các slot:
+```text
+  t=0s     : S=0       → chưa fire
+  t≈0.449s : S≈1.0     → fire slot #1
+  t≈0.828s : S≈2.0     → fire slot #2
+  t≈1.162s : S≈3.0     → fire slot #3
+  t≈1.464s : S≈4.0     → fire slot #4
+  t≈1.742s : S≈5.0     → fire slot #5
+  t=2.000s : S=6.0     → fire slot #6
 ```
 
 So sánh với case A (startRate=0):
