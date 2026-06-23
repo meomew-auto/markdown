@@ -5747,6 +5747,48 @@ required_vus = ceil(λ_peak × iter_time) × 1.2
 
 Không có rate từng stage → không biết đỉnh ở đâu → đặt VU sai.
 
+**── Demo: sizing đúng và sai ──**
+
+Dùng cùng config 3 stage, `sleep(0.3)`:
+
+```text
+Case A — ĐỦ VU (preAllocatedVUs=6, maxVUs=6):
+  λ_peak = 10/s, W=0.3s → required = ceil(10×0.3)×1.2 = ceil(3)×1.2 = 4 VU
+  Đặt 6 > 4 → DƯ SỨC
+  Output: iterations=49, dropped_iterations=0 ✓
+
+Case B — THIẾU VU (preAllocatedVUs=2, maxVUs=2):
+  capacity = 2/0.3 = 6.67/s < λ_peak=10/s → drop_rate ≈ 3.33/s
+  Output: iterations≈35, dropped_iterations≈14
+  → 14/49 = 29% slot bị drop (tập trung ở stage 1)
+
+Case C — SÁT BIÊN (preAllocatedVUs=3, maxVUs=3):
+  capacity = 3/0.3 = 10/s = λ_peak → vừa đủ trên lý thuyết
+  Nhưng thực tế W > 0.3s (có overhead) → capacity < 10/s → drop vài slot
+  Output: iterations≈46, dropped_iterations≈3
+  → 3/49 = 6% drop — chấp nhận được nếu test không đòi hỏi chính xác tuyệt đối
+```
+
+**── Vì sao dùng λ_peak chứ không phải λ_avg? ──**
+
+```text
+λ_avg = 49/9 = 5.44/s — trung bình cả timeline
+
+Nếu sizing theo λ_avg:
+  required = ceil(5.44 × 0.3) × 1.2 = ceil(1.63) × 1.2 = 3 VU
+  → Chỉ cần 3 VU! Nhưng ở stage 1, rate=10/s, cần ít nhất 3 VU
+    (capacity=3/0.3=10/s) — SÁT BIÊN
+  → Nếu W thực tế = 0.35s → capacity=8.57/s < 10/s → DROP
+
+Sizing theo λ_peak:
+  required = ceil(10 × 0.3) × 1.2 = 4 VU
+  → Đủ cho đỉnh, tự động đủ cho mọi thời điểm khác
+  → Luôn an toàn hơn
+
+QUY TẮC: Luôn sizing theo λ_peak, không theo λ_avg.
+         λ_avg chỉ để đối chiếu sau test, không để sizing.
+```
+
 **(2) Tính tổng slot dự kiến (`N_sched`)**
 
 ```text
@@ -5866,6 +5908,76 @@ Nếu drop ở stage 0/2 (rate thấp):
   -> Bất thường, kiểm tra biên slot hoặc spawn unplanned chậm
 ```
 
+**── Cách xác định stage nào là đỉnh ──**
+
+Có 2 loại "đỉnh" cần phân biệt:
+
+```text
+Đỉnh RATE = stage có rate cao nhất → dễ DROP nhất
+           = max(rate_đầu, rate_cuối của mọi stage)
+
+Đỉnh DENSITY = stage có mật độ slot dày nhất → dễ QUÁ TẢI SERVER
+             = stage có gap nhỏ nhất
+```
+
+Với config demo:
+
+```text
+┌────────┬──────────────┬──────────────────┬─────────────────────┐
+│ Stage  │ rate_đầu→cuối│ Đỉnh rate?       │ Đỉnh density?       │
+├────────┼──────────────┼──────────────────┼─────────────────────┤
+│ 0      │ 0 → 10/s     │ cuối stage (10/s)│ cuối stage (gap 100) │
+│ 1      │ 10 → 4/s     │ ĐẦU stage (10/s) │ ĐẦU stage (gap 100)  │
+│ 2      │ 4 → 0/s      │ đầu stage (4/s)  │ không đáng kể        │
+└────────┴──────────────┴──────────────────┴─────────────────────┘
+
+→ Đỉnh rate = 10/s, nằm ở BIÊN GIỮA stage 0 và 1
+→ Khoảng t=1.8s đến t=2.2s: rate gần 10/s, slot dày nhất
+→ ĐÂY là vùng nguy hiểm nhất — nếu có drop, gần như chắc chắn ở đây
+```
+
+**── Chiến lược FIX theo vị trí đỉnh ──**
+
+```text
+Đỉnh ở ĐẦU timeline (stage 0):
+  → VU chưa kịp "nóng máy", unplanned VU chưa kịp spawn
+  → Fix: tăng preAllocatedVUs (có sẵn từ đầu)
+         HOẶC tăng startRate (để VU bắt đầu làm việc ngay)
+
+Đỉnh ở GIỮA timeline (stage 1):
+  → Đây là vùng steady-state, VU đã hoạt động ổn định
+  → Fix: tăng preAllocatedVUs (tổng thể)
+         HOẶC giảm target của stage đó
+         HOẶC tăng maxVUs (cho phép spawn thêm)
+
+Đỉnh ở CUỐI timeline (stage cuối):
+  → Hiếm gặp, thường là ramp-up muộn
+  → Fix: như đỉnh giữa
+
+Đỉnh TRẢI DÀI nhiều stage (hold dài):
+  → Rate không đổi, nhưng kéo dài → tích lũy mệt mỏi
+  → Fix: kiểm tra memory leak, connection pool cạn
+         HOẶC giảm duration của stage hold
+```
+
+**── Demo: phát hiện vùng drop từ log ──**
+
+```text
+Config: preAllocatedVUs=3 (thiếu), stage 0→10/s trong 2s, hold 10/s 5s
+
+Log:
+  t=1.8s  iter#8  start  vu=1  (rate~9/s, OK)
+  t=1.9s  iter#9  start  vu=2  (rate~9.5/s, OK)
+  t=2.0s  iter#10 DROP          (rate=10/s, VU=3 đang bận hết)
+  t=2.1s  iter#11 DROP          (rate=10/s, VU vẫn bận)
+  t=2.2s  iter#12 start vu=1    (VU#1 vừa rảnh, nhận slot)
+  t=2.3s  iter#13 start vu=2    (VU#2 vừa rảnh)
+
+→ Drop bắt đầu từ slot #10, ngay khi rate chạm 10/s
+→ VU pool (M=3) không đủ → cần M ≥ ceil(10×0.3) = 3 (sát biên)
+→ Tăng lên M=5: capacity=16.7/s → dư sức, hết drop
+```
+
 **(4) Tính chi phí test (cloud k6)**
 
 ```text
@@ -5879,6 +5991,78 @@ Khi scenario lớn:
   -> dự trù budget trước khi chạy
 ```
 
+**── Cách tính VUh và iter count từ config ──**
+
+```text
+VUh (VU-giờ) = max_vus × T / 3600
+
+Với:
+  max_vus = max(actual vus quan sát được, thường ≤ maxVUs)
+  T       = tổng duration các stage (giây)
+
+Iter count = N_sched (tổng slot dự kiến từ (2))
+           = Σ d_i × (rate_đầu + rate_cuối) / 2
+```
+
+Ví dụ với config demo:
+
+```text
+max_vus dự kiến ≈ preAllocatedVUs = 6
+T = 2 + 5 + 2 = 9s
+
+VUh = 6 × 9 / 3600 = 0.015 VUh
+Iter count = 49
+
+→ Chi phí ≈ 0.015 × $price_per_VUh + 49 × $price_per_iter
+→ Với giá giả định $1/VUh + $0.001/iter ≈ $0.015 + $0.049 = $0.064
+```
+
+**── So sánh chi phí giữa các strategy ──**
+
+```text
+Strategy A — ÍT VU, CAO maxVUs (dựa vào unplanned):
+  preAllocatedVUs=3, maxVUs=12 → max thực tế ≈ 6
+  VUh = 6×9/3600 = 0.015 VUh
+  Iter = 49 (có thể drop vài slot nếu spawn chậm)
+  → Rẻ nhất, nhưng rủi ro drop đầu run
+
+Strategy B — ĐỦ VU, maxVUs = preAllocatedVUs:
+  preAllocatedVUs=8, maxVUs=8 (dư an toàn)
+  VUh = 8×9/3600 = 0.02 VUh
+  Iter = 49 (không drop)
+  → Đắt hơn 33%, nhưng an toàn tuyệt đối
+
+Strategy C — DƯ NHIỀU VU:
+  preAllocatedVUs=20, maxVUs=20 (quá dư)
+  VUh = 20×9/3600 = 0.05 VUh
+  Iter = 49
+  → Đắt hơn 233%, lãng phí
+
+→ Strategy B là cân bằng tốt nhất: an toàn + chi phí hợp lý
+```
+
+**── Dự trù cho test lớn ──**
+
+```text
+Test stress 1 giờ:
+  startRate=0, stages: [
+    { duration: "10m", target: 1000 },   // ramp-up chậm
+    { duration: "40m", target: 1000 },   // hold dài
+    { duration: "10m", target: 0 },      // ramp-down
+  ]
+
+T = 60 phút = 3600s
+N_sched ≈ 10×60×(0+1000)/2 + 40×60×1000 + 10×60×(1000+0)/2
+        = 300000 + 2400000 + 300000 = 3,000,000 iter
+
+max_vus = ceil(1000 × W) × 1.2 ≈ 1200 VU (nếu W=0.5s)
+VUh = 1200 × 3600 / 3600 = 1200 VUh
+
+→ Dự trù: 3M iter + 1200 VUh
+→ So với test nhỏ (49 iter, 0.015 VUh): LỚN HƠN 60,000 lần
+→ Cần kiểm tra quota cloud trước khi chạy
+```
+
 **(5) Đối chiếu mật độ slot theo thời gian khi đọc log**
 
 ```text
@@ -5889,6 +6073,113 @@ Stage 2 (rate 4→0):   slot ĐẦU thưa, CUỐI rất thưa (slot cuối ~t=8.
 => Đọc log debug biết "đang fire slot dày hay thưa"
 => Nếu http_req_duration tăng vọt khi slot dày
    -> server không chịu nổi rate đỉnh, cần tối ưu server
+```
+
+**── Cách tính mật độ slot (gap) tại từng thời điểm ──**
+
+Mật độ slot = khoảng cách thời gian giữa 2 slot liên tiếp. Có 2 cách tính:
+
+```text
+Cách 1 — ƯỚC LƯỢNG NHANH: gap ≈ 1 / rate(t)
+  Dùng slot_interval tức thời, đủ cho phân tích nhanh.
+  Sai số ~5% (vì rate thay đổi liên tục trong lúc chờ slot sau).
+
+Cách 2 — CHÍNH XÁC: gap = t_{k+1} - t_k, với S(t_k) = k
+  Giải phương trình bậc 2, cho thời điểm chính xác từng slot.
+  Dùng khi cần trace log chi tiết.
+```
+
+Áp vào 3 stage của demo:
+
+```text
+┌────────┬──────────┬──────────────┬──────────────┬──────────────────────┐
+│ Stage  │ Thời điểm│ rate(t)      │ gap ước lượng│ gap thực tế (chính   │
+│        │          │              │ = 1/rate     │  xác từ S(t)=k)      │
+├────────┼──────────┼──────────────┼──────────────┼──────────────────────┤
+│ 0      │ t=0.0s   │ 0/s          │ ∞            │ slot #1 tại t≈0.45s  │
+│        │ t=1.0s   │ 5/s          │ 200ms        │ ~200ms               │
+│        │ t=2.0s   │ 10/s         │ 100ms        │ ~100ms               │
+├────────┼──────────┼──────────────┼──────────────┼──────────────────────┤
+│ 1      │ t=2.0s   │ 10/s         │ 100ms        │ ~100ms (dày nhất)    │
+│        │ t=4.5s   │ 7/s          │ 143ms        │ ~140ms               │
+│        │ t=7.0s   │ 4/s          │ 250ms        │ ~250ms               │
+├────────┼──────────┼──────────────┼──────────────┼──────────────────────┤
+│ 2      │ t=7.0s   │ 4/s          │ 250ms        │ ~250ms               │
+│        │ t=8.0s   │ 2/s          │ 500ms        │ ~500ms               │
+│        │ t=9.0s   │ 0/s          │ ∞            │ slot cuối ~t=8.6s    │
+└────────┴──────────┴──────────────┴──────────────┴──────────────────────┘
+
+ĐỌC BẢNG:
+  - Stage 0: gap CO LẠI từ ∞ → 100ms (slot dày dần)
+  - Stage 1: gap GIÃN RA từ 100ms → 250ms (slot thưa dần)
+  - Stage 2: gap GIÃN TIẾP từ 250ms → ∞ (slot rất thưa rồi dừng)
+```
+
+**── Mật độ slot ảnh hưởng đến server như thế nào ──**
+
+```text
+Gap 100ms (dày):
+  → Server nhận request mới mỗi 100ms
+  → Nếu server cần 200ms để xử lý 1 request
+    → request chồng lấn: phải xử lý 2-3 request cùng lúc
+    → CPU cao, queue dài, latency tăng
+
+Gap 250ms (vừa):
+  → Server nhận request mới mỗi 250ms
+  → Nếu server cần 200ms → vừa kịp, ít chồng lấn
+  → CPU ổn định, latency thấp
+
+Gap 500ms (thưa):
+  → Server nhận request mới mỗi 500ms
+  → Server rảnh 300ms giữa các request
+  → CPU thấp, nhưng throughput cũng thấp
+```
+
+**── Trace log để xác nhận mật độ slot ──**
+
+Khi chạy với `--verbose`, k6 in log mỗi lần fire slot. Đọc log để xác nhận gap thực tế:
+
+```text
+time="2025-06-23T10:00:00.100Z" msg="Starting iteration" vu=1 iter=11
+time="2025-06-23T10:00:00.200Z" msg="Starting iteration" vu=2 iter=12
+time="2025-06-23T10:00:00.300Z" msg="Starting iteration" vu=3 iter=13
+...
+
+Đọc gap: iter#11→#12 = 200-100 = 100ms → đang ở vùng rate đỉnh 10/s
+         iter#12→#13 = 300-200 = 100ms → gap đều → rate ổn định
+         ...
+         iter#44→#45 = 500-750 = 250ms → gap thưa → rate đã giảm về 4/s
+```
+
+Nếu thấy gap THAY ĐỔI trong lúc lẽ ra phải đều → bất thường:
+
+```text
+Gap đột ngột TĂNG (vd 100ms → 500ms):
+  → Có thể VU pool cạn → slot phải chờ VU rảnh
+  → Hoặc server chậm → iter kéo dài hơn dự kiến
+
+Gap đột ngột GIẢM (vd 500ms → 100ms):
+  → Bình thường nếu đang ở ramp-up
+  → Bất thường nếu đang ở hold → kiểm tra config
+```
+
+**── Mật độ slot và dự đoán drop ──**
+
+So sánh gap với thời gian xử lý của 1 VU:
+
+```text
+Khi gap < W / M (khoảng cách slot NHỎ HƠN năng lực xử lý):
+  → Slot đến nhanh hơn VU xong việc → DROP
+
+VD: gap=100ms, W=300ms, M=3
+    capacity = 3/0.3 = 10 slot/s → gap tối thiểu = 100ms
+    gap thực = 100ms → VỪA ĐỦ, sát biên
+    → Nếu W tăng nhẹ (vd 320ms) → capacity=9.4/s → gap tối thiểu=106ms
+    → gap thực=100ms < 106ms → DROP
+
+VD: gap=250ms, W=300ms, M=2
+    capacity = 2/0.3 = 6.67 slot/s → gap tối thiểu = 150ms
+    gap thực = 250ms > 150ms → DƯ SỨC, không drop
 ```
 
 **Tóm gọn 1 dòng**:
