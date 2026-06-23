@@ -2418,22 +2418,46 @@ Config: `preAlloc=3, maxVUs=3, sleep(0.5)`, stage `2s, 3s, 2s` target
 `4, 4, 0` (giống demo 3.2):
 
 ```text
-Bước 1: Tính lý thuyết
+Bước 1: Tính lý thuyết từ CONFIG
   λ_peak  = 4 iter/s
   N_sched = 4 + 12 + 4 = 20 slot     (xem 3.1)
   T       = 7s
   λ_avg   = 20 / 7 ≈ 2.857 iter/s
+
+  → Đây là con số 2.86/s trong câu hỏi
+  → Nó là TARGET TRUNG BÌNH: nếu mọi slot đều hoàn thành, k6 sẽ đạt rate này
 
 Bước 2: Sizing kiểm tra
   required = ceil(λ_peak × W) = ceil(4 × 0.5) = 2 VU
   M = 3 VU → C = 3 / 0.5 = 6 iter/s ≥ λ_peak=4 ✓
   → Lý thuyết KHÔNG drop (nếu W chính xác = 0.5s)
 
-Bước 3: Đọc summary thật
+Bước 3: Đọc summary THẬT
   iterations: 18    actual_rate ≈ 2.571/s
-  → có lệch 20 − 18 = 2 iter (không match lý thuyết)
 
-Bước 4: Giải thích lệch
+  → actual_rate = 18 / 7 = 2.571/s
+  → Có lệch: 20 (lý thuyết) − 18 (thực tế) = 2 iter không hoàn thành
+
+Bước 4: So sánh 3 con số rate
+  ┌─────────────────┬──────────┬─────────────────────────────┐
+  │ Rate             │ Giá trị  │ Đến từ                      │
+  ├─────────────────┼──────────┼─────────────────────────────┤
+  │ λ_peak           │ 4.000/s  │ max(startRate, targets)     │
+  │ λ_avg            │ 2.857/s  │ N_sched / T = 20/7         │
+  │ actual_rate      │ 2.571/s  │ N_done / T_run = 18/7      │
+  └─────────────────┴──────────┴─────────────────────────────┘
+
+  Khoảng cách:
+    λ_peak → λ_avg:      4.000 - 2.857 = 1.143/s  (do rate thay đổi theo thời gian)
+    λ_avg  → actual_rate: 2.857 - 2.571 = 0.286/s  (do 2 slot không hoàn thành)
+
+  Ý nghĩa từng khoảng cách:
+    λ_peak - λ_avg = 1.143/s: "rate dao động bao nhiêu trong timeline"
+      → không phải lỗi, là do thiết kế ramp-up/ramp-down
+    λ_avg - actual_rate = 0.286/s: "hao hụt do drop/interrupt/biên slot"
+      → 2 slot mất trên tổng 20 = 10% hao hụt
+
+Bước 5: Giải thích 2 slot mất
   Nguyên nhân có thể:
   (a) iter_duration thực tế > 0.5s (cộng overhead startup VU)
       → W_thực ≈ 0.55-0.6s → C_thực = 3/0.6 = 5/s vẫn ≥ λ_peak ✓
@@ -2443,15 +2467,51 @@ Bước 4: Giải thích lệch
       → trong demo này maxVUs=preAlloc nên KHÔNG có spawn → không liên quan
   → Khả năng cao là (b): biên slot.
 
-Bước 5: Verify quan hệ bất đẳng thức
+Bước 6: Verify quan hệ bất đẳng thức
   λ_peak = 4   ≥   λ_avg = 2.857   ≥   actual_rate = 2.571 ✓
   4 ≥ 2.857 ≥ 2.571 (đúng cả 2 vế).
 
-Bước 6: Tính N_drop, N_int
+Bước 7: Tính N_drop, N_int
   N_done = 18, N_sched ≈ 20
   N_drop + N_int ≈ 2 (kiểm tra summary cụ thể)
   Trong demo này iter=0.5s ngắn, không có ai bị grace cancel
   → N_int = 0, N_drop ≈ 2 (hoặc 1 + 1 lệch biên).
+```
+
+**── Sơ đồ: từ config → 3 rate ──**
+
+```text
+CONFIG                              SUMMARY
+──────                              ───────
+startRate=0                         iterations.........: 18    2.571428/s
+stages:                             http_reqs..........: 36    5.142857/s
+  2s: 0→4/s  ┐
+  3s: 4/s    ├─► N_sched=20 slot
+  2s: 4→0/s  ┘
+
+              ┌──────────────────────────────────────────────────┐
+              │                                                  │
+  N_sched=20  │  λ_avg = 20/7 = 2.857/s  ←── TARGET TRUNG BÌNH │
+  T=7s        │           (mục tiêu scheduler)                   │
+              │                                                  │
+              │         trừ drop + interrupt + biên slot          │
+              │                    ↓                             │
+              │  actual_rate = 18/7 = 2.571/s ←── THỰC TẾ       │
+              │           (KPI cuối cùng)                        │
+              │                                                  │
+              │  λ_peak = 4/s  ←── DÙNG ĐỂ SIZING VU            │
+              │           (rate cao nhất, dù chỉ trong 1s)       │
+              └──────────────────────────────────────────────────┘
+
+Trả lời câu hỏi "vì sao config ra 2.86?":
+  2.86 = 20 slot / 7 giây
+       = trung bình toàn timeline của lịch start
+       = NẾU không drop, completed rate cũng sẽ ≈ 2.86/s
+
+Trả lời "vì sao summary chỉ 2.57?":
+  2.57 = 18 iter / 7 giây
+       = thực tế chỉ 18 trong 20 slot hoàn thành
+       = 2 slot mất (có thể drop hoặc biên slot)
 ```
 
 #### Phân biệt `iterations rate` vs `http_reqs rate`
