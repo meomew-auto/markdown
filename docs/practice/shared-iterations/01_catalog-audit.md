@@ -697,6 +697,64 @@ Nguyên nhân 4 (worker skew):
 > **1 dòng để nhớ**: `exec.scenario.iterationInTest` — global job index, dùng
 > nó làm index vào mảng data. KHÔNG dùng `__VU`.
 
+##### `iterationInTest` là gì và ở đâu ra?
+
+Đây là **built-in property** trong module `k6/execution`. Định nghĩa trong
+core Go: `internal/js/modules/k6/execution/execution.go:118-124`.
+
+```go
+"iterationInTest": func() any {
+    if vuState.GetScenarioGlobalVUIter == nil {
+        common.Throw(rt, errRunInInitContext)
+    }
+    return vuState.GetScenarioGlobalVUIter()
+},
+```
+
+**Cách dùng**: `import exec from "k6/execution"` rồi gọi
+`exec.scenario.iterationInTest` trong default function.
+
+```js
+import exec from "k6/execution";
+
+export default function () {
+  const index = exec.scenario.iterationInTest;  // 0, 1, 2, ..., 79
+}
+```
+
+**Phân biệt 2 counter trong `exec.scenario`**:
+
+| Thuộc tính | Phạm vi | Giá trị chạy ra | Giống |
+| --- | --- | --- | --- |
+| `exec.scenario.iterationInTest` | **Global** — tăng dù VU nào chạy | 0, 1, 2, ..., N-1 | — |
+| `exec.scenario.iterationInInstance` | **Per-VU** — chỉ tăng khi VU này chạy | 0, 1, 2, ... (mỗi VU riêng) | `__ITER` |
+
+```text
+Demo vus=2, iterations=4:
+
+  iter #0 do VU1 chạy:  iterationInTest=0,  VU1.iterationInInstance=0
+  iter #1 do VU2 chạy:  iterationInTest=1,  VU2.iterationInInstance=0
+  iter #2 do VU1 chạy:  iterationInTest=2,  VU1.iterationInInstance=1
+  iter #3 do VU2 chạy:  iterationInTest=3,  VU2.iterationInInstance=1
+
+→ iterationInTest    = 0,1,2,3  (global, KHÔNG phụ thuộc VU nào chạy)
+→ iterationInInstance = 0,1 cho VU1, 0,1 cho VU2  (per-VU, giống __ITER)
+```
+
+**Vì sao `iterationInTest` là identity đúng cho catalog audit?**
+
+```text
+iterationInTest = global counter 0..79
+→ map 1-1 với 80 SKU trong mảng
+→ iter #0 → SKUS[0], iter #1 → SKUS[1], ..., iter #79 → SKUS[79]
+→ 80 SKU unique, KHÔNG phụ thuộc VU nào chạy iter đó
+
+Nếu dùng iterationInInstance (hay __ITER):
+→ VU1: 0,1,2,...,9  → chỉ map được SKUS[0..9], lặp lại
+→ VU2: 0,1,2,...,9  → cũng map SKUS[0..9], lặp lại
+→ Chỉ ~10 SKU unique, 70 SKU bỏ sót
+```
+
 ---
 
 ### Tổng kết: chỉ shared-iterations thỏa mãn cả (a) và (b)
