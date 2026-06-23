@@ -59,6 +59,218 @@ Vì sao per-vu đảm bảo?
   - 429 không bao giờ xuất hiện -> test "pass" giả (false negative)
 ```
 
+**── Phân tích chi tiết: sai như thế nào khi dùng sai executor ──**
+
+#### Dùng constant-vus: request trải đều, không ai chạm ngưỡng
+
+**Cơ chế fail từng bước**:
+
+```text
+Bước 1 — Setup sai:
+  executor: "constant-vus", vus: 5, duration: "30s"
+  Mỗi VU có token riêng (token-A đến token-E), nhưng VU pool là random.
+  KHÔNG có cơ chế "VU này chỉ dùng token này".
+
+Bước 2 — Phân phối request trong 2 giây đầu tiên:
+  Giây 0.0: VU-pool chọn VU-1, dùng token-A → req #1
+  Giây 0.1: VU-pool chọn VU-3, dùng token-C → req #2
+  Giây 0.2: VU-pool chọn VU-1, dùng token-A → req #3
+  Giây 0.3: VU-pool chọn VU-5, dùng token-E → req #4
+  Giây 0.4: VU-pool chọn VU-2, dùng token-B → req #5
+  Giây 0.5: VU-pool chọn VU-4, dùng token-D → req #6
+  Giây 0.6: VU-pool chọn VU-3, dùng token-C → req #7
+  Giây 0.7: VU-pool chọn VU-1, dùng token-A → req #8
+  Giây 0.8: VU-pool chọn VU-2, dùng token-B → req #9
+  Giây 0.9: VU-pool chọn VU-5, dùng token-E → req #10
+  Giây 1.0: VU-pool chọn VU-4, dùng token-D → req #11
+  Giây 1.1: VU-pool chọn VU-3, dùng token-C → req #12
+  Giây 1.2: VU-pool chọn VU-1, dùng token-A → req #13
+  Giây 1.3: VU-pool chọn VU-2, dùng token-B → req #14
+  Giây 1.4: VU-pool chọn VU-5, dùng token-E → req #15
+  Giây 1.5: VU-pool chọn VU-4, dùng token-D → req #16
+  Giây 1.6: VU-pool chọn VU-3, dùng token-C → req #17
+  Giây 1.7: VU-pool chọn VU-1, dùng token-A → req #18
+  Giây 1.8: VU-pool chọn VU-2, dùng token-B → req #19
+  Giây 1.9: VU-pool chọn VU-5, dùng token-E → req #20
+
+  → Trong 2 giây: 20 request ÷ 5 token = ~4 req/token
+  → Token-A: 4 req, Token-B: 4 req, Token-C: 4 req, Token-D: 3 req, Token-E: 4 req
+
+Bước 3 — Công thức phân phối:
+  Giả sử mỗi VU chạy ~10 iter/s (latency ~100ms/req).
+  Với 5 VU × 30s × 10 iter/s = 1500 tổng request.
+  Số request mỗi token nhận được:
+
+    requests_per_token ≈ total_iters ÷ num_tokens
+                       = 1500 ÷ 5
+                       = 300 req/token (trung bình)
+
+  Nhưng đây là TRUNG BÌNH. Thực tế VU pool ngẫu nhiên, phân phối
+  có độ lệch ±15%:
+
+    Token-A: 285 req   (tất cả 200 — chưa từng chạm 100 req/phút)
+    Token-B: 310 req   (tất cả 200 — chưa từng chạm 100 req/phút)
+    Token-C: 295 req   (tất cả 200 — chưa từng chạm 100 req/phút)
+    Token-D: 320 req   (tất cả 200 — chưa từng chạm 100 req/phút)
+    Token-E: 290 req   (tất cả 200 — chưa từng chạm 100 req/phút)
+
+  Mỗi token nhận ~300 req TRẢI ĐỀU TRÊN 30 GIÂY.
+  → 300 req ÷ 30s = ~10 req/s mỗi token
+  → Server rate limiter đếm: token nào cũng dưới 100/phút
+  → KHÔNG token nào bị 429.
+
+Bước 4 — Kết quả sai:
+  Tất cả 1500 request → status 200.
+  count_200 = 1500, count_429 = 0.
+  Test "PASS" — nhưng rate limiter CHƯA BAO GIỜ ĐƯỢC TEST.
+```
+
+**Demo output: CORRECT vs WRONG side by side**:
+
+```text
+═══════════════════════════════════════════════════════════════════
+                     CORRECT (per-vu-iterations)
+                     vus=5, iterations=150
+                     ─────────────────────
+Token          Tổng req   200 OK    429     Hit ngưỡng?
+─────          ────────   ──────    ───     ───────────
+token-A          150        100      50     ✓ (req 101-150)
+token-B          150        100      50     ✓ (req 101-150)
+token-C          150        100      50     ✓ (req 101-150)
+token-D          150        100      50     ✓ (req 101-150)
+token-E          150        100      50     ✓ (req 101-150)
+───────────────────────────────────────────────────────────
+TOTAL            750        500     250
+Verdict: PASS thật — rate limiter hoạt động đúng 100 req/user
+═══════════════════════════════════════════════════════════════════
+
+═══════════════════════════════════════════════════════════════════
+                     WRONG (constant-vus)
+                     vus=5, duration=30s
+                     ─────────────────────
+Token          Tổng req   200 OK    429     Hit ngưỡng?
+─────          ────────   ──────    ───     ───────────
+token-A          285        285       0     ✗ (chỉ ~10 req/s)
+token-B          310        310       0     ✗ (chỉ ~10 req/s)
+token-C          295        295       0     ✗ (chỉ ~10 req/s)
+token-D          320        320       0     ✗ (chỉ ~10 req/s)
+token-E          290        290       0     ✗ (chỉ ~10 req/s)
+───────────────────────────────────────────────────────────
+TOTAL           1500       1500       0
+Verdict: FALSE NEGATIVE — test pass nhưng limiter chưa từng
+         bị đẩy tới ngưỡng. 0×429 toàn bộ.
+═══════════════════════════════════════════════════════════════════
+```
+
+```text
+Tóm tắt cơ chế FALSE NEGATIVE:
+
+  Yêu cầu test:   "token-A phải nhận >100 req để trigger 429"
+  Thực tế xảy ra:  token-A nhận ~10 req/s, trải đều 30s
+                   → server đếm chưa tới 100 trong bất kỳ phút nào
+                   → 429 không bao giờ xuất hiện
+  Kết quả:         test PASS (0 lỗi) nhưng rate limiter CHƯA ĐƯỢC TEST
+                   → deploy production → user thật spam 150 req/phút
+                   → hoặc limiter không chặn (mất tiền), hoặc chặn sai (mất user)
+```
+
+#### Dùng shared-iterations: phân phối không đều
+
+**Cơ chế fail**:
+
+```text
+shared-iterations chia tổng iterations cho VU pool.
+VU nhanh ăn nhiều, VU chậm ăn ít → token bị lệch nặng.
+
+Timeline thực tế (vus=5, iterations=750, mỗi VU có token riêng):
+
+  VU-1 (nhanh, latency 5ms):  gửi 220 req với token-A
+  VU-2 (nhanh, latency 5ms):  gửi 210 req với token-B
+  VU-3 (trung bình, 50ms):    gửi 150 req với token-C
+  VU-4 (chậm, 200ms):         gửi  95 req với token-D
+  VU-5 (chậm, 200ms):         gửi  75 req với token-E
+                              ─────
+  TOTAL                       750 req
+
+Kết quả theo token:
+
+  Token-A (220 req): 100 × 200 + 120 × 429 → CÓ hit ngưỡng
+  Token-B (210 req): 100 × 200 + 110 × 429 → CÓ hit ngưỡng
+  Token-C (150 req): 100 × 200 +  50 × 429 → CÓ hit ngưỡng
+  Token-D ( 95 req):  95 × 200 +   0 × 429 → KHÔNG hit ngưỡng
+  Token-E ( 75 req):  75 × 200 +   0 × 429 → KHÔNG hit ngưỡng
+
+→ 3/5 token bị 429, 2/5 token không bị 429.
+→ Phân phối không đều → kết quả KHÔNG tái lập được.
+→ Lần chạy sau: VU-4 nhanh hơn → token-D cũng hit ngưỡng → kết quả khác.
+→ KHÔNG THỂ dùng để audit SLA vì mỗi lần chạy ra một con số khác.
+```
+
+#### Dùng arrival-rate: không có per-user control
+
+**Cơ chế fail**:
+
+```text
+constant-arrival-rate điều khiển THEO TỐC ĐỘ (iter/s), không theo user.
+
+Setup: rate=50, duration=30s, preAllocatedVUs=5
+→ Hệ thống nhắm tới 50 iter/s, VU pool lo việc đạt target rate.
+→ Không có khái niệm "user nào đang spam".
+→ Request được bắn ra theo nhịp, token gắn ngẫu nhiên.
+
+Kết quả: giống hệt constant-vus — request trải đều 5 token,
+mỗi token ~10 req/s, không ai đạt 100 req/phút → 0×429.
+FALSE NEGATIVE y hệt.
+
+Điểm khác biệt duy nhất: arrival-rate kiểm soát được throughput
+(toàn bộ test giữ đúng 50 iter/s), nhưng vẫn không kiểm soát
+được "ai gửi bao nhiêu req" → vô dụng với rate limit test.
+```
+
+#### Bảng so sánh output với 4 executor
+
+```text
+═══════════════════════════════════════════════════════════════════════════
+Executor              per_token_req_count    hit_429    count_200  count_429
+───────────────────────────────────────────────────────────────────────────
+per-vu-iterations     Mỗi token 150 req      5/5 token  500        250
+(vus=5, iters=150)    (cố định, tái lập)     (100%)     (đúng SLA) (đúng SLA)
+
+constant-vus          Mỗi token ~300 req     0/5 token  1500       0
+(vus=5, dur=30s)      (trải đều 30s)         (0%)       (sai)      (sai)
+                      → ~10 req/s/token
+                      → không ai đạt 100/phút
+
+shared-iterations     Token-A: 220, B: 210   3/5 token  470        280
+(vus=5, iters=750)    Token-C: 150, D: 95    (60%)      (lệch)     (lệch)
+                      Token-E: 75
+                      → phân phối không đều
+                      → không tái lập được
+
+constant-arrival-rate Mỗi token ~300 req     0/5 token  1500       0
+(rate=50, dur=30s)    (giống constant-vus)   (0%)       (sai)      (sai)
+                      → rate-driven, không
+                        bound user-token
+───────────────────────────────────────────────────────────────────────────
+VERDICT:
+  ✓ per-vu-iterations:    CÓ thể audit SLA (kết quả deterministic)
+  ✗ constant-vus:         FALSE NEGATIVE (test pass nhưng limiter untested)
+  ✗ shared-iterations:    KHÔNG tái lập được (phân phối ngẫu nhiên)
+  ✗ constant-arrival-rate:FALSE NEGATIVE (giống constant-vus)
+═══════════════════════════════════════════════════════════════════════════
+```
+
+```text
+Điểm mấu chốt:
+  Rate limit test khác với load test thông thường ở chỗ:
+  - Load test:   cần tổng throughput cao → arrival-rate / constant-vus tốt
+  - Rate limit:  cần 1 USER gửi đủ N req để chạm ngưỡng → PHẢI per-vu
+
+  Dùng sai executor → test "xanh" nhưng rate limiter chưa từng thực sự
+  bị đẩy tới giới hạn → FALSE NEGATIVE → deploy production xong mới thấy
+  limiter có bug → hậu quả nghiêm trọng hơn nhiều so với test fail.
+```
+
 ### Yêu cầu (b): COUNT REQUEST PER USER CHÍNH XÁC
 
 **Ý nghĩa**: Phải biết CHÍNH XÁC user gửi bao nhiêu req để verify "req thứ

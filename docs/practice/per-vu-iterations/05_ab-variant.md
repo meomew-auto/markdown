@@ -65,6 +65,160 @@ Vì sao per-vu đảm bảo?
   - User cảm nhận 2 phiên bản trộn lẫn -> ô nhiễm dữ liệu
 ```
 
+**── Phân tích chi tiết: sai như thế nào khi dùng sai executor ──**
+
+#### Dùng constant-vus: variant nhảy lung tung
+
+Khi dùng `constant-vus`, VU pool được reuse liên tục. Mỗi lần VU thực thi một
+iteration, script chạy `default()` — nếu variant được gán bằng `Math.random()`
+hoặc tra __VU không stable (do VU reuse không đảm bảo user nào vào VU nào),
+kết quả là cùng một user ảo thấy variant khác nhau qua các lần xem trang.
+
+**Timeline cụ thể với 3 VU, user "Alice" (đáng lẽ luôn thấy variant A):**
+
+```text
+Mong đợi: Alice (VU#1 cố định) -> variant A cho cả 5 page view
+
+Thực tế với constant-vus (VU pool recycle):
+  page_1: VU#1 thực thi iter cho Alice -> variant = A       (__VU=1 lẻ -> control? tùy logic)
+  page_2: VU#3 được reuse cho Alice     -> variant = control (__VU=3)
+  page_3: VU#1 lại chạy cho Alice       -> variant = A       (__VU=1)
+  page_4: VU#2 chạy cho Alice           -> variant = A       (__VU=2 chẵn)
+  page_5: VU#3 reuse lần nữa            -> variant = control
+
+  → Alice thấy: A -> control -> A -> A -> control
+  → Trải nghiệm TRỘN LẪN: data ô nhiễm, không đo được "variant A có giữ chân Alice không"
+```
+
+**Cơ chế fail từng bước:**
+
+```text
+Bước 1: constant-vus giữ N VU "sống" liên tục trong duration.
+        Mỗi VU lặp: gọi default() -> nghỉ think time -> gọi lại default() -> ...
+
+Bước 2: Không có ánh xạ cố định "user X luôn dùng VU#Y".
+        VU#1 có thể phục vụ user A ở iter này, user B ở iter sau.
+
+Bước 3: Nếu variant = __VU % 2:
+        - User A gặp VU#1 (lẻ) -> control
+        - User A gặp VU#2 (chẵn) -> A
+        - User A gặp VU#3 (lẻ) -> control
+        -> Variant thay đổi theo VU được pool chọn, không theo user
+
+Bước 4: Nếu variant = Math.random() < 0.5:
+        - Mỗi lần default() chạy là một lần random mới
+        - User A: iter0 random -> A, iter1 random -> control, iter2 random -> A, ...
+        -> Variant nhảy HOÀN TOÀN ngẫu nhiên mỗi page view
+```
+
+**Demo output mô phỏng — CORRECT vs WRONG:**
+
+```text
+═══════════════════════════════════════════════════════════════
+  CORRECT (per-vu-iterations, variant = __VU % 2, sticky):
+═══════════════════════════════════════════════════════════════
+  user_00 (VU#1, lẻ):  control, control, control, control, control  ✓ nhất quán
+  user_01 (VU#2, chẵn): A,      A,      A,      A,      A       ✓ nhất quán
+  user_02 (VU#3, lẻ):  control, control, control, control, control  ✓ nhất quán
+  user_03 (VU#4, chẵn): A,      A,      A,      A,      A       ✓ nhất quán
+  ...
+  user_98 (VU#99, lẻ):  control, control, control, control, control  ✓
+  user_99 (VU#100,chẵn): A,      A,      A,      A,      A       ✓
+
+  Tổng: 50 user × 5 view = 250 variant A
+        50 user × 5 view = 250 variant control
+        → Phân phối CHÍNH XÁC 250/250 ✓
+        → Mỗi user có trải nghiệm NHẤT QUÁN ✓
+
+═══════════════════════════════════════════════════════════════
+  WRONG (constant-vus, variant = __VU % 2, VU pool recycle):
+═══════════════════════════════════════════════════════════════
+  Giả sử 3 VU phục vụ 100 user, mỗi user 5 view:
+
+  user_00: VU#1->control, VU#2->A, VU#1->control, VU#3->control, VU#2->A
+           → control, A, control, control, A  ✗ không nhất quán!
+  user_01: VU#2->A, VU#3->control, VU#1->control, VU#2->A, VU#3->control
+           → A, control, control, A, control  ✗ không nhất quán!
+  user_02: VU#3->control, VU#1->control, VU#2->A, VU#3->control, VU#1->control
+           → control, control, A, control, control  ✗
+  ...
+
+  Kết quả sau 500 view:
+    variant_A_total      = 310  ✗ (mong đợi 250)
+    variant_control_total = 190  ✗ (mong đợi 250)
+    → Phân phối LỆCH 310/190 thay vì 250/250
+    → So sánh A/B mất ý nghĩa thống kê:
+      - Không biết A "tốt hơn" vì thuật toán hay vì được nhiều view hơn
+      - Không ai có trải nghiệm nhất quán -> không đo được retention
+```
+
+#### Dùng shared-iterations: không kiểm soát được ai xem gì
+
+```text
+Cơ chế fail:
+  - shared-iterations phân phối iterations cho VU theo round-robin
+    hoặc first-come-first-served, không đảm bảo mỗi VU nhận số iter bằng nhau
+  - VU nhanh nhận nhiều iteration, VU chậm nhận ít
+  - Nếu variant = __VU % 2:
+    VU#1 (lẻ -> control) nhận 8 iterations
+    VU#2 (chẵn -> A)   nhận 3 iterations
+    → control được 8 view, A chỉ được 3 -> lệch nặng
+
+Demo output:
+  VU#1: control, control, control, control, control, control, control, control (8x)
+  VU#2: A, A, A                                                        (3x)
+  VU#3: control, control, control, control, control                    (5x)
+  ...
+  → variant_control_total = 280, variant_A_total = 220
+  → Lệch 56/44, không đạt 50/50
+  → Nguyên nhân gốc: số iteration mỗi VU không được kiểm soát
+```
+
+#### Dùng arrival-rate: identity rời VU, variant không ổn định
+
+```text
+Cơ chế fail:
+  - constant-arrival-rate / ramping-arrival-rate tạo iterations theo
+    tần suất cố định (iter/s), VU được spawn tự động để đạt target rate
+  - Mỗi iteration được thực thi bởi một VU bất kỳ trong pool
+  - Không có khái niệm "user identity" gắn với VU
+  - Variant gán theo __VU -> __VU thay đổi giữa các iter của cùng user
+    -> variant nhảy liên tục
+
+  Nếu cố gán variant = __VU % 2:
+    Iter 1: VU#5 thực thi  -> 5%2=1 -> control
+    Iter 2: VU#12 thực thi -> 12%2=0 -> A
+    Iter 3: VU#3 thực thi  -> 3%2=1 -> control
+    → Cùng "user" thấy control, A, control -> trải nghiệm loạn
+
+  Nếu gán variant = Math.random():
+    Mỗi iter random độc lập -> variant nhảy ngẫu nhiên từng view
+    -> Không khác gì constant-vus với random
+
+  Kết luận: arrival-rate family không phù hợp cho A/B test vì:
+    - Không có cơ chế sticky identity gắn với VU
+    - Không kiểm soát được user nào thấy variant nào
+    - Exposure phụ thuộc vào rate và timing, không deterministic
+```
+
+#### Bảng so sánh output với 4 executor
+
+Chạy cùng kịch bản: 100 user, mỗi user 5 view, mong đợi 250 A + 250 control.
+
+| Executor | variant_A | variant_control | Cân bằng? | Mỗi user nhất quán? | Verdict |
+| --- | ---: | ---: | --- | --- | --- |
+| **per-vu-iterations** | 250 | 250 | 250=250 ✓ | ✓ sticky per VU | ✅ ĐẠT |
+| constant-vus | ~310 | ~190 | ✗ lệch | ✗ VU pool recycle | ❌ FAIL |
+| shared-iterations | ~220 | ~280 | ✗ lệch | ✗ iter phân phối không đều | ❌ FAIL |
+| constant-arrival-rate | ~260 | ~240 | ✗ lệch | ✗ identity rời VU | ❌ FAIL |
+| ramping-vus | ~270 | ~230 | ✗ lệch | ✗ spawn theo time | ❌ FAIL |
+| ramping-arrival-rate | ~255 | ~245 | ✗ lệch | ✗ rate-driven | ❌ FAIL |
+
+> **Con số ~ là mô phỏng** — thực tế sẽ dao động tùy timing, độ trễ network,
+> và số VU trong pool. Điểm quan trọng: **chỉ per-vu-iterations cho ra con số
+> deterministic 250/250**. Các executor khác cho ra phân phối không kiểm soát
+> được, không thể dùng để ra quyết định A/B test.
+
 ### Yêu cầu (b): EXPOSURE BALANCED (2 nhóm bằng nhau, đếm chính xác)
 
 **Ý nghĩa**: Số user nhóm A phải BẰNG nhóm control (50/50). Lệch → so sánh

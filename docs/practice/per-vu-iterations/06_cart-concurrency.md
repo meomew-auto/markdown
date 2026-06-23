@@ -65,7 +65,129 @@ Vì sao per-vu đảm bảo?
   - Test "pass" giả vì không tạo được same-user race
 ```
 
-### Yêu cầu (b): ĐỦ BURST ĐỂ TRIGGER LOST UPDATE
+**── Phan tich chi tiet: sai nhu the nao khi dung sai executor ──**
+
+#### Dung constant-vus: 10 VU nhung khong ai la "cung user"
+
+Khi chay `constant-vus` voi `vus: 10, duration: "30s"`, k6 tao pool 10 VU.
+Moi VU sau moi iter se nhan user-id MOI — khong co rang buoc VU-user co dinh.
+
+**Timeline thuc te cua VU#1 trong pool 10 VU:**
+
+```text
+t=0.0s:  VU#1 nhan iter, chon user_3  -> http.batch(3 request) -> cart user_3
+         [3 request SONG SONG, nhung CHI 1 lan duy nhat cho user_3]
+t=0.3s:  VU#1 nhan iter moi, chon user_7  -> http.batch(3 request) -> cart user_7
+t=0.6s:  VU#1 nhan iter moi, chon user_1  -> http.batch(3 request) -> cart user_1
+t=0.9s:  VU#1 nhan iter moi, chon user_5  -> http.batch(3 request) -> cart user_5
+t=1.2s:  VU#1 nhan iter moi, chon user_9  -> http.batch(3 request) -> cart user_9
+...
+t=30s:   VU#1 da chay ~100 iter, MOI LAN LA MOT USER KHAC
+         -> user_3 chi bi VU#1 goi DUNG 1 LAN (3 request song song)
+         -> user_3 khong bao gio nhan 10 burst × 3 request tu CUNG 1 VU
+```
+
+Trong khi do, cac VU#2..VU#10 cung dang lam y het — moi VU nhay lung tung qua cac user.
+
+**Cong thuc:**
+
+```text
+so_lan_ghi_song_song_moi_user ≈ tong_iter / so_user
+                              = 300 / 10 = 30 lan ghi/user
+
+Nhung 30 lan ghi nay TRAI DEU trong 30s, KHONG dong thoi.
+Moi burst chi co 3 request song song (trong cung 1 iter).
+=> Moi user chi nhan 1-3 burst tu 1 VU bat ky, khong phai 10 burst nhu thiet ke.
+
+Race condition can 10 dot × 3 request SONG SONG cung user.
+constant-vus tao 10 dot × 3 request nhung KHAC user -> race KHONG XAY RA.
+```
+
+**Demo output:**
+
+```text
+CORRECT (per-vu-iterations, vus=10, iterations=10):
+  [VU=0] ✓ cart total match: 30/30  (user_0: 10 burst × 3 = 30)
+  [VU=5] ✓ cart total match: 30/30  (user_5: 10 burst × 3 = 30)
+  ...
+  cart_total_match: 10/10 ✓
+  cart_total_lost:  0      ✓
+  -> Moi user deu nhan DU 10 burst. Race da THUC SU xay ra.
+  -> Neu co bug: cart_total_lost > 0 -> PHAT HIEN DUOC.
+
+WRONG (constant-vus, vus=10, duration=30s):
+  [console] user_0: 12 items  (chi 4 iter roi vao user nay)
+  [console] user_3: 45 items  (15 iter roi vao, nhung trai deu 30s)
+  [console] user_7: 6 items   (2 iter roi vao)
+  ...
+  cart_total_match: 10/10 ✓   <- FALSE PASS!
+  cart_total_lost:  0      ✓   <- FALSE PASS!
+  -> Khong user nao nhan 10 burst × 3 request SONG SONG.
+  -> Race condition CHUA TUNG XAY RA.
+  -> Test "pass" nhung KHONG CHUNG MINH DUOC GI.
+  -> Neu cart service THUC SU co bug race -> test nay BO QUA.
+```
+
+#### Dung shared-iterations: iter phan phoi lech
+
+`shared-iterations` chia 100 iter cho 10 VU, nhung KHONG DEU. VU nhanh nhan nhieu,
+VU cham nhan it. Moi VU lai la user khac -> phan phoi iter theo user cang lech.
+
+**Timeline thuc te:**
+
+```text
+VU#1 (nhanh, latency thap):  50 iter -> 50 burst cho 1 user duy nhat
+VU#2:                        15 iter -> 15 burst
+VU#3..VU#7:                  moi VU 3-8 iter
+VU#8 (cham, latency cao):    5 iter  -> 5 burst
+VU#9:                        2 iter
+VU#10:                       0 iter  -> user nay KHONG DUOC TEST!
+
+Tong: 50+15+... = 100 iter ✓ (du ve so luong)
+
+Nhung:
+  - user cua VU#1 bi "hammer" 50 burst -> neu co race, user nay de trigger nhat
+  - user cua VU#10 khong he duoc goi -> hoan toan BO SOT
+  - Cac user khac chi 3-8 burst -> KHONG DU 10 burst nhu thiet ke
+
+=> Ket qua TEST KHONG DAI DIEN. Khong the ket luan "10 user deu an toan"
+   khi co user khong duoc test, co user bi test qua nhieu.
+```
+
+**Van de goc:** van la "moi VU la user khac". Ngay ca VU#1 nhan 50 burst cho
+cung 1 user, 50 burst do CHAY TUAN TU (VU#1 chi co 1 luong, het iter nay
+moi toi iter sau). 3 request/http.batch thi song song, nhung 50 burst thi
+noi tiep nhau -> day la CONCURRENT WITHIN ITER, khong phai CONCURRENT
+ACROSS ITERS.
+
+```text
+shared-iterations:
+  ✓ Co the tao race trong 1 iter (3 request song song)
+  ✗ Khong tao 10 DOT race doc lap nhu thiet ke
+  ✗ Phan phoi lech -> 1 so user khong duoc test
+  ✗ Khong user nao nhan DUNG 10 burst nhu per-vu dam bao
+```
+
+#### Dung arrival-rate: khong kiem soat duoc user nao bi race
+
+`constant-arrival-rate` chi quan tam toc do (iter/s), khong quan tam identity.
+Iter den voi VU nao ranh -> user-id tuy y -> khong dam bao moi user 10 burst.
+
+**Bang so sanh output voi 4 executor:**
+
+| Executor | Moi user 10 burst? | Cung user trong 1 burst? | Race xay ra? | Phat hien duoc lost-update? |
+| --- | --- | --- | --- | --- |
+| **per-vu-iterations** | ✓ DUNG 10 burst/user | ✓ http.batch cung user | ✓ THUC SU | ✓ Phat hien neu co bug |
+| constant-vus | ✗ Ngau nhien 1-15 burst | ✓ Trong 1 iter | △ It, khong du burst | ✗ FALSE PASS |
+| shared-iterations | ✗ Lech 0-50 burst | ✓ Trong 1 iter | △ 1 user bi hammer, user khac bo sot | ✗ Test khong dai dien |
+| constant-arrival-rate | ✗ Khong kiem soat | ✓ Trong 1 iter | △ Ngau nhien | ✗ Khong kiem soat duoc |
+
+> **Tom lai:** 3 executor kia deu co the tao race TRONG 1 ITER (vi van dung
+> `http.batch()`), nhung KHONG dam bao "10 DOT race doc lap, moi dot 3 request
+> song song, cho TUNG user". Chi per-vu-iterations moi dam bao dieu kien do.
+> Day la ly do "cart race test" BUOC PHAI chon per-vu-iterations.
+
+### Yeu cau (b): DU BURST DE TRIGGER LOST UPDATE
 
 **Ý nghĩa**: Race là xác suất — không phải lần nào cũng xảy ra. Phải lặp
 nhiều đợt (burst) để tăng khả năng trigger và verify tổng cuối.

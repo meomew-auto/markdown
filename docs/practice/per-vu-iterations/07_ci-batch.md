@@ -66,7 +66,130 @@ Vì sao per-vu đảm bảo?
   - Tập mẫu khác -> baseline drift
 ```
 
-### Yêu cầu (b): REPRODUCIBLE RPS (tải tái lập được, không flaky)
+**── Phan tich chi tiet: sai nhu the nao khi dung sai executor ──**
+
+#### Dung constant-vus: count = vus x duration / iter_time -- KHONG on dinh
+
+Cong thuc tinh so iteration cua constant-vus:
+
+```text
+count = vus x duration / iter_time
+
+Trong do:
+  vus       = so VU co dinh (vd: 10)
+  duration  = thoi gian chay (vd: 60s)
+  iter_time = thoi gian trung binh 1 iteration (bao gom request + sleep)
+```
+
+**iter_time KHONG phai hang so** -- no phu thuoc vao:
+- Do tre server (CPU load, GC pause, connection pool)
+- Do tre mang (network jitter, packet loss)
+- Thoi diem chay (giao cao diem vs thap diem)
+
+Voi concrete numbers: `vus=10, duration=60s, iter_time dao dong 0.2s-0.3s`:
+
+```text
+iter_time = 0.20s  ->  count = 10 x 60 / 0.20 = 3000 iter
+iter_time = 0.25s  ->  count = 10 x 60 / 0.25 = 2400 iter
+iter_time = 0.30s  ->  count = 10 x 60 / 0.30 = 2000 iter
+```
+
+Bien do: **2000-3000 iteration**, chenh lech **+-20%** chi vi server dao dong, KHONG phai code thay doi.
+
+**Demo output -- 3 CI runs voi CUNG code, chi khac thoi diem chay:**
+
+```text
+PR #1 (server nhanh, 0.20s/iter):
+  iterations.........: 3000
+  http_reqs..........: 6000
+  http_req_duration p95: 450ms
+  -> CI luu baseline tu lan nay
+
+PR #2 (server binh thuong, 0.25s/iter):
+  iterations.........: 2400
+  http_reqs..........: 4800
+  http_req_duration p95: 520ms
+  -> Gate so p95 (520ms) vs baseline (450ms) -> +15.5% -> FAIL
+  -> Nhung code KHONG doi! Server chi hoi ban hon.
+
+PR #3 (server cham, 0.30s/iter):
+  iterations.........: 2000
+  http_reqs..........: 4000
+  http_req_duration p95: 580ms
+  -> Gate so p95 (580ms) vs baseline (450ms) -> +28.9% -> FAIL
+  -> Lai code KHONG doi. Server GPU/CPU dang chay tac vu khac.
+```
+
+**Ket luan**: Cung code, 3 lan CI, 3 verdict khac nhau (1 pass, 2 fail).
+Day la **FLAKY GATE** -- dev mat niem tin vao CI, bo qua gate vi "no bao sai suot".
+
+#### Dung constant-arrival-rate: drop lam sai lech sample
+
+constant-arrival-rate lap lich iteration theo tan suat co dinh:
+
+```text
+N_sched = rate x duration = 50 x 60 = 3000 slot duoc lap lich
+N_done  = N_sched - N_drop
+```
+
+Neu pool VU khong du de xu ly het slot da lap lich, k6 se **drop** bot iteration:
+
+```text
+Run #1 (du VU, drop=0):
+  iterations.........: 3000
+  http_req_duration p95: 450ms
+
+Run #2 (thieu VU, drop=200, ti le 6.7%):
+  iterations.........: 2800
+  http_req_duration p95: 480ms
+```
+
+**Tai sao p95 khac nhau du server giong het nhau?**
+
+```text
+- 3000 samples -> distribution tail day du hon -> p95 do CHINH XAC hon
+- 2800 samples -> thieu 200 sample o duoi tail -> p95 bi LECH
+- Su khac biet p95 (450 vs 480) DEN TU sample size,
+  KHONG den tu code change
+- Nhung CI gate khong the phan biet -> fail nhamm
+```
+
+Ti le drop con **bien thien theo tung lan CI** (phu thuoc VU pool, scheduler
+internal) -> moi lan drop % khac -> moi lan sample size khac -> p95 khong
+the so sanh duoc giua cac PR.
+
+#### Dung shared-iterations: gan dung nhung phan phoi lech
+
+shared-iterations co count co dinh, nhung phan phoi iteration giua cac VU
+**khong deu** -- VU nhanh lay nhieu iter, VU cham lay it:
+
+```text
+1000 iter chia 10 VU:
+  VU#1 (nhanh): 200 iter
+  VU#2:          150 iter
+  ...
+  VU#10 (cham):   20 iter
+```
+
+Hau qua: **RPS khong deu** -> latency profile khac -> p95 bi skew boi VU nhanh.
+VU chay 200 iter tao ra nhieu sample latency thap, lam p95 "dep" ao.
+
+**Bang so sanh tong hop -- WRONG vs CORRECT:**
+
+| Executor | Count | Deterministic? | Sample size | p95 so sanh duoc? |
+| --- | ---: | --- | --- | --- |
+| **per-vu-iterations** | 1000 +-0 | TUYET DOI | Luon 1000 | CO -- cung co mau |
+| constant-vus | 2000-3000 | KHONG | Bien thien +-20% | KHONG |
+| constant-arrival-rate | 2800-3000 | KHONG (drop) | Bien thien theo drop | KHONG |
+| shared-iterations | 1000 +-0 | CO | Luon 1000 | GAN -- nhung RPS lech |
+| ramping-vus | bien thien theo stage | KHONG | Khong xac dinh | KHONG |
+| ramping-arrival-rate | bien thien theo stage | KHONG | Khong xac dinh | KHONG |
+
+**Tom lai**: Chi per-vu-iterations dam bao **count tuyet doi + RPS deu**,
+2 dieu kien BAT BUOC de CI gate khong bao nham. Cac executor khac deu
+dan den flaky gate -- cung code, khac verdict -- gay mat niem tin vao CI.
+
+### Yeu cau (b): REPRODUCIBLE RPS (tai tai lap duoc, khong flaky)
 
 **Ý nghĩa**: Pattern tải (bao nhiêu request đồng thời, theo nhịp nào) phải
 giống nhau mỗi lần. Nếu pattern đổi → p95 đổi → false alarm.
