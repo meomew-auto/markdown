@@ -3144,16 +3144,58 @@ sizing_demo: 40 iterations shared among 4 VUs   ← Header xác nhận config đ
 
 **── Bước 2: Quyết số VU song song (vus) ──**
 
-Lý thuyết: chọn VU vừa phải, không quá tải máy local. Ràng buộc quan trọng:
-`vus <= iterations` — mỗi VU phải có ít nhất 1 iter để làm. Nếu vi phạm,
-k6 sẽ báo lỗi validate ngay.
+Lý thuyết: với `shared-iterations`, **nhiều VU hơn = xong nhanh hơn** (vì
+nhiều worker cùng chia việc). Nhưng không phải cứ "càng nhiều càng tốt" —
+có 3 giới hạn thực tế:
 
-Trong demo: `const VUS = 4` → vus = 4.
+```text
+1. GIỚI HẠN MÁY LOCAL (RAM/CPU):
+   Mỗi VU = 1 JS context (goja VM) → tốn RAM ~2-5MB/VU
+   → 100 VU ≈ 200-500MB: ổn
+   → 1000 VU ≈ 2-5GB: bắt đầu nặng
+   → 5000 VU ≈ 10-25GB: dễ crash máy local
+   Khi máy local quá tải, chính k6 thành bottleneck — kết quả đo sai.
+
+2. GIỚI HẠN PHÍA SERVER (không phải lúc nào cũng muốn test max):
+   shared-iterations activate HẾT VU ngay từ t=0
+   → 100 VU cùng bắn request → server có thể bị "thunder"
+   → response time tăng vọt, timeout, connection refused
+   → Bạn đang test "server quá tải" thay vì "server hoạt động bình thường"
+   → Cần chọn vus phù hợp với MỤC TIÊU TEST, không phải max luôn.
+
+3. GIỚI HẠN VALIDATE:
+   vus phải <= iterations (mỗi VU ít nhất 1 iter)
+   → iterations=40, vus=100 → LỖI VALIDATE
+```
+
+**Vậy chọn bao nhiêu?**
+
+```text
+Mục tiêu "hoàn thành N iter nhanh nhất" → chọn vus LỚN NHẤT có thể,
+nhưng không vượt quá:
+  a) RAM máy local (thường ~500-1000 VU là trần với laptop 16GB)
+  b) Khả năng server chịu đựng (nếu test API công cộng, đừng DDoS)
+
+Mục tiêu "mô phỏng N user thật" → chọn vus = số user đồng thời thực tế
+  → Không cần nhiều hơn, vì thực tế chỉ có bấy nhiêu user
+
+Mục tiêu "so sánh performance giữa 2 phiên bản code":
+  → Chọn vus cố định (vd: 10), giữ nguyên qua mọi lần chạy
+  → iterations đủ lớn để có ý nghĩa thống kê (>100)
+```
+
+Trong demo: chọn `vus=4` — con số nhỏ để demo. Với `iterations=40`,
+`peak_rate = 4/0.5 = 8 iter/s` là đủ thấy rõ hành vi.
 
 ```text
 Ràng buộc: vus (4) <= iterations (40) ✓
 Header: "40 iterations shared among 4 VUs"   ← vus=4 khớp config
 ```
+
+> **Tóm lại**: user hỏi "chọn nhiều hơn thì tốt hơn chứ?" — ĐÚNG, nếu mục
+> tiêu là xong nhanh nhất. Nhưng đừng quên máy local (RAM) và server (quá
+> tải). Chọn vus = max mà máy local chịu được, miễn là không vượt quá
+> iterations và không làm sập server đang test.
 
 **── Bước 3: Đo iter_time (W) ──**
 
