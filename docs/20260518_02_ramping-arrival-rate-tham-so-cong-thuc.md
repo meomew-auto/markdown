@@ -1202,21 +1202,196 @@ slot = 3 × (4 + 4) / 2 = 12
 slot_interval = 1/4 = 250ms, đều suốt stage.
 ```
 
-**Tổng cả timeline**:
+**── Tổng cả timeline: đếm slot qua nhiều stage ──**
+
+Công thức tổng quát:
 
 ```text
-scheduled_iterations_total = sum(scheduled_iterations_i)
+N_sched = Σ scheduled_iterations_i = Σ d_i × (λ_prev + λ_next) / 2
+
+Với:
+  d_i        = duration stage i (giây)
+  λ_prev     = rate ở đầu stage i (= rate cuối stage i-1, hoặc startRate nếu i=0)
+  λ_next     = rate ở cuối stage i (= stage[i].target / timeUnit_seconds)
 ```
 
-Ví dụ scenario 3 stage (`startRate=0`):
+**Ví dụ 1: Scenario 3 stage cơ bản (ramp-up → steady → ramp-down)**
+
+Config:
+```js
+startRate: 0,
+timeUnit: "1s",
+stages: [
+  { duration: "2s", target: 4 },   // stage 0: ramp 0 → 4/s
+  { duration: "3s", target: 4 },   // stage 1: hold 4/s
+  { duration: "2s", target: 0 },   // stage 2: ramp 4 → 0/s
+]
+```
 
 ```text
-stage 0: ramp 0 → 4/s trong 2s   -> 2 × (0+4)/2 = 4 slot
-stage 1: hold 4/s trong 3s        -> 3 × 4       = 12 slot
-stage 2: ramp 4 → 0/s trong 2s   -> 2 × (4+0)/2 = 4 slot
-                                   -----------------
-                                   scheduled_total = 20 slot
+Bước 1 — Vẽ timeline rate(t):
+  rate
+  4 |          ┌─────────────────┐
+    |         /︙                 ︙\
+  3 |        / ︙      stage 1    ︙ \
+    |       /   ︙    (hold 4/s)  ︙  \
+  2 |      /    ︙                ︙   \
+    |     /     ︙                ︙    \
+  1 |    /      ︙                ︙     \
+    |   /       ︙                ︙      \
+  0 |──┴────────┴────────────────┴───────┴──► t
+    0s   stage 0    2s   stage 1   5s  stage 2  7s
+         (ramp up)        (hold)         (ramp down)
+
+Bước 2 — Tính từng stage:
+
+  Stage 0 (ramp 0 → 4/s, d=2s):
+    λ_prev = 0 (startRate)
+    λ_next = 4/1 = 4
+    N₀ = 2 × (0 + 4) / 2 = 4.0 slot
+
+  Stage 1 (hold 4/s, d=3s):
+    λ_prev = 4 (rate cuối stage 0)
+    λ_next = 4/1 = 4
+    N₁ = 3 × (4 + 4) / 2 = 12.0 slot
+    (vì λ_prev = λ_next nên công thức rút gọn: N = d × rate = 3 × 4 = 12)
+
+  Stage 2 (ramp 4 → 0/s, d=2s):
+    λ_prev = 4 (rate cuối stage 1)
+    λ_next = 0/1 = 0
+    N₂ = 2 × (4 + 0) / 2 = 4.0 slot
+
+Bước 3 — Cộng dồn:
+  N_sched = N₀ + N₁ + N₂ = 4 + 12 + 4 = 20 slot
+
+Bước 4 — Phân bổ slot theo stage:
+  Stage 0: slot #1  → #4   (4 slot, ramp lên)
+  Stage 1: slot #5  → #16  (12 slot, đều)
+  Stage 2: slot #17 → #20  (4 slot, ramp xuống)
 ```
+
+**── doneSoFar: cơ chế mang phần lẻ qua stage ──**
+
+Mỗi stage, `N_i = d_i × (λ_prev + λ_next) / 2` có thể ra số LẺ (vd 2.5, 3.7).
+k6 dùng biến `doneSoFar` để giữ phần thập phân và cộng dồn qua stage sau:
+
+```text
+Nguyên tắc:
+  stage i có N_i slot lý thuyết (có thể lẻ)
+  fire được floor(N_i + doneSoFar_cũ) slot nguyên
+  doneSoFar_mới = (N_i + doneSoFar_cũ) - floor(N_i + doneSoFar_cũ)
+                = phần thập phân còn dư
+```
+
+Ví dụ với số lẻ:
+```text
+startRate: 0, stages: [
+  { duration: "1.5s", target: 3 },   // ramp 0 → 3/s
+  { duration: "2s",   target: 5 },   // ramp 3 → 5/s
+  { duration: "1s",   target: 0 },   // ramp 5 → 0/s
+]
+
+Tính N_i từng stage:
+  Stage 0: N₀ = 1.5 × (0+3)/2 = 2.25 slot
+  Stage 1: N₁ = 2   × (3+5)/2 = 8.0 slot
+  Stage 2: N₂ = 1   × (5+0)/2 = 2.5 slot
+
+Tổng lý thuyết: 2.25 + 8.0 + 2.5 = 12.75 slot (≠ số nguyên)
+
+Áp doneSoFar:
+  Đầu stage 0: doneSoFar = 0
+    N₀ = 2.25, fire = floor(2.25 + 0) = 2 slot
+    doneSoFar = 2.25 - 2 = 0.25 (dư sang stage 1)
+
+  Đầu stage 1: doneSoFar = 0.25
+    N₁ = 8.0, fire = floor(8.0 + 0.25) = 8 slot
+    doneSoFar = 8.25 - 8 = 0.25
+
+  Đầu stage 2: doneSoFar = 0.25
+    N₂ = 2.5, fire = floor(2.5 + 0.25) = 2 slot
+    doneSoFar = 2.75 - 2 = 0.75
+
+  Tổng fire thực tế = 2 + 8 + 2 = 12 slot
+  (so với 12.75 lý thuyết → lệch 0.75, phần dư cuối cùng không fire)
+```
+
+**── Ví dụ 2: Scenario nhiều stage phức tạp ──**
+
+Config:
+```js
+startRate: 5,
+timeUnit: "1s",
+stages: [
+  { duration: "3s", target: 10 },  // stage 0: ramp 5 → 10/s
+  { duration: "2s", target: 10 },  // stage 1: hold 10/s
+  { duration: "4s", target: 2 },   // stage 2: ramp 10 → 2/s
+  { duration: "3s", target: 2 },   // stage 3: hold 2/s
+]
+```
+
+```text
+Bước 1 — Vẽ timeline:
+  rate
+  10 |          ┌──────┐
+     |         /︙       ︙\
+   8 |        / ︙        ︙ \
+     |       /   ︙        ︙  \
+   6 |      /    ︙        ︙   \
+     |     /     ︙        ︙    \
+   4 |    /      ︙        ︙     ┌────────┐
+     |   /       ︙        ︙    /︙         ︙
+   2 |  /        ︙        ︙───/ ︙         ︙
+     | /         ︙           /   ︙         ︙
+   0 +──┴────────┴───────────┴────┴─────────┴──► t
+    0s   stage 0  3s  stage 1 5s  stage 2   9s  stage 3  12s
+
+Bước 2 — Tính từng stage:
+
+  Stage 0 (ramp 5 → 10/s, d=3s):
+    λ_prev = 5, λ_next = 10
+    N₀ = 3 × (5 + 10) / 2 = 3 × 7.5 = 22.5 slot
+
+  Stage 1 (hold 10/s, d=2s):
+    λ_prev = 10, λ_next = 10
+    N₁ = 2 × (10 + 10) / 2 = 2 × 10 = 20.0 slot
+
+  Stage 2 (ramp 10 → 2/s, d=4s):
+    λ_prev = 10, λ_next = 2
+    N₂ = 4 × (10 + 2) / 2 = 4 × 6 = 24.0 slot
+
+  Stage 3 (hold 2/s, d=3s):
+    λ_prev = 2, λ_next = 2
+    N₃ = 3 × (2 + 2) / 2 = 3 × 2 = 6.0 slot
+
+Bước 3 — Cộng dồn:
+  N_sched = 22.5 + 20 + 24 + 6 = 72.5 slot
+
+Bước 4 — Thực tế fire (với doneSoFar):
+  Stage 0: N₀=22.5  → fire 22 slot, doneSoFar=0.5
+  Stage 1: N₁=20.0  → fire 20 slot (20.0+0.5=20.5), doneSoFar=0.5
+  Stage 2: N₂=24.0  → fire 24 slot (24.0+0.5=24.5), doneSoFar=0.5
+  Stage 3: N₃=6.0   → fire 6 slot (6.0+0.5=6.5), doneSoFar=0.5
+  Tổng fire = 22 + 20 + 24 + 6 = 72 slot
+
+Bước 5 — Phân bổ slot theo stage:
+  Stage 0: slot #1  → #22  (22 slot, ramp lên: thưa → dày)
+  Stage 1: slot #23 → #42  (20 slot, đều 100ms)
+  Stage 2: slot #43 → #66  (24 slot, ramp xuống: dày → thưa)
+  Stage 3: slot #67 → #72  (6 slot, đều 500ms)
+```
+
+**── Bảng tổng hợp công thức theo loại stage ──**
+
+| Loại stage | Điều kiện | Công thức rút gọn | Ví dụ |
+|---|---|---|---|
+| Ramp lên | λ_next > λ_prev | d × (λ_prev + λ_next)/2 | 2s × (2+4)/2 = 6 |
+| Ramp xuống | λ_next < λ_prev | d × (λ_prev + λ_next)/2 | 2s × (4+1)/2 = 5 |
+| Hold | λ_next = λ_prev | d × λ (hình chữ nhật) | 3s × 4 = 12 |
+| Từ 0 | λ_prev = 0 | d × λ_next/2 (tam giác) | 2s × 4/2 = 4 |
+| Về 0 | λ_next = 0 | d × λ_prev/2 (tam giác) | 2s × 4/2 = 4 |
+
+Tất cả đều là **cùng 1 công thức hình thang** — các dòng "rút gọn" chỉ là
+trường hợp đặc biệt khi 1 trong 2 đáy = 0 hoặc 2 đáy bằng nhau.
 
 Đây là số slot k6 **DỰ TÍNH** fire (mục tiêu scheduler), khác số iter
 HOÀN THÀNH (= `iterations` trong summary). Quan hệ:
