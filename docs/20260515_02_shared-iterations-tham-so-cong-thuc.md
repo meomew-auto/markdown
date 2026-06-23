@@ -2692,10 +2692,53 @@ T_est là INPUT cho Công thức 4:
   Nếu T_est > maxDuration:
     → scenario bị cắt bởi maxDuration
     → T_max = maxDuration + gracefulStop
-    → Có dropped_iterations
+    → Có dropped_iterations (iter trong kho chưa kịp lấy — xem bên dưới)
+    → CÓ THỂ có interrupted_iterations (iter đang chạy không kịp finish trong grace)
 
 → Luôn kiểm tra: T_est < maxDuration không?
 → Nếu không: hoặc giảm iterations, hoặc tăng vus, hoặc tăng maxDuration
+```
+
+##### Drop vs Interrupt trong shared-iterations — đừng nhầm
+
+CẢ HAI đều có thể xảy ra khi `T_est > maxDuration`, nhưng là 2 thứ KHÁC NHAU:
+
+| | `dropped_iterations` | `interrupted_iterations` |
+| --- | --- | --- |
+| **Là gì?** | Iter trong kho CHƯA TỪNG ĐƯỢC LẤY | Iter ĐÃ START nhưng KHÔNG KỊP FINISH |
+| **Xảy ra khi** | `maxDuration` hết, VU không claim iter mới | `gracefulStop` hết, `maxDurationCtx` cancel |
+| **Core** | `attemptedIters < totalIters` → emit | `ctx.Err()` → `AddInterrupted` |
+| **Code ref** | `shared_iterations.go:219-228` | `helpers.go:90-95` |
+| **Ví dụ** | config 100 iter, VU mới lấy 40 → drop 60 | iter đang chạy 5s/6s, grace=1s → interrupt |
+
+**Timeline minh họa CẢ HAI CÙNG XUẤT HIỆN:**
+
+```text
+Config: iterations=100, vus=2, iter_time=2s, maxDuration=5s, grace=1s
+
+t=0     2 VU claim iter#1,#2 → chạy (đến t=2)
+t=2     finish #1,#2 (complete=2)
+        claim iter#3,#4 → chạy (đến t=4)
+t=4     finish #3,#4 (complete=4)
+        claim iter#5,#6 → chạy (đến t=6)
+t=5     maxDuration hết → regDurationCtx done
+        → VU không claim iter mới nữa
+        → iter#7..#100 trong kho = DROPPED (94 iter chưa từng lấy)
+t=6     gracefulStop hết → maxDurationCtx cancel
+        → iter#5,#6 đang chạy (đã 2s/2s, vừa kịp)
+        → nếu iter_time=2.5s thay vì 2s: iter mới được 2s/2.5s → INTERRUPTED
+
+Kết quả: complete=6, interrupted=0, dropped=94
+         attemptedIters=6, totalIters=100
+         100 = 6(complete) + 0(interrupted) + 94(dropped) ✓
+```
+
+Quy tắc:
+
+```text
+- iter_time < gracefulStop  → chỉ DROP, không interrupt (iter kịp finish trong grace)
+- iter_time > gracefulStop  → DROP + INTERRUPT (iter không kịp finish)
+- Drop KHÔNG chỉ có ở arrival-rate — shared-iterations cũng có drop
 ```
 
 **Khi nào dùng**: trước khi chạy, để biết test mất bao lâu — và quan trọng
