@@ -466,6 +466,37 @@ export const options = {
 
 **Tại sao checks rate==1 mà không phải rate>0.9?** Đây là correctness test -- không có chỗ cho sai số. Nếu stale-if-error không hoạt động đúng, toàn bộ hệ thống có nguy cơ downtime. Không thể chấp nhận "90% request được phục vụ stale".
 
+##### Phân tích executor: vì sao dùng `per-vu-iterations` cho case này?
+
+Config dùng bare form `vus=1, iterations=1` → `per-vu-iterations`.
+
+**Yêu cầu của case:**
+
+```text
+1. Stale-if-error chain: warm → HIT → origin down → stale served → origin up → fresh
+   → Mỗi bước PHỤ THUỘC bước trước (không thể verify stale nếu chưa warm)
+   → Cần điều khiển origin up/down giữa các bước → TUẦN TỰ tuyệt đối
+
+2. 1 VU, 1 iteration: toàn bộ kịch bản stale-if-error trong 1 lần default()
+   → setup() warm cache + bật origin down
+   → default() verify stale → bật origin up → verify fresh
+   → Nhiều VU sẽ race: VU A verify stale, VU B bật origin up → hỏng test
+```
+
+**So sánh executor:**
+
+| Executor | Phù hợp? | Vì sao |
+| --- | --- | --- |
+| **per-vu-iterations** (đang dùng) | ✅ **ĐÚNG** | 1 VU × 1 iter. Sequence tuần tự + điều khiển origin state. |
+| shared-iterations | ⚠️ Kết quả giống | Với `vus=1`, output giống. |
+| constant-vus | ❌ SAI | Cần `duration`. Không biết trước thời gian (origin up/down, sleep). |
+| constant-arrival-rate | ❌ SAI | Ép rate. Case này cần sequence, không cần rate. |
+| ramping-vus | ❌ SAI | 1 VU ổn định, không ramp. |
+
+**Key insight**: Stale-if-error test = "warm → bật origin down → verify stale →
+bật origin up → verify fresh". Sequential proof yêu cầu điều khiển môi trường
+giữa các bước. `per-vu-iterations` với `vus=1, iterations=1` là pattern chuẩn.
+
 ### 5.5 setup() -- chi tiết từng bước
 
 ```javascript

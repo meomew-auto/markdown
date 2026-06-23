@@ -362,6 +362,37 @@ export const options = {
 - Mọi race condition (request đến cùng lúc) sẽ làm hỏng evidence.
 - Origin request count phải tăng chính xác 1 → 2; concurrent request sẽ làm count không xác định.
 
+##### Phân tích executor: vì sao dùng `per-vu-iterations` cho case này?
+
+Config dùng bare form `vus=1, iterations=1` → `per-vu-iterations`.
+
+**Yêu cầu của case:**
+
+```text
+1. Negative caching chain: first MISS → second HIT (negative cache) → wait TTL → MISS again
+   → Cần sequence TUẦN TỰ: request 1 (404, MISS), request 2 (404, HIT từ negative cache)
+   → Không thể verify "HIT từ negative cache" nếu request đến xen kẽ
+   → Origin counter phải tăng chính xác 1 → 2 (đếm số lần gọi origin)
+
+2. 1 VU, 1 iteration: toàn bộ flow trong 1 lần default()
+   → setup() reset origin counter
+   → default() first → second → sleep → after-expiry → verify counter
+```
+
+**So sánh executor:**
+
+| Executor | Phù hợp? | Vì sao |
+| --- | --- | --- |
+| **per-vu-iterations** (đang dùng) | ✅ **ĐÚNG** | 1 VU × 1 iter. Sequence + origin counter check tuần tự. |
+| shared-iterations | ⚠️ Kết quả giống | Với `vus=1`, output giống. |
+| constant-vus | ❌ SAI | Cần `duration`. Không biết trước thời gian (sleep TTL). |
+| constant-arrival-rate | ❌ SAI | Ép rate. Case này cần "đợi TTL âm hết hạn". |
+| ramping-vus | ❌ SAI | 1 VU ổn định, không ramp. |
+
+**Key insight**: Negative caching test = "verify 404 cũng được cache". Cần
+sequence + origin counter chính xác. `per-vu-iterations` với `vus=1,
+iterations=1` là pattern chuẩn.
+
 ### 5.4. Pha setup()
 
 ```javascript

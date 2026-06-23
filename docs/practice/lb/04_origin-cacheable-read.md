@@ -498,6 +498,41 @@ T0                     T15s                    T45s
 └──────────────────────┴───────────────────────┘
 ```
 
+##### Phân tích executor: vì sao dùng `constant-vus` dual-scenario cho case này?
+
+Case này dùng **2 scenario `constant-vus`** với `startTime` để stagger. Đây là
+pattern "warmup rồi đo" — khác biệt so với single-scenario smoke test.
+
+**Yêu cầu của case:**
+
+```text
+1. Warmup phase: 6 VU × 15s — làm nóng connection pool, populate cache
+   → constant-vus: sustained traffic trong duration cố định
+   → KHÔNG cần rate chính xác — chỉ cần request liên tục
+
+2. Measurement phase: 16 VU × 30s — đo performance thật
+   → startTime = 15s (bắt đầu SAU warmup)
+   → constant-vus: VU ổn định, rate = vus/iter_time tự điều chỉnh
+
+3. 2 scenario tách biệt: warmup KHÔNG tính vào measurement
+   → startTime stagger đảm bảo tuần tự warmup → measure
+   → Mỗi scenario có tag phase riêng → lọc metric dễ dàng
+```
+
+**So sánh executor cho dual-scenario:**
+
+| Executor | Phù hợp? | Vì sao |
+| --- | --- | --- |
+| **constant-vus** (đang dùng) | ✅ **ĐÚNG** | Sustained traffic cho cả warmup và measurement. Stagger bằng startTime. Mỗi phase VU ổn định. |
+| ramping-vus | ⚠️ Có thể dùng | Nếu muốn ramp VU trong measurement phase (tăng dần tải). Nhưng case này chỉ cần VU ổn định → constant-vus đơn giản hơn. |
+| constant-arrival-rate | ⚠️ Được nhưng thừa | Ép rate chính xác. LB origin cache test không cần rate exact — chỉ cần sustained traffic. Thêm complexity. |
+| shared-iterations | ❌ SAI | Cần tổng iter cố định. Case này warmup/measure theo THỜI GIAN. |
+| per-vu-iterations | ❌ SAI | Cần iter/VU cố định. Case này loop vô hạn theo duration. |
+
+**Key insight**: Dual-scenario pattern = "warmup trước, đo sau". `constant-vus`
+cho phép cả 2 phase chạy sustained traffic, `startTime` đảm bảo tuần tự.
+Đây là pattern phổ biến khi cần loại bỏ cold-start noise khỏi measurement.
+
 #### Thresholds
 
 | Threshold | Giá trị | Ý nghĩa |

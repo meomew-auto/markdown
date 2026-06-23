@@ -491,6 +491,41 @@ export const options = {
 
 **Lưu ý quan trọng:** Mặc dù chỉ có 1 VU, `http.batch()` trong k6 vẫn gửi nhiều request đồng thời từ một VU duy nhất. Đây là tính năng của k6: một VU có thể có nhiều concurrent connection.
 
+##### Phân tích executor: vì sao dùng `per-vu-iterations` cho case này?
+
+Config dùng bare form `vus=1, iterations=1` → `per-vu-iterations`. **Đặc biệt:**
+đây là case DUY NHẤT trong CDN correctness dùng `http.batch()` để gửi nhiều
+request ĐỒNG THỜI từ 1 VU duy nhất.
+
+**Yêu cầu của case:**
+
+```text
+1. Request coalescing test: warm → gửi 5 request ĐỒNG THỜI → verify
+   → Cần 1 VU gửi batch (5 request cùng lúc) để test coalescing
+   → Nhiều VU sẽ gửi request riêng lẻ → không test được "gộp request"
+   → http.batch() từ 1 VU = mô phỏng nhiều user đến cùng lúc tốt hơn
+
+2. 1 iteration = 1 lần batch test:
+   → setup() warm cache
+   → default() gửi http.batch() 5 request → tất cả phải HIT
+   → Chỉ cần 1 lần — nếu coalescing hoạt động, 1 lần đủ thấy
+```
+
+**So sánh executor:**
+
+| Executor | Phù hợp? | Vì sao |
+| --- | --- | --- |
+| **per-vu-iterations** (đang dùng) | ✅ **ĐÚNG** | 1 VU × 1 iter. `http.batch()` từ 1 VU tạo concurrent requests. Clean test. |
+| shared-iterations | ⚠️ Kết quả giống | Với `vus=1`, output giống. |
+| constant-vus | ❌ SAI | Nhiều VU sẽ gửi request riêng lẻ thay vì batch — không test được coalescing. |
+| constant-arrival-rate | ❌ SAI | Ép rate. Case này cần batch đồng thời, không phải rate đều. |
+| ramping-vus | ❌ SAI | Không cần ramp. |
+
+**Key insight**: Coalescing test cần "nhiều request đến CÙNG LÚC". Có 2 cách:
+(1) nhiều VU song song, (2) 1 VU dùng `http.batch()`. Case này chọn cách 2 —
+sạch hơn, deterministic hơn. `per-vu-iterations` + `http.batch()` cho phép
+test coalescing với chỉ 1 VU.
+
 ### 5.5 setup() -- chi tiết
 
 ```javascript

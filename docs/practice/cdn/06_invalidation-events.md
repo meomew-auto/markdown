@@ -420,6 +420,36 @@ export const options = {
 
 **Tương tự Case 05:** `vus: 1`, `iterations: 1`, `checks: ['rate==1']`. Đây là chuẩn cho CDN correctness cases. Khác biệt duy nhất là `scenario` tag: `cdn_invalidation_events` (để phân biệt trên dashboard).
 
+##### Phân tích executor: vì sao dùng `per-vu-iterations` cho case này?
+
+Config dùng bare form `vus=1, iterations=1` → `per-vu-iterations`. Pattern chuẩn
+cho CDN correctness proof.
+
+**Yêu cầu của case:**
+
+```text
+1. Event-driven invalidation: warm → HIT → gửi event invalidate → đợi → MISS
+   → Chain PHỤ THUỘC tuần tự: không thể verify MISS trước khi invalidate xong
+   → Nhiều VU sẽ race: VU A warm, VU B invalidate → không quy kết được
+
+2. 1 VU, 1 iteration: toàn bộ flow event-driven trong 1 lần default()
+   → Setup warm, gửi event, poll chờ, verify MISS — tất cả trong 1 iter
+```
+
+**So sánh executor:**
+
+| Executor | Phù hợp? | Vì sao |
+| --- | --- | --- |
+| **per-vu-iterations** (đang dùng) | ✅ **ĐÚNG** | 1 VU × 1 iter. Sequence tuần tự. Correctness proof. |
+| shared-iterations | ⚠️ Kết quả giống | Với `vus=1`, output giống. Semantic khác — không quan trọng ở đây. |
+| constant-vus | ❌ SAI | Cần `duration`. Không biết trước thời gian poll chờ invalidate event. |
+| constant-arrival-rate | ❌ SAI | Ép rate. Case này cần đợi, không cần rate. |
+| ramping-vus | ❌ SAI | 1 VU ổn định, không ramp. |
+
+**Key insight**: CDN event-driven invalidation cần "warm → gửi event → đợi →
+verify". Đây là sequential proof, không phải load test. `per-vu-iterations`
+với `vus=1, iterations=1` là pattern chuẩn.
+
 ### 5.4 Hàm `warmUntilHit(path, profile, label)` — local helper
 
 ```javascript

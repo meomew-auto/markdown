@@ -318,6 +318,37 @@ TTL expiry test có trật tự thời gian nghiêm ngặt:
 3. Sleep → phải kết thúc trước request 3.
 4. Request 3 (MISS sau TTL) → phải xảy ra sau khi object hết hạn.
 
+##### Phân tích executor: vì sao dùng `per-vu-iterations` cho case này?
+
+Config dùng bare form `vus=1, iterations=1` → `per-vu-iterations`.
+
+**Yêu cầu của case:**
+
+```text
+1. Time-sensitive sequence: MISS → HIT → sleep(ttl) → MISS
+   → Thời gian LÀ MỘT PHẦN CỦA TEST — sleep(2s) mô phỏng TTL expiry
+   → 1 VU đảm bảo không ai "chen ngang" request trong lúc sleep
+   → Nhiều VU: VU A sleep, VU B gửi request → làm mới TTL → test fail
+
+2. 1 iteration chứa TOÀN BỘ timeline:
+   → banUrl → warm → HIT verify → sleep TTL → MISS verify
+   → Tất cả trong 1 lần default() — deterministic
+```
+
+**So sánh executor:**
+
+| Executor | Phù hợp? | Vì sao |
+| --- | --- | --- |
+| **per-vu-iterations** (đang dùng) | ✅ **ĐÚNG** | 1 VU × 1 iter. Sequence + sleep tuần tự. TTL test cần thời gian chính xác. |
+| shared-iterations | ⚠️ Kết quả giống | `vus=1` nên output giống. |
+| constant-vus | ❌ SAI | Cần `duration`. TTL test không biết trước tổng thời gian (sleep + response time). Duration có thể cắt ngang sleep. |
+| constant-arrival-rate | ❌ SAI | Ép rate. Case này cần "đợi TTL hết hạn", không cần "gửi N request/giây". |
+| ramping-vus | ❌ SAI | 1 VU ổn định, không ramp. |
+
+**Key insight**: TTL test = "đợi cho cache hết hạn rồi verify". Thời gian là
+INPUT (sleep mô phỏng TTL), không phải OUTPUT. `per-vu-iterations` cho phép
+sleep trong iteration mà không bị `duration` cắt ngang.
+
 Nếu có nhiều VUs, chúng sẽ chạy song song và phá vỡ trật tự này. Ví dụ: VU 2 gửi request 3 trong khi VU 1 vừa mới gửi request 1 → object chưa được cache → cả hai đều MISS.
 
 **Tại sao không tăng iterations?**

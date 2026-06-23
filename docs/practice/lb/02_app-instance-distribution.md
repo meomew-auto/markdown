@@ -391,6 +391,20 @@ Case 02 cần số lượng request chính xác vì:
 2. Check distribution chỉ chạy ở iteration cuối cùng (`__ITER === DISTRIBUTION_ITERATIONS - 1`)
 3. Nếu số iteration không xác định, logic "iteration cuối" không hoạt động
 
+**So sánh đầy đủ 5 executor cho case này:**
+
+| Executor | Phù hợp? | Vì sao |
+| --- | --- | --- |
+| **shared-iterations** (đang dùng) | ✅ **ĐÚNG** | Tổng iteration CỐ ĐỊNH (60). Check distribution ở iter cuối → cần biết chính xác tổng số. `noVUConnectionReuse` cần iteration mới = connection mới. |
+| per-vu-iterations | ⚠️ Được | Với `vus=1`, output giống hệt shared. Nhưng shared-iterations semantic đúng hơn: "60 probe, 1 worker làm hết". |
+| constant-vus | ❌ SAI | Số request KHÔNG cố định → logic "iteration cuối" không hoạt động. Không biết khi nào đủ sample. |
+| constant-arrival-rate | ❌ SAI | Ép rate. Case này không cần rate — chỉ cần "60 probe rồi dừng". Thêm complexity thừa. |
+| ramping-vus | ❌ SAI | 1 VU ổn định, không ramp. |
+
+**Key insight**: Distribution test = "gửi đúng N request, đếm instance, dừng".
+Tổng request là INPUT cố định (60), không phải OUTPUT. `shared-iterations`
+đảm bảo chạy ĐỦ 60 iteration, không hơn không kém.
+
 #### `noVUConnectionReuse: true` -- chìa khóa của case này
 
 ```text

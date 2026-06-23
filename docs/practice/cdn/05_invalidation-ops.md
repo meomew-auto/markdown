@@ -311,6 +311,37 @@ Luôn giữ `vus: 1` cho các case correctness CDN trừ khi case đó được 
 
 **`checks: ['rate==1']`**: Threshold này có nghĩa: **mọi check phải pass 100%**. Nếu có dù chỉ 1 check fail (vd: expected HIT nhưng lại MISS), k6 sẽ exit với mã lỗi khác 0. Đây là contract cứng: không có chỗ cho "gần đúng" trong cache correctness.
 
+##### Phân tích executor: vì sao dùng `per-vu-iterations` cho case này?
+
+Config dùng bare form `vus=1, iterations=1` → k6 tự động chọn
+`per-vu-iterations`. Đây là pattern chuẩn cho CDN correctness proof.
+
+**Yêu cầu của case:**
+
+```text
+1. Sequential proof chain: warm → HIT → invalidate → MISS
+   → Mỗi bước PHỤ THUỘC kết quả bước trước
+   → Nếu 2+ VU: VU A warm, VU B invalidate → race → không quy kết được
+
+2. 1 VU, 1 iteration: toàn bộ kịch bản invalidate trong 1 lần default()
+   → Setup warm cache, default() chạy tuần tự invalidate → verify
+   → Số request deterministic, không phụ thuộc response time
+```
+
+**So sánh executor:**
+
+| Executor | Phù hợp? | Vì sao |
+| --- | --- | --- |
+| **per-vu-iterations** (đang dùng) | ✅ **ĐÚNG** | 1 VU × 1 iter. Sequence tuần tự chuẩn xác. Correctness proof, không phải load test. |
+| shared-iterations | ⚠️ Kết quả giống | Với `vus=1`, output giống hệt. Nhưng semantic: shared ngụ ý "kho chung nhiều worker", case này là "1 người làm 1 việc". |
+| constant-vus | ❌ SAI | Cần `duration`. Case này KHÔNG biết trước thời gian — các bước có sleep/wait khác nhau. Duration có thể cắt ngang chain. |
+| constant-arrival-rate | ❌ SAI | Ép rate. Không cần — mỗi bước phải đợi bước trước. Thêm `preAllocatedVUs` là complexity thừa. |
+| ramping-vus | ❌ SAI | Cần stage. 1 VU ổn định, không ramp. |
+
+**Key insight**: CDN correctness = "làm đúng 1 lần, đủ các bước theo thứ tự".
+Không phải "làm nhiều lần trong X giây". `per-vu-iterations` với `vus=1,
+iterations=1` là pattern CHUẨN cho mọi CDN correctness proof.
+
 ### 5.4 Hàm `warmUntilHit(path, profile, label)` — local helper
 
 Script định nghĩa một helper function để đảm bảo object đã được cache trước khi invalidate:

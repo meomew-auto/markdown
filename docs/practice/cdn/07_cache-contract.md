@@ -281,6 +281,36 @@ export const options = {
 
 Case này kiểm tra **sự tồn tại và hình thái** của headers, không phải hành vi theo thời gian. Một iteration đủ để xác nhận contract. Nếu bạn muốn kiểm tra tính ổn định (headers có luôn xuất hiện không), tăng iterations lên 5-10 và quan sát.
 
+##### Phân tích executor: vì sao dùng `per-vu-iterations` cho case này?
+
+Config dùng bare form `vus=1, iterations=1` → `per-vu-iterations`.
+
+**Yêu cầu của case:**
+
+```text
+1. Header contract validation: kiểm tra SỰ TỒN TẠI của cache headers
+   → Mỗi endpoint (detail, list, config) cần request riêng
+   → Tuần tự, không cần song song — 1 VU đủ
+   → KHÔNG phải load test, KHÔNG cần duration
+
+2. 1 iteration = 1 lần kiểm toàn bộ contract:
+   → Gọi từng endpoint → assert headers → done
+   → Số request cố định, deterministic
+```
+
+**So sánh executor:**
+
+| Executor | Phù hợp? | Vì sao |
+| --- | --- | --- |
+| **per-vu-iterations** (đang dùng) | ✅ **ĐÚNG** | 1 VU × 1 iter. Header contract check tuần tự. |
+| shared-iterations | ⚠️ Kết quả giống | Với `vus=1`, output giống hệt. |
+| constant-vus | ❌ SAI | Cần `duration`. Case này check contract 1 lần, không cần sustained traffic. |
+| constant-arrival-rate | ❌ SAI | Ép rate. Không cần — đây là single-run validation. |
+| ramping-vus | ❌ SAI | 1 VU ổn định, không ramp. |
+
+**Key insight**: Cache contract test = "kiểm tra headers có mặt và đúng format
+không". 1 lần đủ. `per-vu-iterations` với `vus=1, iterations=1`.
+
 ### 5.3 Default function — step 1: Product detail contract
 
 ```javascript

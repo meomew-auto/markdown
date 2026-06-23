@@ -265,6 +265,39 @@ export const options = {
 | `thresholds.checks` | `['rate==1']` | Tất cả checks phải pass |
 | `tags.scenario` | `'cdn_query_normalization'` | Tag để phân biệt trong dashboard/cloud output |
 
+##### Phân tích executor: vì sao dùng `per-vu-iterations` cho case này?
+
+Config hiện tại dùng bare form `vus` + `iterations` — với `vus=1, iterations=1`,
+k6 tự động chọn `per-vu-iterations`. Đây là lựa chọn ĐÚNG cho CDN query
+normalization.
+
+**Yêu cầu của case:**
+
+```text
+1. Deterministic sequence: query params khác nhau tạo cache key khác nhau
+   → Cần kiểm tra TUẦN TỰ: warm base → HIT base → query variant MISS → HIT
+   → Trình tự request QUYẾT ĐỊNH kết quả test
+   → KHÔNG phải sustained traffic, KHÔNG cần nhiều VU
+
+2. 1 VU, 1 iteration: toàn bộ kịch bản trong 1 lần chạy default()
+   → Setup làm warm, default() gọi từng bước kiểm tra tuần tự
+   → Số request deterministic, không phụ thuộc response time
+```
+
+**So sánh executor:**
+
+| Executor | Phù hợp? | Vì sao |
+| --- | --- | --- |
+| **per-vu-iterations** (đang dùng) | ✅ **ĐÚNG** | 1 VU chạy đúng 1 iteration. Sequence tuần tự chuẩn xác. Đây là correctness proof, không phải load test. |
+| shared-iterations | ⚠️ Được (kết quả giống) | Với `vus=1`, shared và per-vu cho cùng output. Nhưng semantic khác: shared ngụ ý "kho chung", case này là "1 người làm 1 việc". |
+| constant-vus | ❌ SAI | Cần duration. Case này không biết trước thời gian — mỗi step có sleep/wait khác nhau. `duration` có thể cắt ngang giữa chừng. |
+| constant-arrival-rate | ❌ SAI | Ép rate cố định. Case này không cần rate — mỗi step phải đợi step trước hoàn thành. Thêm complexity thừa. |
+| ramping-vus | ❌ SAI | Cần stage. 1 VU ổn định, không ramp. |
+
+**Key insight**: CDN correctness test = "làm đúng 1 lần, đủ các bước, tuần tự".
+Không phải "làm nhiều lần trong X giây". `per-vu-iterations` với `vus=1,
+iterations=1` là pattern chuẩn cho mọi CDN correctness proof.
+
 ### 5.3. `expectedCacheKey` — cách tính cache key từ profile
 
 ```javascript

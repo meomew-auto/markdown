@@ -324,6 +324,21 @@ Tại sao chọn `constant-vus` thay vì `shared-iterations` cho smoke test?
 
 Smoke test dùng `constant-vus` vì mục đích là quan sát hệ thống hoạt động ổn định trong một khoảng thời gian, không phải đếm chính xác số request.
 
+**So sánh đầy đủ 5 executor cho case này:**
+
+| Executor | Phù hợp? | Vì sao |
+| --- | --- | --- |
+| **constant-vus** (đang dùng) | ✅ **ĐÚNG** | Sustained traffic 18s. VU loop liên tục, rate tự điều chỉnh theo LB response time. Mô hình "user thật" — mỗi VU là 1 user gửi request liên tục. |
+| constant-arrival-rate | ⚠️ Được nhưng thừa | Ép rate cố định. LB smoke KHÔNG cần rate chính xác — chỉ cần request liên tục. Thêm `preAllocatedVUs`, `maxVUs` là complexity không cần thiết. |
+| shared-iterations | ❌ SAI | Cần tổng iter CỐ ĐỊNH. Case này muốn chạy THEO THỜI GIAN (18s), không phải theo số lượng. Không biết trước iter_time nên không chọn được iterations. |
+| per-vu-iterations | ❌ SAI | Cần iter/VU cố định. Case này VU loop vô hạn đến hết duration. |
+| ramping-vus | ❌ SAI | Cần thay đổi VU theo stage. Case này VU ổn định = 4, không ramp. |
+
+**Key insight**: LB smoke test = "hệ thống có chạy ổn định trong 18s không?".
+Số request thực tế là OUTPUT (phản ánh LB performance), không phải INPUT.
+`constant-vus` cho phép VU loop tự nhiên, rate = vus/iter_time thay đổi theo
+LB speed.
+
 #### Thresholds -- ba điều kiện cứng
 
 ```javascript
