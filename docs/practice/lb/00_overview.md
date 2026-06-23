@@ -108,6 +108,84 @@ X-Cache phải vắng mặt trong LB profiles.
 | All 200 nhưng failover không có header | Không chứng minh retry/failover thật | Cần `X-LB-Failover=faulty->stable`. |
 | Latency cao bị coi là LB fail | Slow lane/timeout case cố ý tạo latency | Đọc theo endpoint/tag, không đọc aggregate p95 toàn suite. |
 
+## ⭐ 2 bài tiêu biểu nhất để dạy LB layer
+
+Trong 12 case, đây là 2 bài **thực tế hay gặp nhất** và **bao quát toàn bộ tinh thần LB layer**:
+
+### Bài 1: Case 03 — Domain boundary routing (`03_domain-boundaries.md`)
+
+**Vì sao chọn làm bài nền tảng:**
+
+```text
+Routing là CHỨC NĂNG SỐ 1 của LB/Gateway.
+Nếu route sai service, mọi thứ khác (retry, canary, timeout) đều vô nghĩa.
+```
+
+| Tiêu chí | Giá trị dạy |
+| --- | --- |
+| **Business scenario** | Hệ thống microservices: auth, cart, orders, products, report — mỗi service có path riêng. Request đến `/auth/*` phải đi auth service, `/cart/*` phải đi cart service. Route nhầm → user thấy sai data hoặc 404. |
+| **LB capability** | Nginx route request đến đúng upstream service dựa trên URL path. `X-Upstream-Service` header xác nhận service đích. Mỗi path → đúng service → đúng response format. |
+| **Signal quan trọng** | `X-Upstream-Service` là evidence chính: `X-Upstream-Service: auth-service`, `X-Upstream-Service: cart-service`, etc. Không có `X-Cache` (vì profile `full-no-cdn` bypass CDN). |
+| **Executor** | `per-vu-iterations`, vus=1, iterations=1 — sequential deterministic proof. Gọi từng service một, verify response đúng format của service đó. |
+| **Bài học cốt lõi** | **"Status 200 không có nghĩa route đúng."** App có thể trả 200 nhưng sai service → sai data. Phải verify `X-Upstream-Service` + response body structure. |
+| **Độ khó** | ⭐⭐ — 5 service boundaries, cần biết response format từng service. |
+
+**Dạy trong bao lâu:** 35-45 phút — routing concept, service boundaries, `X-Upstream-Service` header.
+
+### Bài 2: Case 06 — Retry and failover (`06_retry-failover.md`)
+
+**Vì sao chọn làm bài nâng cao:**
+
+```text
+Retry/failover là LÝ DO TỒN TẠI của LB trong production.
+Không có failover, LB chỉ là reverse proxy đơn giản.
+Case này dạy "user thấy 200 dù backend đang lỗi 503".
+```
+
+| Tiêu chí | Giá trị dạy |
+| --- | --- |
+| **Business scenario** | Một upstream origin bắt đầu trả 503 (lỗi, bảo trì, quá tải). Nginx phát hiện lỗi → retry sang upstream KHÁC → user vẫn nhận 200. User KHÔNG BAO GIỜ thấy lỗi nếu còn ít nhất 1 origin khỏe mạnh. |
+| **LB capability** | Nginx retry mechanism: khi upstream A trả 503 → Nginx tự động thử upstream B → nếu B OK → trả 200 cho client. Header `X-LB-Failover=faulty->stable` là evidence của failover. |
+| **Signal quan trọng** | `X-LB-Failover` header chứng minh failover đã xảy ra. `X-Upstream-Status: 503, 200` cho thấy attempt 1 (503) và attempt 2 (200). Client chỉ thấy status 200 cuối cùng. |
+| **Executor** | `per-vu-iterations`, vus=1, iterations=1 — sequential proof. Sequence: setup faulty origin → gửi request → verify client nhận 200 + failover header. |
+| **Bài học cốt lõi** | **"Client 200 có thể che giấu backend 503."** Đây là bài học vận hành quan trọng: đừng chỉ nhìn client-side status — phải đọc `X-Upstream-Status` và `X-LB-Failover` để biết chuyện gì đã xảy ra phía sau. |
+| **Độ khó** | ⭐⭐ — Retry concept, failover evidence, phân biệt client view vs upstream view. |
+
+**Dạy trong bao lâu:** 40-50 phút — retry concept, failover mechanism, client vs upstream perspective.
+
+### Lộ trình dạy 2 bài
+
+```text
+Buổi 1 (nền tảng): Case 03 Domain boundary routing
+  1. LB mental model: client → Nginx → upstream services
+  2. Service boundaries: path → upstream mapping
+  3. Evidence: X-Upstream-Service, response body structure
+  4. Profile: full-no-cdn (không CDN để thấy signal LB thuần)
+  5. Demo: chạy sequential, verify từng service route đúng
+
+Buổi 2 (nâng cao): Case 06 Retry and failover
+  1. Vì sao cần retry: upstream failure không nên đến user
+  2. Failover mechanism: Nginx thử upstream khác
+  3. Evidence: X-LB-Failover, X-Upstream-Status
+  4. Client vs upstream view: 200 bên ngoài, 503 bên trong
+  5. Demo: setup faulty origin, xem failover hoạt động
+```
+
+### Vì sao không chọn các case khác?
+
+| Case | Vì sao không chọn làm bài chính? |
+| --- | --- |
+| 01 Entry smoke | Cơ bản (entrypoint, request ID, không CDN), nhưng chỉ là connectivity check. Case 03 dạy routing — giá trị hơn. |
+| 02 App instance distribution | Tốt (scale app, nhiều instance_id), nhưng là extension của Case 01. Case 03 + 06 phủ rộng hơn. |
+| 04 Origin cacheable read | Gần với CDN case 01 (cacheable read path). Học viên đã học CDN sẽ thấy trùng lặp. |
+| 05 Origin service mix | Hay (mixed traffic như production), nhưng là "tổng hợp" của Case 03 + 04. Nên để học viên tự làm. |
+| 07 Rate limit / connection pressure | Rất hay (load shedding, 429 expected), nhưng là advanced topic. Nên dạy làm case thứ 3 — sau khi đã hiểu routing + failover. |
+| 08 Weighted canary routing | Tốt (canary release), nhưng đặc thù (deploy pattern). Case 06 (failover) phổ biến hơn — mọi hệ thống đều cần. |
+| 09 Passive outlier ejection | Hay (auto-detect flaky backend), nhưng là automation của Case 06. Case 06 dạy concept gốc trước. |
+| 10 Weighted fairness under load | Extension của Case 08 (canary weight) dưới load. Đặc thù. |
+| 11 Saturation isolation | Cực hay (slow lane không kéo fast lane), nhưng là advanced topic. Cần hiểu open model (constant-arrival-rate) trước. |
+| 12 Slow origin timeout policy | Rất hay (504 = policy, không phải bug), nhưng Case 06 (failover) là pattern phổ biến hơn trong vận hành hàng ngày. Case 12 nên dạy làm case thứ 3. |
+
 ## Suggested learning order
 
 1. `lb-01`, `lb-02`: hiểu public Nginx entrypoint và app replica distribution.
