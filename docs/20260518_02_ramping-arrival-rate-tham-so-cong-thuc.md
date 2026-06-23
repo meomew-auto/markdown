@@ -1248,6 +1248,54 @@ k6 KHÔNG tự fire slot tại t=0
 k6 CHỜ đến lúc tích lũy đủ 1 event nguyên đầu tiên
 ```
 
+**── Quy tắc fire slot: "chạm số nguyên thì fire" ──**
+
+Đây là nguyên lý gốc trong `cal()` (`ramping_arrival_rate.go:234-282`):
+
+```text
+Gọi S(t) = diện tích dưới đường rate(τ) từ τ=0 đến τ=t
+         = ∫₀ᵗ rate(τ) dτ
+
+S(t) là "số slot lý thuyết đáng lẽ đã fire đến thời điểm t"
+  → KHÔNG làm tròn, giữ phần thập phân
+
+Quy tắc fire:
+  slot thứ k fire tại thời điểm tₖ thỏa mãn: S(tₖ) = k
+  (k = 1, 2, 3, ...)
+
+Nói cách khác:
+  Mỗi khi S(t) CHẠM 1 số nguyên tiếp theo → fire 1 slot
+  S(t) từ 0 → 1  → fire slot #1
+  S(t) từ 1 → 2  → fire slot #2
+  S(t) từ 2 → 3  → fire slot #3
+  ...
+```
+
+Minh họa trực quan:
+
+```text
+S(t)
+4 |                  ●  (t=2.0, S=4) → fire slot #4
+3 |              ●      (t≈1.732, S=3) → fire slot #3
+2 |          ●          (t≈1.414, S=2) → fire slot #2
+1 |      ●              (t=1.0, S=1) → fire slot #1
+0 +------+------+------+------+------► t
+  0     0.5    1.0    1.5    2.0
+
+Mỗi khi đường S(t) cắt 1 đường ngang số nguyên → 1 slot ra đời
+```
+
+Vì sao cần S(t) = k (số nguyên) chứ không phải cứ sau interval cố định?
+
+```text
+Constant-arrival-rate: rate không đổi → S(t) = rate × t (đường thẳng)
+  → S(t) tăng đều → interval đều → DÙNG ĐƯỢC ticker cố định
+
+Ramping-arrival-rate: rate thay đổi → S(t) = ∫ rate(t) dt (đường cong)
+  → S(t) tăng không đều → interval thay đổi → KHÔNG dùng được ticker
+  → Phải giải phương trình S(tₖ) = k để tìm từng tₖ
+```
+
 Vị trí slot đầu tiên phụ thuộc vào `startRate`. Phân tích 2 trường hợp:
 
 **── Case A: startRate = 0 ──**
