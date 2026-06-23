@@ -994,6 +994,156 @@ Với bức tranh này, mọi công thức phía dưới là hệ quả tự nhi
 - `slot_interval = 1/rate(t)` ← nghịch đảo của rate tại thời điểm t
 - `S(tₖ) = k` ← slot fire khi tích lũy chạm số nguyên
 
+#### Trace từng bước: tích lũy S(t) và slot fire như thế nào
+
+Vẫn ví dụ trên: `startRate=2, ramp 2→4/s trong 2s`.
+Đầu vào: `λ_prev=2, λ_next=4, d=2s`.
+
+```text
+Bước 0 — Xác định 2 hàm gốc:
+  rate(t) = 2 + t           (đường thẳng, slope=1)
+  S(t)    = 2t + t²/2       (tích phân của rate, đường cong)
+
+  Mọi con số phía dưới đều từ 2 hàm này mà ra.
+```
+
+**── Bảng trace: từng bước thời gian, S(t) tích lũy ra sao ──**
+
+```text
+  t(s)   rate(t)   ΔS trong    S(t)    S(t) đã   slot_interval   GHI CHÚ
+          (slot/s)  bước này   (t.lũy)  chạm      tại t
+                                        số nguyên?  (=1/rate)
+ ──────  ────────  ─────────  ───────  ─────────  ─────────────  ────────────────
+ 0.000   2.000/s      0        0.000     chưa        500ms       BẮT ĐẦU stage
+                                                                 rate=2/s, S=0
+
+ 0.100   2.100/s   +0.205      0.205     chưa        476ms       S mới = 0 + 0.205
+                                                                 S tăng CHẬM vì rate thấp
+
+ 0.200   2.200/s   +0.215      0.420     chưa        455ms       S=0.420, còn xa 1
+
+ 0.300   2.300/s   +0.225      0.645     chưa        435ms       S=0.645
+
+ 0.400   2.400/s   +0.235      0.880     chưa        417ms       S=0.880, gần 1
+
+ 0.449   2.449/s   +0.120      1.000     CHẠM 1 ✓    408ms       ──► FIRE SLOT #1
+                                                                 S vừa chạm 1.000
+                                                                 slot #1 ra đời tại t=0.449s
+                                                                 Khoảng cách từ t=0: 0.449s
+
+ 0.500   2.500/s   +0.063      1.128     —           400ms       sau slot #1, S tiếp tục tăng
+
+ 0.600   2.600/s   +0.255      1.383     —           385ms
+
+ 0.700   2.700/s   +0.265      1.648     —           370ms
+
+ 0.800   2.800/s   +0.275      1.923     —           357ms       S=1.923, gần 2
+
+ 0.828   2.828/s   +0.077      2.000     CHẠM 2 ✓    354ms       ──► FIRE SLOT #2
+                                                                 slot #2 ra đời tại t=0.828s
+                                                                 Gap slot#1→#2 = 0.828-0.449 = 0.379s
+
+ 0.900   2.900/s   +0.104      2.209     —           345ms
+
+ 1.000   3.000/s   +0.295      2.500     —           333ms       GIỮA STAGE (t=1s)
+                                                                 rate=3/s, S=2.5
+
+ 1.100   3.100/s   +0.305      2.805     —           323ms
+
+ 1.162   3.162/s   +0.195      3.000     CHẠM 3 ✓    316ms       ──► FIRE SLOT #3
+                                                                 Gap slot#2→#3 = 1.162-0.828 = 0.334s
+
+ 1.200   3.200/s   +0.061      3.121     —           313ms
+
+ 1.300   3.300/s   +0.325      3.446     —           303ms
+
+ 1.400   3.400/s   +0.335      3.781     —           294ms
+
+ 1.464   3.464/s   +0.219      4.000     CHẠM 4 ✓    289ms       ──► FIRE SLOT #4
+                                                                 Gap slot#3→#4 = 1.464-1.162 = 0.302s
+
+ 1.500   3.500/s   +0.063      4.125     —           286ms
+
+ 1.600   3.600/s   +0.355      4.480     —           278ms
+
+ 1.700   3.700/s   +0.365      4.845     —           270ms
+
+ 1.742   3.742/s   +0.155      5.000     CHẠM 5 ✓    267ms       ──► FIRE SLOT #5
+                                                                 Gap slot#4→#5 = 1.742-1.464 = 0.278s
+
+ 1.800   3.800/s   +0.109      5.218     —           263ms
+
+ 1.900   3.900/s   +0.385      5.603     —           256ms
+
+ 2.000   4.000/s   +0.397      6.000     CHẠM 6 ✓    250ms       ──► FIRE SLOT #6
+                                                                 Gap slot#5→#6 = 2.000-1.742 = 0.258s
+                                                                 KẾT THÚC STAGE. S=6.000 = 6 slot
+```
+
+**── Đọc bảng trace: 4 điều rút ra ──**
+
+```text
+1. S(t) tăng LIÊN TỤC, không nhảy bậc:
+   Mỗi bước thời gian nhỏ, ΔS = rate(t) × Δt được cộng dồn vào S.
+   S là số THỰC (có phần thập phân), không phải số nguyên.
+   VD: t=0.4 → S=0.880, t=0.449 → S=1.000 → fire slot #1.
+
+2. Slot fire ĐÚNG lúc S(t) chạm số nguyên:
+   S từ 0.880 → 1.000 → fire slot #1 tại t=0.449s
+   S từ 1.923 → 2.000 → fire slot #2 tại t=0.828s
+   ...
+   Không fire trước, không fire sau — fire CHÍNH XÁC khi S chạm k.
+
+3. Gap giữa 2 slot NGÀY CÀNG THU HẸP:
+   Gap #1→#2: 0.379s  (379ms)
+   Gap #2→#3: 0.334s  (334ms)
+   Gap #3→#4: 0.302s  (302ms)
+   Gap #4→#5: 0.278s  (278ms)
+   Gap #5→#6: 0.258s  (258ms)
+   → Gap GIẢM vì rate TĂNG: đầu stage rate=2/s → gap rộng ~500ms,
+     cuối stage rate=4/s → gap hẹp ~250ms.
+   → Các gap này khớp với slot_interval tại thời điểm fire.
+
+4. slot_interval(t) = 1/rate(t) là GIÁ TRỊ TỨC THỜI:
+   Tại t=0.449 (fire slot #1): rate≈2.45/s → interval≈408ms
+     → Gap thực tế #1→#2 = 379ms (gần 408ms, không bằng chính xác vì
+       rate tiếp tục tăng trong lúc chờ slot #2)
+   Tại t=1.742 (fire slot #5): rate≈3.74/s → interval≈267ms
+     → Gap thực tế #5→#6 = 258ms (gần 267ms)
+   → interval là ẢNH CHỤP TỨC THỜI — nếu rate giữ nguyên thì gap sẽ
+     đúng bằng interval. Nhưng vì rate luôn tăng, gap luôn NHỎ HƠN
+     interval tại thời điểm slot trước (vì rate đã tăng lên rồi).
+```
+
+**── Công thức tính ΔS trong 1 bước nhỏ ──**
+
+```text
+ΔS = rate(t) × Δt   (với Δt rất nhỏ)
+
+Đây chính là ĐỊNH NGHĨA của tích phân:
+  S(t) = lim(Δt→0) Σ rate(t) × Δt = ∫₀ᵗ rate(τ) dτ
+
+Trong bảng trace, mỗi bước ~0.1s:
+  t=0.1: ΔS ≈ 2.1 × 0.1 = 0.21  → S mới = 0 + 0.21 = 0.21
+  t=0.2: ΔS ≈ 2.2 × 0.1 = 0.22  → S mới = 0.21 + 0.22 = 0.43
+  ...
+→ Càng nhiều bước nhỏ, S càng tiến gần số nguyên tiếp theo → fire slot
+```
+
+**── Tóm tắt: 1 slot ra đời như thế nào ──**
+
+```text
+Cho trước: rate(t) từ config (hàm tuyến tính theo t)
+
+1. S(t) = ∫₀ᵗ rate(τ) dτ — tích phân, ra số THỰC
+2. S(t) tăng liên tục theo thời gian
+3. Mỗi khi S(t) đi qua 1 số nguyên → scheduler fire 1 slot
+4. Khoảng cách giữa 2 slot = thời gian để S(t) tăng thêm đúng 1 đơn vị
+   = thời gian để rate(t) "góp" đủ 1 slot vào quỹ tích lũy
+
+Tất cả chỉ là 1 cơ chế: TÍCH LŨY DIỆN TÍCH → CHẠM SỐ NGUYÊN → FIRE.
+```
+
 #### Config demo
 
 ```js
