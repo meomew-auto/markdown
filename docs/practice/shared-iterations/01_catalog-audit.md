@@ -160,6 +160,73 @@ Chỉ có T_run + latency thay đổi -> đó CHÍNH LÀ cái cần đo!
 → Chỉ executor đếm theo "iterations cố định" mới đạt
 → Nhưng count đủ chưa đủ — còn cần identity map ĐÚNG (yêu cầu b)
 
+##### Thế còn `per-vu-iterations`? Cũng count cố định mà?
+
+Câu hỏi hay: `per-vu-iterations` cũng cho count cố định —
+`total = vus × iterations`. Vậy `vus=8, iterations=10` cũng ra 80 iter.
+Sao không dùng?
+
+```text
+per-vu-iterations CÓ THỂ dùng cho case này — count vẫn cố định 80.
+Nhưng shared-iterations TỐT HƠN vì 2 lý do:
+```
+
+**Lý do 1: Completion time — shared-iterations nhanh hơn**
+
+```text
+per-vu-iterations: mỗi VU được giao ĐÚNG 10 iter
+  → VU nhanh (network tốt): xong 10 iter trong 5s → IDLE 15s
+  → VU chậm (network kém): 10 iter mất 20s → làm 1 mình cuối
+  → Tổng thời gian = thời gian VU CHẬM NHẤT = 20s
+
+shared-iterations: kho chung 80 iter
+  → VU nhanh: làm 15 iter (thay vì 10) → bận suốt, không idle
+  → VU chậm: làm 5 iter (thay vì 10) → cũng xong sớm
+  → Tổng thời gian ≈ 12s (nhanh hơn ~40%)
+
+So sánh trực quan:
+  per-vu-iterations (mỗi VU quota riêng):
+    VU1: ██████████░░░░░░░░░░  (10 iter, idle nửa sau)
+    VU2: ████████████████████  (10 iter, chậm, kéo dài tổng time)
+    → T_total = 20s
+
+  shared-iterations (kho chung):
+    VU1: ███████████████       (15 iter, bận suốt)
+    VU2: █████                 (5 iter, xong sớm)
+    → T_total ≈ 12s  (nhanh hơn 40%)
+```
+
+**Lý do 2: Mô hình tự nhiên hơn cho "worker pool"**
+
+```text
+Catalog audit = "8 công nhân, 80 thùng hàng, ai xong trước lấy tiếp"
+  → ĐÂY CHÍNH LÀ shared-iterations
+  → Không phải "mỗi công nhân ĐÚNG 10 thùng" (per-vu-iterations)
+
+per-vu-iterations phù hợp khi:
+  - Mỗi user/account CẦN chạy đúng N vòng (vd: session login → N actions)
+  - Không muốn VU nhanh "ăn" hết việc của VU chậm
+  - Cần fairness TUYỆT ĐỐI giữa các VU
+
+shared-iterations phù hợp khi:
+  - Chỉ quan tâm TỔNG work hoàn thành
+  - Muốn xong CÀNG NHANH CÀNG TỐT
+  - VU nào nhanh thì làm nhiều — không cần fairness
+```
+
+**Tóm lại**:
+
+```text
+Cả 2 executor đều cho count cố định → đều thỏa yêu cầu (a).
+
+Nhưng:
+  shared-iterations: nhanh hơn, mô hình worker pool tự nhiên hơn
+  per-vu-iterations: chậm hơn (VU idle), chỉ dùng nếu CẦN fairness
+
+→ Với catalog audit, không cần fairness → shared-iterations là lựa chọn tối ưu
+→ per-vu-iterations KHÔNG SAI, chỉ là CHẬM HƠN
+```
+
 #### Yêu cầu (b): CORRECT IDENTITY MAPPING (mỗi job map đúng 1 SKU)
 
 **Ý nghĩa**: 80 iteration phải map sang 80 SKU KHÁC NHAU. Nếu map sai, dù count = 80, coverage vẫn thiếu.
