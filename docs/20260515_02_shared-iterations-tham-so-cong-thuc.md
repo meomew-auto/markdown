@@ -2186,6 +2186,58 @@ VU chậm nhận ít.
 Lấy demo 3 VU: VU0 `sleep(1)`, VU1 `sleep(2)`, VU2 `sleep(3)`, tổng
 `iterations = 90`.
 
+**Trong demo này, `t_i` lấy từ đâu?**
+
+```text
+Demo CỐ Ý cho mỗi VU sleep khác nhau dựa trên __VU:
+
+  const delays = { 1: 1.0, 2: 2.0, 3: 3.0 };
+  sleep(delays[__VU]);
+
+→ t_0 = 1.0s (VU số 1, __VU=1)
+→ t_1 = 2.0s (VU số 2, __VU=2)
+→ t_2 = 3.0s (VU số 3, __VU=3)
+
+→ ĐÂY LÀ DEMO NHÂN TẠO, con số biết trước vì chính mình code sleep().
+```
+
+**Trong test THẬT (HTTP), `t_i` lấy từ đâu?**
+
+```text
+Trong test thật, bạn KHÔNG biết trước iter_time. Bạn PHẢI ĐO:
+
+Cách 1 — Đọc iteration_duration từ summary (gộp chung tất cả VU):
+  iteration_duration...: avg=200ms min=150ms med=190ms max=350ms
+
+  → avg=200ms là trung bình của TẤT CẢ iter, TẤT CẢ VU
+  → Nếu các VU cùng code, cùng server, avg này đại diện được
+  → Dùng avg làm t_i chung cho mọi VU: t_0 = t_1 = t_2 ≈ 200ms
+  → Lúc này Công thức 1 ≈ Công thức 5 (vì các t_i bằng nhau)
+
+Cách 2 — Tự log per-VU iteration_duration:
+  export default function () {
+    let start = Date.now();
+    // ... code ...
+    let duration = Date.now() - start;
+    console.log(`VU=${__VU} iter=${__ITER} duration=${duration}ms`);
+  }
+
+  → Chạy test, gom log theo __VU, tính avg duration cho từng VU
+  → Đây là cách có t_0, t_1, t_2 CHÍNH XÁC cho Công thức 1
+
+Cách 3 — Suy ngược từ output (khi đã biết iterations_per_vu_i):
+  Nếu output cho thấy VU0=49 iter, VU1=25 iter, VU2=16 iter:
+    ratio_0 = 49/90 = 0.544
+    ratio_1 = 25/90 = 0.278
+    ratio_2 = 16/90 = 0.178
+
+    → 1/t_0 : 1/t_1 : 1/t_2 = 0.544 : 0.278 : 0.178
+    → t_0 : t_1 : t_2 ≈ 1 : 2 : 3
+    → VU1 chậm gấp 2 VU0, VU2 chậm gấp 3 VU0
+```
+
+**Quay lại demo với số đã biết:**
+
 ```text
 Cho:  t_0 = 1.0s,  t_1 = 2.0s,  t_2 = 3.0s
       iterations = 90
@@ -2270,6 +2322,41 @@ Gốc của công thức đến từ cơ chế **atomic counter** trong
 của cơ chế "first come first served" qua atomic counter. Đọc lại
 [section 6.2](#62-khi-vu-chậm-hơn-nhiều-thì-phân-phối-ra-sao) để thấy
 cách core hoạt động.
+
+##### Thực tế: iter_time gần bằng nhau — vậy Công thức 1 còn dùng không?
+
+**Trong test thực tế**, tất cả VU chạy cùng 1 `export default function()`:
+cùng code, cùng endpoint, cùng server → `iteration_duration` của các VU
+**xấp xỉ bằng nhau** (chỉ dao động nhẹ ±5-10% do network jitter).
+
+```text
+Demo sleep(1)/sleep(2)/sleep(3) là NHÂN TẠO — cố ý cho khác nhau
+để thấy rõ cơ chế atomic counter. Test thật không ai viết code như vậy.
+```
+
+Vậy Công thức 1 dùng làm gì trong thực tế?
+
+```text
+1. HIỂU CƠ CHẾ — không phải để tính:
+   Công thức 1 giải thích "TẠI SAO" VU có thể nhận số iter khác nhau.
+   Không cần thay số — chỉ cần hiểu: VU nhanh hơn → nhiều iter hơn.
+
+2. Khi t_i ≈ t (thực tế):
+   ratio_i = (1/t) / (n × 1/t) = 1/n
+   iter_per_vu_i = (1/n) × iterations = iterations / n
+   → Công thức 1 thu về Công thức 5
+   → iter phân phối ĐỀU, không cần tính ratio
+
+3. Khi NÀO cần thay số thật vào Công thức 1:
+   - VU dùng data-driven test với payload khác nhau (file 1KB vs 10MB)
+   - Một VU gặp network chậm khác hẳn (timeout, retry nhiều)
+   - Một VU bị "stuck" → iter_time dài gấp 5-10x VU khác
+   → Lúc này mới cần tính ratio để ước lượng mức độ lệch
+
+Tóm lại:
+  - Demo: dùng Công thức 1 để HIỂU
+  - Thực tế: Công thức 5 đủ dùng, Công thức 1 chỉ cần khi có outlier
+```
 
 ##### Phân tích từng bước (với số cụ thể)
 
