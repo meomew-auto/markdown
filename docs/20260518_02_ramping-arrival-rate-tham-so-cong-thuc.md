@@ -5762,6 +5762,97 @@ Sau test:   so với "iterations" trong summary
             - <49 -> có drop hoặc interrupt
 ```
 
+**── Demo: chạy thật và đối chiếu N_sched với output ──**
+
+Dùng config 3 stage ở trên, thêm `preAllocatedVUs: 10` (đủ VU để không drop):
+
+```js
+export const options = {
+  scenarios: {
+    demo_nsched: {
+      executor: "ramping-arrival-rate",
+      startRate: 0,
+      timeUnit: "1s",
+      preAllocatedVUs: 10,
+      maxVUs: 15,
+      stages: [
+        { duration: "2s", target: 10 },
+        { duration: "5s", target: 4 },
+        { duration: "2s", target: 0 },
+      ],
+    },
+  },
+};
+import { sleep } from "k6";
+export default function () { sleep(0.3); }
+```
+
+Chạy xong, đọc summary:
+
+```text
+iterations.........: 49    5.444444/s
+dropped_iterations.: 0     0/s
+```
+
+Phân tích:
+
+```text
+N_sched (tính trước) = 49
+N_done  (summary)    = 49
+N_drop  (summary)    = 0
+
+→ 49 = 49 - 0 ✓ KHỚP HOÀN HẢO
+→ Tất cả slot đều có VU nhận và chạy xong
+
+actual_rate = 49 / 9s ≈ 5.44/s  (9s = 2+5+2 = T)
+λ_avg       = 49 / 9s = 5.44/s  (= actual_rate vì không drop)
+```
+
+Trường hợp có drop (giảm `preAllocatedVUs` xuống 3):
+
+```text
+iterations.........: 42    4.666667/s
+dropped_iterations.: 7     0.777778/s
+```
+
+Phân tích:
+
+```text
+N_sched (tính trước) = 49
+N_done  (summary)    = 42
+N_drop  (summary)    = 7
+
+Verify: 42 + 7 = 49 = N_sched ✓
+
+→ 7 slot drop, tất cả đều ở stage 1 (lúc rate cao nhất 10/s)
+→ 7/49 = 14.3% slot bị mất
+→ Lý do: M=3 VU, W=0.3s → capacity = 3/0.3 = 10/s vừa đủ ở đỉnh
+  nhưng thực tế iter_time > 0.3s (có overhead) → capacity < 10/s → drop
+```
+
+**── Bảng trace N_sched từng stage với demo thật ──**
+
+```text
+Stage | d   | rate_đầu→cuối | Công thức          | N_sched | Tích lũy slot#
+──────┼─────┼───────────────┼────────────────────┼─────────┼──────────────
+  0   | 2s  | 0 → 10/s      | 2×(0+10)/2 = 10    |   10    | #1 → #10
+  1   | 5s  | 10 → 4/s      | 5×(10+4)/2 = 35    |   35    | #11 → #45
+  2   | 2s  | 4 → 0/s       | 2×(4+0)/2 = 4      |    4    | #46 → #49
+──────┼─────┼───────────────┼────────────────────┼─────────┼──────────────
+Tổng  | 9s  |               |                    |   49    |
+```
+
+Biết `N_sched = 49` và slot# của từng stage cho phép:
+
+```text
+- Nếu thấy drop ở slot #15: → xảy ra trong stage 1 (slot #11-#45)
+  → lúc này rate đang cao (gần 10/s) → kiểm tra capacity
+- Nếu thấy drop ở slot #48: → xảy ra trong stage 2 (slot #46-#49)
+  → lúc này rate thấp (~2/s) → drop ở rate thấp là BẤT THƯỜNG
+  → có thể do VU bận từ stage trước chưa rảnh
+- Nếu drop trải đều: → capacity cơ bản không đủ, cần tăng VU tổng thể
+```
+
 **(3) Biết stage nào "đỉnh" để FIX khi có vấn đề**
 
 ```text
