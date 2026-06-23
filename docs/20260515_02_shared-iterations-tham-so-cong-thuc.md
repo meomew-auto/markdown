@@ -2033,6 +2033,134 @@ export const options = {
 
 4 dòng đủ chạy. `maxDuration` (10m) và `gracefulStop` (30s) lấy default.
 
+#### `startTime` — không phải để chờ VU init
+
+Câu hỏi hay gặp:
+
+```text
+nếu set vus=4000, có cần set startTime="30s" để k6 kịp init 4000 VU không?
+```
+
+**Trả lời ngắn: Không cần.** `startTime` không liên quan gì tới việc init VU cả.
+
+##### Hai phase tách biệt trong core
+
+k6 chia đời sống test làm 2 phase rõ ràng. Đọc từ `execution.go:88-89`:
+
+```go
+// Planned VUs are initialized before a test begins, while
+// unplanned VUS can be initialized in the middle of the test run
+```
+
+Và comment trong `GetExecutionRequirements()` của `shared_iterations.go:99`:
+
+```go
+// executor for its whole duration (disregarding any startTime)
+```
+
+Nghĩa là **dù `startTime` là bao nhiêu, planned VUs vẫn được reserve từ đầu test, trước khi đồng hồ chạy**.
+
+Luồng thật:
+
+```text
+╔═══════════════════════════════════════════════════════════════╗
+║ PHASE 1 — INIT (trước khi đồng hồ test chạy)                  ║
+║                                                               ║
+║  Scheduler đọc GetExecutionRequirements() của TẤT CẢ scenario ║
+║  ├── shared-iterations: PlannedVUs = 4000 tại TimeOffset = 0  ║
+║  ├── Init đủ 4000 JS context vào pool                         ║
+║  └── Phase này xong thì mới sang phase 2                      ║
+║                                                               ║
+║  → Wall-clock có thể mất vài giây, nhưng đồng hồ test CHƯA    ║
+║    chạy. maxDuration chưa bắt đầu đếm.                        ║
+╚═══════════════════════════════════════════════════════════════╝
+                          ↓
+╔═══════════════════════════════════════════════════════════════╗
+║ PHASE 2 — EXECUTION (đồng hồ test bắt đầu từ t=0)             ║
+║                                                               ║
+║  Scheduler chờ tới startTime của từng scenario rồi gọi Run(): ║
+║  ├── startTime="0s"  → Run() gọi ngay tại t=0                 ║
+║  ├── startTime="30s" → Run() gọi tại t=30s                    ║
+║  └── Lúc Run() chạy: 4000 VU đã sẵn trong pool từ phase 1 rồi ║
+║                                                               ║
+║  Run() gọi GetPlannedVU() đúng vus lần → bắn goroutine        ║
+║  → Đồng hồ maxDuration bắt đầu từ lúc Run() chạy              ║
+╚═══════════════════════════════════════════════════════════════╝
+```
+
+##### `startTime` thật sự dùng để làm gì?
+
+`startTime` dùng để **stagger (rải) thời điểm bắt đầu giữa nhiều scenario** trong cùng 1 test:
+
+```js
+export const options = {
+  scenarios: {
+    warm_up: {
+      executor: "shared-iterations",
+      vus: 10,
+      iterations: 100,
+      startTime: "0s",     // chạy ngay
+    },
+    main_load: {
+      executor: "shared-iterations",
+      vus: 100,
+      iterations: 1000,
+      startTime: "30s",    // đợi warm_up xong rồi mới bắt đầu
+    },
+  },
+};
+```
+
+Không có `startTime`, cả 2 scenario cùng bắt đầu tại t=0.
+
+##### Chứng minh bằng core
+
+`GetExecutionRequirements()` trong `shared_iterations.go:103-124`:
+
+```go
+return []lib.ExecutionStep{
+    {TimeOffset: 0, PlannedVUs: uint64(vus)},
+    {TimeOffset: maxDuration + gracefulStop, PlannedVUs: 0},
+}
+```
+
+Hàm này **không nhận `startTime` làm tham số**. Nó luôn trả về `TimeOffset: 0` cho step đầu tiên. `startTime` được scheduler xử lý riêng ở tầng trên — nó chỉ delay lúc gọi `Run()`, không delay lúc init VU.
+
+##### Điểm dễ nhầm
+
+```text
+SAI: "startTime để cho VU kịp init"
+ĐÚNG: "VU init xong hết trước khi test chạy, startTime chỉ để stagger scenario"
+
+SAI: "set startTime=30s để 4000 VU init xong"
+ĐÚNG: "không cần startTime, scheduler tự lo init, startTime=0s vẫn đủ 4000 VU"
+
+SAI: "startTime càng lớn thì VU init càng nhiều"
+ĐÚNG: "số VU init = vus config, không phụ thuộc startTime"
+```
+
+##### Vậy với 4000 VU có cần lo gì không?
+
+Có 1 thứ cần lo, nhưng **không liên quan `startTime`**:
+
+```text
+THỜI GIAN INIT (wall-clock thật):
+  - Diễn ra ở phase 1, trước khi test bắt đầu
+  - Có thể mất vài giây đến vài chục giây (tùy code JS nặng/nhẹ)
+  - Nhưng đồng hồ test chưa chạy, maxDuration không bị ảnh hưởng
+
+RAM:
+  - 4000 VU = 4000 JS context
+  - Mỗi context tốn vài MB → có thể tốn 8-16GB RAM
+  - Đây là giới hạn thật sự, không phải timing
+```
+
+##### Tóm tắt 1 dòng
+
+```text
+startTime = "thời điểm bắt đầu chạy scenario" chứ không phải "thời gian chờ VU init"
+```
+
 ### 8.1. 5 công thức TOP cần thuộc lòng
 
 #### Công thức 1: "Chia kho thế nào?" (Phân phối iter giữa các VU)
