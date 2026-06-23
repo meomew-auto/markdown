@@ -2163,6 +2163,13 @@ startTime = "thời điểm bắt đầu chạy scenario" chứ không phải "t
 
 ### 8.1. 5 công thức TOP cần thuộc lòng
 
+> **Đọc trước khi dùng**: 5 công thức này xếp theo thứ tự logic —
+> từ chi tiết (từng VU) đến tổng thể (toàn scenario), từ dự đoán
+> (ước lượng trước run) đến chẩn đoán (đọc output sau run). Mỗi công
+> thức có **tên tiếng Việt**, **ví dụ đời thường**, **phân tích từng
+> bước**, **kết nối với công thức khác**, và **cách verify với
+> output thật**.
+
 #### Công thức 1: "Chia kho thế nào?" (Phân phối iter giữa các VU)
 
 ```text
@@ -2174,143 +2181,536 @@ iterations_per_vu_i ≈ ratio_i × iterations
 VU đó) chia cho (tổng 1/thời gian của tất cả VU)". VU nhanh nhận nhiều,
 VU chậm nhận ít.
 
-**Ví dụ đời thường**:
+##### Tại sao có công thức này?
+
+Gốc của công thức đến từ cơ chế **atomic counter** trong
+`shared_iterations.go`:
+
+```text
+1. Mọi VU cùng lấy iter từ 1 quầy chung
+2. VU nào xong trước thì quay lại quầy lấy tiếp
+3. Không có quota riêng, không có fairness guarantee
+
+→ Trong 1 đơn vị thời gian, VU nhanh quay lại quầy NHIỀU lần hơn VU chậm
+→ Số lần quay lại tỷ lệ thuận với tốc độ = 1/t_i
+→ Tỷ lệ iter = (tốc độ của VU i) / (tổng tốc độ tất cả VU)
+```
+
+Đây không phải "k6 cố ý phân phối theo tỷ lệ", mà là **hệ quả tự nhiên**
+của cơ chế "first come first served" qua atomic counter. Đọc lại
+[section 6.2](#62-khi-vu-chậm-hơn-nhiều-thì-phân-phối-ra-sao) để thấy
+cách core hoạt động.
+
+##### Phân tích từng bước (với số cụ thể)
+
+```text
+Bước 1: Đo iter_time từng VU
+  ┌──────┬──────────┬─────────────────────────────────┐
+  │ VU   │ iter_time│ Ghi chú                         │
+  ├──────┼──────────┼─────────────────────────────────┤
+  │ VU0  │ 1.0s     │ sleep(1)                        │
+  │ VU1  │ 2.0s     │ sleep(2)                        │
+  │ VU2  │ 3.0s     │ sleep(3)                        │
+  └──────┴──────────┴─────────────────────────────────┘
+
+Bước 2: Tính tốc độ từng VU (1/t_i)
+  VU0: 1/1.0 = 1.000 iter/s
+  VU1: 1/2.0 = 0.500 iter/s
+  VU2: 1/3.0 = 0.333 iter/s
+
+Bước 3: Tính tổng tốc độ
+  Σ = 1.000 + 0.500 + 0.333 = 1.833 iter/s
+
+Bước 4: Tính tỷ lệ (ratio)
+  VU0: 1.000 / 1.833 = 0.546 → 54.6%
+  VU1: 0.500 / 1.833 = 0.273 → 27.3%
+  VU2: 0.333 / 1.833 = 0.182 → 18.2%
+
+Bước 5: Nhân với tổng iter để ra số iter mỗi VU
+  VU0: 0.546 × 90 = 49.1 → ~49 iter
+  VU1: 0.273 × 90 = 24.6 → ~25 iter
+  VU2: 0.182 × 90 = 16.4 → ~16 iter
+                            ───
+                            90 ✓
+```
+
+##### Ví dụ đời thường
 
 ```text
 3 nhân viên cùng đóng gói 90 cái hộp:
-  - A nhanh: 1 hộp/phút  -> 1/1 = 1
-  - B vừa:  1 hộp/2 phút -> 1/2 = 0.5
-  - C chậm: 1 hộp/3 phút -> 1/3 ≈ 0.33
-  Tổng = 1 + 0.5 + 0.33 ≈ 1.83
+  - A nhanh: 1 hộp/phút  -> về quầy 1 lần/phút
+  - B vừa:  1 hộp/2 phút -> về quầy 0.5 lần/phút
+  - C chậm: 1 hộp/3 phút -> về quầy 0.33 lần/phút
 
-Tỷ lệ:
-  A: 1/1.83    ≈ 54.6%  -> A đóng ≈ 49 hộp
-  B: 0.5/1.83  ≈ 27.3%  -> B đóng ≈ 25 hộp
-  C: 0.33/1.83 ≈ 18.0%  -> C đóng ≈ 16 hộp
-                          ----------
-                          Tổng = 90 hộp ✓
+  Sau 1 phút, quầy được ghé:
+    A ghé 1 lần, B ghé 0.5 lần, C ghé 0.33 lần
+    Tổng = 1.83 lần/phút
+
+  Tỷ lệ ghé quầy:
+    A: 1/1.83    ≈ 54.6%  -> A đóng ≈ 49 hộp
+    B: 0.5/1.83  ≈ 27.3%  -> B đóng ≈ 25 hộp
+    C: 0.33/1.83 ≈ 18.0%  -> C đóng ≈ 16 hộp
+                            ----------
+                            Tổng = 90 hộp ✓
 ```
 
-**Áp vào k6**:
+##### Kết nối với Công thức 5
 
 ```text
-vus=3, iterations=90
-  - VU0 sleep(1)   -> t0 = 1.0s  -> 1/t = 1.0
-  - VU1 sleep(2)   -> t1 = 2.0s  -> 1/t = 0.5
-  - VU2 sleep(3)   -> t2 = 3.0s  -> 1/t = 0.33
-  Σ(1/t) ≈ 1.83
+Công thức 5 (trung bình): iter_per_vu ≈ 90 / 3 = 30 (mỗi VU 30)
 
-iter VU0 ≈ 1.00/1.83 × 90 ≈ 49
-iter VU1 ≈ 0.50/1.83 × 90 ≈ 25
-iter VU2 ≈ 0.33/1.83 × 90 ≈ 16
-                              ---
-                              90 ✓
+Nhưng thực tế: VU0=49, VU1=25, VU2=16
+→ Công thức 5 SAI khi VU lệch tốc độ
+→ Công thức 1 là bản chi tiết, Công thức 5 là bản thô
+
+Khi nào 2 công thức cho cùng kết quả?
+→ Khi t_0 = t_1 = t_2 (các VU cùng tốc độ):
+  ratio_0 = (1/t) / (3 × 1/t) = 1/3
+  ratio_1 = 1/3
+  ratio_2 = 1/3
+  iter mỗi VU = 90/3 = 30 → khớp Công thức 5
 ```
 
-**Khi nào dùng**: muốn dự đoán VU nào sẽ chạy nhiều iter, hoặc giải
-thích tại sao log thấy VU0 chạy 49 iter còn VU2 chạy 16 iter.
+##### Edge case: 1 VU rất chậm (outlier)
 
-**Lưu ý**: chỉ đúng khi clean run (cạn kho). Nếu hit `maxDuration`
-giữa chừng, tỷ lệ vẫn giữ nhưng tổng < `iterations`.
+```text
+vus=4, iterations=20
+t_0=t_1=t_2=0.1s (rất nhanh), t_3=5s (rất chậm)
+
+Tốc độ:
+  VU0-2: 1/0.1 = 10 iter/s mỗi VU
+  VU3:   1/5   = 0.2 iter/s
+  Σ = 30.2 iter/s
+
+Tỷ lệ:
+  VU0-2: 10/30.2 ≈ 33.1% mỗi VU → ~6.6 iter mỗi VU
+  VU3:   0.2/30.2 ≈ 0.66%       → ~0.13 iter
+
+Thực tế: VU3 có thể chỉ chạy 0-1 iter, trong khi VU0-2 đã "ăn" hết 19-20 iter.
+
+→ VU quá chậm gần như KHÔNG được chia việc
+→ Đây KHÔNG phải bug — là hệ quả của design "không fairness"
+```
+
+##### Cách verify với output thật
+
+```text
+1. Log __VU và __ITER trong default function:
+   console.log(`VU=${__VU} ITER=${__ITER} iterInScenario=${exec.scenario.iterationInTest}`);
+
+2. Đếm số iter từng VU:
+   VU=1 ITER=5  → VU1 chạy 6 iter (0..5)
+   VU=2 ITER=1  → VU2 chạy 2 iter (0..1)
+   ...
+
+3. So với dự đoán từ Công thức 1:
+   Nếu iter_time đo được từ iteration_duration, tỷ lệ phải khớp ~5% sai số.
+```
+
+**Khi nào dùng**: muốn dự đoán VU nào sẽ chạy nhiều iter, hoặc giải thích
+tại sao log thấy VU0 chạy 49 iter còn VU2 chạy 16 iter.
+
+**Lưu ý**: chỉ đúng khi clean run (cạn kho). Nếu hit `maxDuration` giữa
+chừng, tỷ lệ vẫn giữ nhưng tổng < `iterations`.
+
+---
 
 #### Công thức 2: "Đỉnh là bao nhiêu?" (Throughput đỉnh)
 
 ```text
-peak_rate ≈ vus / iter_time
+peak_rate ≈ vus / effective_iteration_time
 ```
 
 **Tiếng Việt**: "Throughput đỉnh = số VU chia cho thời gian 1 iter".
-Giống `constant-vus` lúc đầu run, vì cả 2 đều closed model với cùng
-vus chạy song song.
+Giống `constant-vus`, vì cả 2 đều closed model với cùng vus chạy
+song song suốt thời gian active.
 
-**Ví dụ đời thường**:
+##### Tại sao có công thức này?
+
+Gốc từ mô hình closed model:
 
 ```text
-4 nhân viên đóng gói, mỗi cái mất 0.5 phút
-=> mỗi phút đóng được 4 / 0.5 = 8 cái
-=> peak = 8 cái/phút
+Trong 1 giây:
+  - Mỗi VU chạy được 1/iter_time iteration
+  - Có vus VU chạy song song
+  - → Tổng iteration trong 1 giây = vus × (1/iter_time) = vus / iter_time
+
+Đây là phiên bản closed-model của capacity formula:
+  capacity = M / W = M × (1/W)
+
+Với:
+  M = vus (số worker)
+  W = effective_iteration_time (thời gian 1 iter)
 ```
 
-**Áp vào k6**:
+##### Phân tích từng bước
 
 ```text
-vus=4, iter_time=0.5s (sleep(0.5))
-=> peak_rate ≈ 4 / 0.5 = 8 iter/s
-=> trong giây đầu, scenario tạo ra ~8 iter
+Cho: vus=4, iter_time=0.5s
+
+Bước 1: Tính per-VU rate
+  1 VU chạy 1 iter mất 0.5s
+  → Trong 1s, 1 VU chạy được: 1 / 0.5 = 2 iter
+
+Bước 2: Nhân với số VU
+  4 VU cùng chạy → 4 × 2 = 8 iter/s
+
+Bước 3: Đối chiếu đơn vị
+  4 VU × (1 iter / 0.5s) = 4 × 2 iter/s = 8 iter/s ✓
+```
+
+##### Khi nào peak_rate ĐẠT ĐƯỢC?
+
+```text
+ĐIỀU KIỆN ĐỂ ĐẠT PEAK:
+  1. Tất cả vus VU đang active (không VU nào idle)
+  2. Không VU nào bị block bởi network/timeout dài hơn bình thường
+  3. Kho iteration còn đủ để tất cả VU cùng lấy
+
+→ Với shared-iterations, điều kiện 1 & 3 thỏa từ t=0 (tất cả VU activate
+  cùng lúc, kho còn đầy)
+→ PEAK ĐẠT NGAY TỪ GIÂY ĐẦU
+
+NGOẠI LỆ:
+  - Gần cuối kho: kho gần cạn, vài VU return sớm → active VU < vus → dưới peak
+  - iter_time không đều: nếu 1 VU gặp timeout dài → VU đó "vắng mặt" tạm
+    thời → throughput giảm nhẹ
+```
+
+##### Phân biệt peak_rate với average_rate trong summary
+
+```text
+peak_rate (dự đoán)   = vus / iter_time
+                       = throughput KHI TẤT CẢ VU ĐỀU BẬN
+
+summary_rate (thực đo) = completed_iterations / summary_runtime_base
+                       = throughput TRUNG BÌNH toàn scenario
+
+Với clean run (không drop):
+  summary_rate ≈ peak_rate (vì hầu hết thời gian các VU đều bận)
+
+Với run bị drop (hit maxDuration):
+  summary_rate < peak_rate (vì gần cuối vài VU idle khi kho cạn, hoặc bị cắt)
+
+Ví dụ:
+  vus=4, iter_time=0.5s, iterations=12
+  peak_rate = 4 / 0.5 = 8 iter/s
+  summary_rate = 12 / 1.5s = 8 iter/s → khớp ✓ (sạch, không drop)
+
+  vus=4, iter_time=0.5s, iterations=1000, maxDuration=5s
+  peak_rate = 8 iter/s
+  summary_rate = completed / ~5s ≈ 6-7 iter/s → thấp hơn peak
+  (vì gần cuối kho cạn, active VU < 4)
+```
+
+##### Ví dụ đời thường
+
+```text
+4 nhân viên đóng gói, mỗi cái mất 0.5 phút:
+  → Mỗi phút 1 người đóng được 2 cái
+  → 4 người đóng được 4 × 2 = 8 cái/phút
+  → peak = 8 cái/phút
+
+Nhưng nếu kho chỉ còn 1 cái cuối:
+  → Chỉ 1 người bận, 3 người đứng không
+  → Thực tế lúc đó = 1 cái/phút (dưới peak)
+```
+
+##### Kết nối với Công thức 3
+
+```text
+Công thức 2: peak_rate = vus / iter_time
+Công thức 3: T_est = iterations / peak_rate = iterations × iter_time / vus
+
+→ Công thức 3 suy trực tiếp từ Công thức 2:
+  T_est = iterations / peak_rate
+        = iterations / (vus / iter_time)
+        = iterations × iter_time / vus
+
+→ Nếu bạn biết peak_rate, chỉ cần: T_est = iterations / peak_rate
 ```
 
 **Khi nào dùng**: ước lượng trước scenario sẽ tạo bao nhiêu req/s đỉnh,
-để xem hệ backend chịu nổi không.
+để xem hệ backend chịu nổi không. Nếu peak > khả năng backend → sẽ có
+timeout/retry → iter_time tăng → peak giảm → nhưng lúc đó hệ thống đã
+quá tải rồi.
+
+**Lưu ý**: dùng `effective_iteration_time`, không phải `sleep()` trong
+code. `effective_iteration_time` = thời gian thật VU bị bận (gồm HTTP,
+check, sleep, ...). Nếu có `minIterationDuration` thì:
+`effective = max(iteration_duration, minIterationDuration)`.
+
+---
 
 #### Công thức 3: "Hết bao lâu?" (Thời gian chạy ước lượng)
 
 ```text
-T_est ≈ iterations × iter_time / vus
+T_est ≈ iterations × effective_iteration_time / vus
+     ≈ iterations / peak_rate
 ```
 
 **Tiếng Việt**: "Tổng thời gian chạy = (tổng iter × thời gian 1 iter)
 chia cho số VU". Vì iter chia đều cho `vus` VU chạy song song.
 
-**Ví dụ đời thường**:
+##### Tại sao có công thức này?
+
+Từ mô hình wave (đợt):
+
+```text
+1. vus VU cùng chạy → mỗi đợt hoàn thành vus iteration
+2. Số đợt cần = ceil(iterations / vus)
+3. Mỗi đợt mất ~iter_time
+4. Tổng thời gian ≈ số đợt × iter_time ≈ (iterations / vus) × iter_time
+```
+
+Nếu iterations chia hết cho vus (như `12/4=3`), các đợt đều đặn.
+Nếu không chia hết, đợt cuối ít VU hơn nhưng thời gian vẫn ~iter_time.
+
+##### Phân tích từng bước (có timeline)
+
+```text
+Config: vus=4, iterations=12, iter_time=0.5s
+
+Bước 1: Tính số đợt
+  waves = ceil(12 / 4) = 3 đợt
+
+Bước 2: Timeline từng đợt
+  Đợt 1 (t=0.0→0.5s): VU0-3 cùng chạy iter #1-#4
+  Đợt 2 (t=0.5→1.0s): VU0-3 cùng chạy iter #5-#8
+  Đợt 3 (t=1.0→1.5s): VU0-3 cùng chạy iter #9-#12
+
+Bước 3: T_est = 3 × 0.5s = 1.5s
+
+Bước 4: So sánh với công thức
+  T_est = 12 × 0.5 / 4 = 6/4 = 1.5s ✓
+```
+
+##### Khi T_est sai — và sai bao nhiêu?
+
+```text
+NGUỒN SAI SỐ:
+
+1. iter_time không đều giữa các VU:
+   → VU nhanh hoàn thành sớm, lấy thêm iter
+   → Số đợt thực tế ít hơn dự đoán
+   → T thực < T_est (test nhanh hơn dự đoán)
+
+   Ví dụ: VU0=0.2s, VU1-3=0.6s, iterations=16
+     T_est (dùng avg=0.5s): 16×0.5/4 = 2.0s
+     T thực: ~1.6s (VU0 "gánh" nhiều iter hơn, tổng nhanh hơn)
+
+2. iter_time không đều giữa các iter của CÙNG 1 VU:
+   → HTTP request có lúc nhanh lúc chậm
+   → T thực dao động quanh T_est
+
+3. Overhead scheduler:
+   → Activate VU, atomic counter, context switch
+   → Thêm ~1-5ms mỗi iter → không đáng kể với iter_time >= 100ms
+
+SAI SỐ ĐIỂN HÌNH: ±10-20% với HTTP test thông thường
+                    ±5% với sleep() test (đơn giản, ít biến động)
+```
+
+##### Ví dụ đời thường
 
 ```text
 90 cái hộp, mỗi cái 1 phút, 3 nhân viên:
-=> 90 × 1 / 3 = 30 phút
+  → 90 × 1 / 3 = 30 phút (nếu 3 người đều tốc độ)
+
+Nhưng nếu A nhanh gấp 3 lần C:
+  → A "gánh" nhiều hộp hơn
+  → Tổng thời gian < 30 phút
+  → (~25 phút, vì A làm 49 hộp thay vì 30)
 ```
 
-**Áp vào k6**:
+##### Kết nối với Công thức 4
 
 ```text
-iterations=20, iter_time=0.5s, vus=4
-=> T_est ≈ 20 × 0.5 / 4 = 2.5s
+T_est là INPUT cho Công thức 4:
 
-(So với output thực: scenario chạy ~2.5-3s, khớp)
+  Nếu T_est < maxDuration:
+    → scenario kết thúc tự nhiên khi cạn kho
+    → T_max = T_est + gracefulStop (grace thường không dùng tới)
+
+  Nếu T_est > maxDuration:
+    → scenario bị cắt bởi maxDuration
+    → T_max = maxDuration + gracefulStop
+    → Có dropped_iterations
+
+→ Luôn kiểm tra: T_est < maxDuration không?
+→ Nếu không: hoặc giảm iterations, hoặc tăng vus, hoặc tăng maxDuration
 ```
 
-**Khi nào dùng**: trước khi chạy, để biết test mất bao lâu — và quan
-trọng là để chọn `maxDuration` đủ lớn (xem Công thức 4).
+**Khi nào dùng**: trước khi chạy, để biết test mất bao lâu — và quan trọng
+là để chọn `maxDuration` đủ lớn (xem Công thức 4).
 
-**Lưu ý**: chỉ là ước lượng. Nếu VU nhanh chậm khác nhau, T thực có
-thể lệch chút. Nhưng sai số không quá 10-20%.
+**Lưu ý**: dùng `effective_iteration_time`, không phải `sleep()` trong code.
+Nếu không biết trước iter_time, chạy thử 1 VU, 1 iter để đo `iteration_duration`
+trước khi tính.
+
+---
 
 #### Công thức 4: "Trần wall-clock" (Tổng thời gian tối đa scenario)
 
 ```text
 T_max = min(maxDuration, T_est) + gracefulStop
+
+Trong đó:
+  - T_est ≈ iterations × iter_time / vus (từ Công thức 3)
+  - maxDuration: trần config, default 10m
+  - gracefulStop: cửa sổ grace cho iter đang chạy, default 30s
 ```
 
-**Tiếng Việt**: "Thời gian tối đa scenario kéo dài = lấy số NHỎ HƠN
-giữa (maxDuration) và (T ước lượng), cộng grace cuối".
+**Tiếng Việt**: "Thời gian tối đa scenario kéo dài = lấy số NHỎ HƠN giữa
+(maxDuration) và (T ước lượng), cộng grace cuối".
 
-**Ví dụ đời thường**:
+##### Tại sao là `min` mà không phải `max`?
+
+```text
+Vì scenario kết thúc theo 1 trong 2 cách:
+
+Cách 1: Cạn kho iteration → T_thực ≈ T_est → không cần tới maxDuration
+Cách 2: Hết maxDuration → T_thực ≈ maxDuration → kho chưa cạn, có drop
+
+→ Scenario luôn kết thúc khi ĐIỀU KIỆN NÀO ĐẾN TRƯỚC
+→ Điều kiện nào đến trước = con số nhỏ hơn = min(maxDuration, T_est)
+```
+
+##### Phân tích 3 case (có timeline)
+
+**Case A: T_est < maxDuration — "ngon, cạn kho trước hạn"**
+
+```text
+Config: vus=4, iterations=12, iter_time=0.5s, maxDuration=10m, gracefulStop=30s
+
+T_est = 12 × 0.5 / 4 = 1.5s
+min(10m, 1.5s) = 1.5s
+T_max = 1.5s + 30s = 31.5s (nhưng thực tế grace không dùng)
+
+Timeline:
+  t=0.0   Run(), 4 VU activate
+  t=0.5   đợt 1 xong
+  t=1.0   đợt 2 xong
+  t=1.5   đợt 3 xong, kho cạn
+          → activeVUs.Wait() return
+          → scenario kết thúc (~1.5s)
+          → không dùng tới maxDuration (10m), không dùng gracefulStop
+
+Output:
+  iterations...........: 12
+  dropped_iterations...: 0          ← không drop
+  running (1.5s)                    ← << 10m
+```
+
+**Case B: T_est > maxDuration — "kẹt, hit trần"**
+
+```text
+Config: vus=2, iterations=100, iter_time=2s, maxDuration=5s, gracefulStop=3s
+
+T_est = 100 × 2 / 2 = 100s
+min(5s, 100s) = 5s
+T_max = 5s + 3s = 8s
+
+Timeline:
+  t=0.0   2 VU activate, vào đợt 1 (đến t=2s)
+  t=2.0   đợt 1 xong (2 iter), vào đợt 2 (đến t=4s)
+  t=4.0   đợt 2 xong (4 iter), vào đợt 3 (đến t=6s)
+  t=5.0   maxDuration hết → regDurationCtx done
+          → VU không lấy iter mới nữa
+          → 2 VU đang ở đợt 3 (đã 1s, còn 1s)
+          → vào grace
+  t=6.0   2 VU finish đợt 3 trong grace (1s < 3s, clean)
+          → loop: check regDurationDone → đã done → return
+  t=6.0   activeVUs.Wait() return
+          attemptedIters = 6, totalIters = 100
+          emit DroppedIterations = 94
+
+Output:
+  iterations...........: 6          ← chỉ 6/100 hoàn thành
+  dropped_iterations...: 94         ← kho còn 94 iter chưa lấy
+  interrupted..........: 0          ← iter đang chạy kịp finish trong grace
+  running (6.0s)
+```
+
+**Case C: iter_time > gracefulStop — "cắt đau"**
+
+```text
+Config: vus=2, iterations=100, iter_time=6s, maxDuration=5s, gracefulStop=1s
+
+T_est = 100 × 6 / 2 = 300s
+min(5s, 300s) = 5s
+T_max = 5s + 1s = 6s
+
+Timeline:
+  t=0.0   2 VU vào đợt 1 (đến t=6s)
+  t=5.0   maxDuration hết, vào grace (1s)
+          2 VU đang ở đợt 1 (đã 5s, còn 1s)
+  t=6.0   gracefulStop hết → maxDurationCtx cancel
+          2 VU vẫn đang chạy iter (6s = đúng iter_time)
+          → Tùy race: có thể finish kịp hoặc bị cancel giữa chừng
+          → Nếu bị cancel: iter thành interrupted
+
+Worst case:
+  iterations....: 0          ← iter bị cắt trước khi emit complete
+  interrupted...: 2          ← 2 iter đang chạy bị cắt
+  dropped.......: 98         ← 100 - 2 (attempted = 2 nhưng chưa complete)
+```
+
+##### Cách chọn `maxDuration` hợp lý
+
+```text
+QUY TRÌNH 3 BƯỚC:
+
+1. Ước lượng T_est (Công thức 3)
+   T_est = iterations × iter_time / vus
+
+2. Thêm buffer 20-50%
+   maxDuration = T_est × 1.5  (hoặc × 2 cho an toàn)
+
+3. Kiểm tra lower bound
+   maxDuration >= 1s (validate requirement)
+
+Ví dụ:
+  T_est = 30s → maxDuration = 45s-60s
+  T_est = 5m  → maxDuration = 7m30s-10m
+  T_est = 30s → maxDuration = "1m" (chọn tròn)
+
+Nếu không chắc iter_time:
+  → Chạy thử với vus=1, iterations=1 để đo iteration_duration trước
+  → Rồi tính lại T_est với vus và iterations thật
+```
+
+##### Ví dụ đời thường
 
 ```text
 Đóng 90 hộp, ước 30 phút, sếp giới hạn 1h:
   min(60, 30) = 30 phút
   + grace 5 phút
   = 35 phút (tối đa scenario kéo dài)
+
+Nhưng thực tế: sau 30 phút xong việc, về sớm, không cần grace.
+
+Nếu sếp giới hạn 20 phút (chặt hơn T_est):
+  min(20, 30) = 20 phút
+  + grace 5 phút
+  = 25 phút
+  → còn 15 hộp chưa đóng (= dropped)
 ```
 
-**Áp vào k6**:
+##### Kết nối với section 3.8
 
 ```text
-Case A: T_est < maxDuration (ngon, kho cạn trước hạn)
-  iterations=20, iter_time=0.5s, vus=4 -> T_est ≈ 2.5s
-  maxDuration=10m
-  T_max = min(10m, 2.5s) + 30s = 2.5s + 30s ≈ 32.5s
-
-  Thực tế: scenario xong sau ~2.5s, không dùng grace.
-
-Case B: T_est > maxDuration (kẹt, hit trần)
-  iterations=20, iter_time=10s, vus=2 -> T_est ≈ 100s
-  maxDuration=30s
-  T_max = min(30s, 100s) + 30s = 60s
-
-  Thực tế: scenario chạy 30s thì cắt, có dropped/interrupted.
+Công thức 4 là bản cheat sheet của section 3.8 (maxDuration và gracefulStop).
+Nếu muốn hiểu sâu cơ chế:
+  - regDurationCtx vs maxDurationCtx → section 3.8.2
+  - interrupt vs drop → section 6.5
+  - 4 cách kết thúc scenario → section 6.3
 ```
 
-**Khi nào dùng**: trước khi chạy, để biết scenario tối đa kéo dài bao
-lâu, đặt `gracefulStop` cho phù hợp.
+**Khi nào dùng**: trước khi chạy, để chọn `maxDuration` và `gracefulStop`
+cho phù hợp. Sau khi chạy, để giải thích tại sao có dropped/interrupted.
+
+---
 
 #### Công thức 5: "Mỗi VU làm bao nhiêu?" (Số iter trung bình mỗi VU)
 
@@ -2322,31 +2722,144 @@ iter_per_vu ≈ iterations / vus
 Là **xấp xỉ thô** — thực tế VU nhanh hơn nhận nhiều, VU chậm hơn nhận
 ít (xem Công thức 1).
 
-**Ví dụ đời thường**:
+##### Tại sao cần công thức này nếu đã có Công thức 1?
+
+```text
+Công thức 5 là "quick check", Công thức 1 là "deep analysis":
+
+  Công thức 5: 1 phép chia, không cần biết iter_time từng VU
+  → Dùng khi: mới phác thảo config, chưa biết iter_time
+
+  Công thức 1: cần biết iter_time từng VU, tính tỷ lệ
+  → Dùng khi: đã có output, muốn giải thích phân phối thực tế
+
+Tương tự như trong thống kê:
+  - Công thức 5 = mean (trung bình)
+  - Công thức 1 = weighted distribution (phân phối có trọng số)
+```
+
+##### Phân tích: khi nào Công thức 5 ĐÚNG?
+
+```text
+ĐIỀU KIỆN ĐỂ CÔNG THỨC 5 CHÍNH XÁC:
+  Tất cả VU có iter_time BẰNG NHAU
+
+Chứng minh:
+  Khi t_0 = t_1 = ... = t_{n-1} = t:
+    ratio_i = (1/t) / (n × 1/t) = 1/n
+    iter_per_vu_i = (1/n) × iterations = iterations / n = iterations / vus
+
+→ Kết quả giống Công thức 5
+
+KHI NÀO ĐIỀU KIỆN NÀY ĐÚNG TRONG THỰC TẾ?
+  - Test sleep(): các VU cùng sleep(N) → iter_time bằng nhau
+  - HTTP test với server ổn định: mọi VU cùng code → iter_time gần bằng
+  - Trong thực tế: iter_time LUÔN có dao động nhỏ (±5-10%) do network
+    → Công thức 5 là approximation, không exact
+```
+
+##### Khi nào Công thức 5 SAI nhiều?
+
+```text
+SAI NHIỀU (>30%) KHI:
+  1. VU dùng __VU để chọn sleep khác nhau:
+     sleep(__VU * 0.5) → VU1=0.5s, VU2=1.0s, VU3=1.5s → lệch 3x
+
+  2. VU dùng data-driven test với payload khác nhau:
+     VU0 xử lý file 1KB, VU1 xử lý file 10MB → iter_time lệch lớn
+
+  3. Một vài VU gặp timeout/retry:
+     → iter_time của VU đó tăng đột biến → nhận ít iter hơn hẳn
+
+  4. Network không ổn định giữa các VU:
+     → VU có connection tốt "ăn" nhiều iter hơn
+```
+
+##### Ví dụ đời thường
 
 ```text
 20 hộp chia cho 4 nhân viên:
-  trung bình mỗi người 5 hộp
-  (nhưng người nhanh có thể đóng 7, người chậm 3)
+  Trung bình: 20 / 4 = 5 hộp/người
+
+Nhưng thực tế:
+  - Người nhanh: 8 hộp (gấp 1.6x trung bình)
+  - 2 người vừa: 5 hộp mỗi người
+  - Người chậm: 2 hộp (chưa bằng 1/2 trung bình)
+  Tổng = 20 ✓
+
+→ Trung bình = 5 là con số "trên giấy"
+→ Thực tế ai làm được bao nhiêu là do tốc độ từng người
 ```
 
-**Áp vào k6**:
+##### Áp vào k6
 
 ```text
-iterations=20, vus=4
-=> iter_per_vu ≈ 5
+Ví dụ 1 — VU đều tốc độ (sleep 0.5s, vus=4, iterations=20):
+  iter_per_vu = 20 / 4 = 5
+  Kết quả thật: VU0=5, VU1=5, VU2=5, VU3=5 ✓
 
-Nếu VU đều tốc độ:
-  VU0=5, VU1=5, VU2=5, VU3=5
-Nếu VU lệch tốc độ (sleep khác nhau):
-  có thể VU0=8, VU1=5, VU2=4, VU3=3 (tổng vẫn 20)
+Ví dụ 2 — VU lệch tốc độ (như demo 5.1):
+  vus=4, iterations=16
+  iter_per_vu = 16 / 4 = 4 (trung bình)
+
+  Kết quả thật:
+    VU0 (0.2s): 8 iter  ← gấp 2x trung bình
+    VU1 (0.4s): 4 iter  ← đúng trung bình
+    VU2 (0.8s): 2 iter  ← 1/2 trung bình
+    VU3 (0.8s): 2 iter  ← 1/2 trung bình
+    Tổng = 16 ✓
+
+  → Trung bình 4 là "vô nghĩa" về mặt dự đoán từng VU
+  → Nhưng hữu ích để tính T_est (Công thức 3):
+    T_est = 16 × 0.5 / 4 = 2s (dùng iter_time trung bình 0.5s)
 ```
 
-**Khi nào dùng**: ước lượng nhanh không cần biết tốc độ từng VU. Nếu
-muốn chính xác hơn, dùng Công thức 1.
+##### Kết nối với Công thức 1 và 3
 
-**Lưu ý**: chỉ chính xác khi tất cả VU đều cùng iter_time. Lệch nhau
-thì dùng Công thức 1 (ratio).
+```text
+Công thức 5 → Công thức 1: từ thô đến chi tiết
+  iter_per_vu (thô) = iterations / vus
+  iter_per_vu_i (chi tiết) = ratio_i × iterations
+
+Công thức 5 → Công thức 3: từ VU đến scenario
+  T_est = iterations / peak_rate
+        = iterations / (vus / iter_time)
+        = (iterations / vus) × iter_time
+        = iter_per_vu × iter_time              ← Công thức 5 xuất hiện!
+
+→ Công thức 3 = Công thức 5 × iter_time
+→ "Tổng thời gian = số iter mỗi VU × thời gian 1 iter"
+→ Lý do: vus VU cùng chạy, mỗi VU làm iter_per_vu iter,
+  thời gian = số đợt × iter_time ≈ iter_per_vu × iter_time
+```
+
+**Khi nào dùng**: ước lượng nhanh không cần biết tốc độ từng VU. Nếu muốn
+chính xác hơn, dùng Công thức 1.
+
+**Lưu ý**: chỉ chính xác khi tất cả VU đều cùng iter_time. Lệch nhau thì
+dùng Công thức 1 (ratio). Đây là công thức YẾU NHẤT trong 5 công thức về
+độ chính xác — nhưng NHANH NHẤT để tính nhẩm.
+
+---
+
+#### Bảng tổng kết 5 công thức
+
+| # | Tên | Công thức | Độ chính xác | Dùng khi |
+| --- | --- | --- | --- | --- |
+| 1 | Chia kho | `iter_i ≈ (1/t_i)/Σ(1/t_j) × N` | ★★★★★ | Đã có output, muốn giải thích phân phối |
+| 2 | Đỉnh | `peak ≈ vus / t` | ★★★★☆ | Ước lượng max req/s trước run |
+| 3 | Bao lâu | `T_est ≈ N × t / vus` | ★★★★☆ | Chọn maxDuration trước run |
+| 4 | Trần | `T_max = min(mD, T_est) + gS` | ★★★★★ | Kiểm tra config có bị cắt không |
+| 5 | Mỗi VU | `avg ≈ N / vus` | ★★☆☆☆ | Tính nhẩm nhanh, phác thảo config |
+
+> **Thứ tự học**: 5→2→3→4→1. Bắt đầu từ Công thức 5 (đơn giản nhất),
+> rồi học Công thức 2 (peak), rồi 3 và 4 (ước lượng thời gian), cuối
+> cùng là Công thức 1 (chi tiết nhất, dùng để debug).
+
+> **Thứ tự dùng khi viết config**: 2→3→4→1→5. Đầu tiên ước lượng peak
+> (backend chịu nổi không?), rồi tính T_est và chọn maxDuration, rồi
+> sau run dùng Công thức 1 để giải thích output, Công thức 5 để tính
+> nhẩm khi cần.
 
 ### 8.2. Bảng tra nhanh: gặp tình huống nào, dùng công thức nào
 
