@@ -906,9 +906,124 @@ Stage 0: `ramp 2 → 4 iter/s trong 2s`:
 đầu stage  (t=0s):  rate = 2/s   -> slot_interval = 500ms
 giữa stage (t=1s):  rate = 3/s   -> slot_interval ≈ 333ms
 cuối stage (t=2s):  rate = 4/s   -> slot_interval = 250ms
+```
+
+**── Cách tính slot_interval tại từng thời điểm trong ramp ──**
+
+Công thức gốc `slot_interval = 1/rate` vẫn đúng, nhưng vì rate **thay đổi
+liên tục** trong ramp nên interval cũng thay đổi liên tục theo:
+
+```text
+slot_interval(t) = 1 / rate(t)
+
+Với rate(t) = lambda_prev + slope × (t - stageStart)
+    slope    = (lambda_next - lambda_prev) / duration
+```
+
+Đây chính là điểm khác biệt CỐT LÕI giữa constant và ramping:
+
+```text
+Constant (rate cố định):
+  rate = 4/s (không đổi)
+  → slot_interval = 1/4 = 250ms (KHÔNG ĐỔI suốt run)
+  → k6 dùng ticker cố định 250ms, mỗi tick fire 1 slot
+
+Ramping (rate thay đổi):
+  rate đi từ 2/s lên 4/s trong 2 giây
+  → slot_interval đi từ 500ms XUỐNG 250ms (THAY ĐỔI liên tục)
+  → k6 KHÔNG THỂ dùng ticker cố định được
+  → Phải dùng thuật toán khác: "diện tích tích lũy" (cal())
+```
+
+Tính cụ thể slot_interval ở 3 mốc trong ví dụ:
+
+```text
+Bước 1 — Xác định công thức rate(t):
+  lambda_prev = 2/s, lambda_next = 4/s, duration = 2s
+  slope = (4 - 2) / 2 = 1  (mỗi giây rate tăng thêm 1)
+  rate(t) = 2 + 1 × t = 2 + t
+
+Bước 2 — Tính slot_interval tại từng thời điểm:
+
+  Tại t=0s (đầu stage):
+    rate(0) = 2 + 0 = 2/s
+    slot_interval = 1 / 2 = 0.5s = 500ms
+    → "lúc đầu thưa", 500ms mới fire 1 slot
+
+  Tại t=1s (giữa stage):
+    rate(1) = 2 + 1 = 3/s
+    slot_interval = 1 / 3 ≈ 0.333s = 333ms
+    → "nhanh dần", 333ms fire 1 slot
+
+  Tại t=2s (cuối stage):
+    rate(2) = 2 + 2 = 4/s
+    slot_interval = 1 / 4 = 0.25s = 250ms
+    → "dày nhất", 250ms fire 1 slot (nhanh gấp đôi lúc đầu)
+```
+
+Bảng mở rộng — slot_interval ở nhiều mốc thời gian hơn:
+
+```text
+t (s) | rate(t) = 2 + t | slot_interval = 1/rate(t) | Nhận xét
+──────┼─────────────────┼────────────────────────────┼──────────
+0.0   | 2.0/s           | 1/2.0 = 500ms             | thưa nhất
+0.2   | 2.2/s           | 1/2.2 ≈ 455ms             |
+0.4   | 2.4/s           | 1/2.4 ≈ 417ms             |
+0.6   | 2.6/s           | 1/2.6 ≈ 385ms             |
+0.8   | 2.8/s           | 1/2.8 ≈ 357ms             |
+1.0   | 3.0/s           | 1/3.0 ≈ 333ms             | trung bình
+1.2   | 3.2/s           | 1/3.2 ≈ 313ms             |
+1.4   | 3.4/s           | 1/3.4 ≈ 294ms             |
+1.6   | 3.6/s           | 1/3.6 ≈ 278ms             |
+1.8   | 3.8/s           | 1/3.8 ≈ 263ms             |
+2.0   | 4.0/s           | 1/4.0 = 250ms             | dày nhất
+```
+
+Nhìn bảng trên thấy rõ: interval GIẢM DẦN theo thời gian (500ms → 250ms),
+slot càng về cuối stage càng dày. Đây là hệ quả trực tiếp của rate tăng
+tuyến tính: rate tăng → 1/rate giảm → interval thu hẹp.
+
+**── Từ slot_interval thay đổi đến thuật toán cal() ──**
+
+Vì interval thay đổi liên tục, k6 không thể dùng ticker cố định như bên
+constant-arrival-rate. Thay vào đó, k6 dùng phương pháp **tích lũy diện tích**:
+
+```text
+1. Khi rate thay đổi, không có "1 ticker period" cho cả stage
+2. Thay vào đó, k6 tính: "cần bao nhiêu diện tích dưới đường rate(t)
+   để tích lũy được 1 slot?"
+3. Mỗi khi diện tích tích lũy chạm số nguyên tiếp theo → fire 1 slot
+4. Code ref: cal() trong ramping_arrival_rate.go:234-282
+```
+
+Cảm nhận trực quan:
+
+```text
+Interval GIẢM vì rate TĂNG:
+  rate ↑ → 1/rate ↓ → interval ↓ → slot MAU hơn
+
+  t=0.0s: interval=500ms → slot thưa (như rate 2/s)
+  t=1.0s: interval=333ms → slot vừa  (như rate 3/s)
+  t=2.0s: interval=250ms → slot dày  (như rate 4/s)
+
+  Trong cùng 1 giây:
+    Đầu stage (gần t=0): fire được ~2 slot (vì interval ~500ms)
+    Cuối stage (gần t=2): fire được ~4 slot (vì interval ~250ms)
+```
+
+Ngược lại với ramp xuống:
+
+```text
+Ramp 4 → 2/s trong 2s: slope = (2-4)/2 = -1, rate(t) = 4 - t
+
+  t=0s: rate=4/s → interval=250ms (dày lúc đầu)
+  t=1s: rate=3/s → interval=333ms (thưa dần)
+  t=2s: rate=2/s → interval=500ms (thưa nhất)
+
+  Interval TĂNG vì rate GIẢM: slot càng về cuối càng thưa
+```
 
 Câu hỏi: tổng có bao nhiêu slot fire trong stage này?
-```
 
 Suy nghĩ trực giác:
 
