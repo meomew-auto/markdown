@@ -213,6 +213,58 @@ Trong CDN test, "pass" không phải là "không có lỗi HTTP". Một request 
 - Nếu cache key header không khớp expected -> check fail -> k6 exit 1
 - Nếu upstream service sai -> check fail -> k6 exit 1
 
+##### Phân tích executor: vì sao dùng `constant-vus` cho case này?
+
+Config hiện tại dùng bare form `vus` + `duration` — k6 tự động chọn
+`constant-vus`. Đây là lựa chọn ĐÚNG cho CDN hit-smoke. Phân tích vì sao:
+
+**Yêu cầu của case CDN hit-smoke:**
+
+```text
+1. Sustained traffic: gửi request LIÊN TỤC trong 18 giây
+   → Mục tiêu: xác nhận cache HIT ỔN ĐỊNH suốt thời gian chạy
+   → KHÔNG phải: "gửi đúng 1000 request rồi dừng"
+   → KHÔNG phải: "gửi đúng 50 request/giây"
+
+2. Mỗi VU = 1 user liên tục gửi request, loop đến hết duration
+   → User gửi request, nhận response, check HIT, sleep ngắn, lặp lại
+   → Mô hình "user thật" — xem sản phẩm, refresh, xem lại
+
+3. Rate tự điều chỉnh theo response time:
+   → CDN nhanh (HIT ~5ms) → VU gửi được nhiều request/giây
+   → CDN chậm (MISS ~50ms) → VU gửi ít hơn
+   → Đây là closed model — rate = vus / iter_time
+```
+
+**So sánh executor cho case này:**
+
+| Executor | Phù hợp? | Vì sao |
+| --- | --- | --- |
+| **constant-vus** (đang dùng) | ✅ **ĐÚNG** | Sustained traffic trong duration cố định. Mỗi VU loop liên tục. Rate tự điều chỉnh. |
+| constant-arrival-rate | ⚠️ Được nhưng không cần | Ép rate cố định. Nhưng CDN smoke KHÔNG cần rate chính xác — chỉ cần request liên tục. Thêm complexity không cần thiết (`preAllocatedVUs`, `maxVUs`). |
+| shared-iterations | ❌ SAI | Cần tổng iter CỐ ĐỊNH. Case này muốn chạy THEO THỜI GIAN (18s), không phải theo số lượng. `iterations=?` — không biết trước. |
+| per-vu-iterations | ❌ SAI | Cần số iter/vu CỐ ĐỊNH. Case này muốn VU loop LIÊN TỤC không giới hạn số vòng. |
+| ramping-vus | ❌ SAI | Cần thay đổi VU theo stage. Case này chỉ cần VU ỔN ĐỊNH. |
+
+**Tóm tắt luồng quyết định:**
+
+```text
+Cần sustained traffic trong 1 khoảng thời gian?
+  ├── YES → constant-vus (hoặc constant-arrival-rate nếu cần rate chính xác)
+  └── NO  → Cần tổng iter cố định?
+              ├── YES → shared-iterations (chia việc) hoặc per-vu-iterations (công bằng)
+              └── NO  → Cần thay đổi VU theo timeline?
+                          ├── YES → ramping-vus / ramping-arrival-rate
+                          └── NO  → xem lại yêu cầu
+
+CDN hit-smoke: "sustained traffic 18s" → constant-vus ✓
+```
+
+> **Ghi nhớ**: CDN smoke test quan tâm "cache có HIT ổn định không?", không
+> quan tâm "gửi được bao nhiêu request trong 18s?". Số request thực tế là
+> OUTPUT (phản ánh hiệu năng CDN), không phải INPUT (mục tiêu cố định).
+> → Dùng constant-vus, đọc `http_reqs` sau run để biết throughput.
+
 ### 5.4. Phần 3: setup() function
 
 ```javascript
