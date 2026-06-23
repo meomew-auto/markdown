@@ -177,58 +177,45 @@ Trước khi chạy toàn bộ LB suite, các bước preflight sau phải đư�
 | 01 | `01-entry-smoke.js` | 0 | 13764/13764 | 0.00% (0/2463) | public entrypoint qua Nginx tới app, có `X-Request-ID`, không `X-Cache`, upstream service đúng | **PASS** |
 | 02 | `02-app-instance-distribution.js` | 0 | 361/361 | 0.00% (0/60) | quan sát được nhiều app `instance_id` với `ScaleApp 2`; Nginx phân phối traffic qua nhiều instance | **PASS** |
 
-### 4.2. `full-no-cdn` profile -- default run
+### 4.2. `full-no-cdn` profile -- default run sau fix case 04/05
 
-Default profile bắt đầu với case 03 pass, sau đó dừng ở case 04 vì products list bị rate limiting/pressure dưới traffic mặc định.
+Sau khi BE/test-harness sửa case 04/05, chạy lại default profile `full-no-cdn` **không dùng tuned env**. Kết quả: runner exit 0, đủ 10/10 cases của profile `full-no-cdn` pass.
 
 | Case | Script | Exit | Checks | HTTP failed | Primary observation | Result |
 | --- | --- | ---: | ---: | ---: | --- | --- |
 | 03 | `03-domain-boundaries.js` | 0 | 31/31 | 0.00% (0/6) | app/auth/cart/order/products/report boundaries route đúng upstream service tương ứng | **PASS** |
-| 04 | `04-origin-cacheable-read.js` | 99 | 11396/11930 | 22.38% | `products_list` status check fail; under concurrent cacheable traffic endpoint returned `429` | FAIL under default load |
-| 05 | `05-origin-service-mix.js` | 99 (when run in 05-12 batch) | 20946/21770 | 18.92% | `products_list` status check fail; product list rate limited inside service mix | FAIL under default load |
+| 04 | `04-origin-cacheable-read.js` | 0 | 6535/6535 | 0.00% (0/1307) | cacheable product reads đi origin qua LB, không CDN cache, không còn unexpected 429 | **PASS** |
+| 05 | `05-origin-service-mix.js` | 0 | 4625/4625 | 0.00% (0/925) | production-like mix route đúng upstream service, không còn unexpected 429 trên `products_list` | **PASS** |
+| 06 | `06-retry-failover.js` | 0 | 7/7 | 0.00% (0/1) | faulty origin được failover sang stable; `X-LB-Failover=faulty->stable` | **PASS** |
+| 07 | `07-rate-limit-and-connection-pressure.js` | 0 | 602/602 | 65.11% (196/301) | expected pressure shedding: 200 + 429, unexpected = 0 | **PASS** |
+| 08 | `08-weighted-routing-canary.js` | 0 | 253/253 | 0.00% (0/122) | forced stable/canary channels + weighted share within expected band | **PASS** |
+| 09 | `09-passive-outlier-ejection.js` | 0 | 43/43 | 0.00% (0/6) | passive ejection/fallback behavior; `X-LB-Health-Mode=passive-ejection`; follow-up clean | **PASS** |
+| 10 | `10-weighted-fairness-under-load.js` | 0 | 2160/2160 | 0.00% (0/720) | canary fairness under load inside expected band | **PASS** |
+| 11 | `11-saturation-isolation.js` | 0 | 1872/1872 | 0.00% (0/312) | fast lane remains healthy while slow lane is intentionally slow | **PASS** |
+| 12 | `12-slow-origin-timeouts.js` | 0 | 260/260 | 100.00% (65/65) | expected timeout 504; `X-LB-Timeout-Policy=read_timeout=150ms`; unexpected = 0 | **PASS** |
 
-**Diagnosis probe cho `/api/sim/products` dưới concurrency**:
+### 4.3. Historical issue -- default case 04/05 trước fix
+
+Trước fix, default profile dừng ở case 04/05 vì `/api/sim/products` trả unexpected `429` dưới traffic mặc định.
 
 ```text
-120 concurrent probes -> 100 x 200, 20 x 429
-non-200 responses still had X-Upstream-Service=products-service
-X-Cache vắng mặt: đúng LB-only path
+Case 04 old default:
+  Checks: 11396/11930
+  http_req_failed: 22.38%
+  products_list status failed due 429
+
+Case 05 old default:
+  Checks: 20946/21770
+  http_req_failed: 18.92%
+  products_list status failed due 429
+
+Manual probe cũ:
+  120 concurrent /api/sim/products -> 100 x 200, 20 x 429
 ```
 
-**Diễn giải**:
+Diễn giải cũ: đây là contract mismatch giữa correctness cases 04/05 và pressure/rate-limit behavior của products path, không phải route bug vì `X-Upstream-Service` vẫn là `products-service` và `X-Cache` vắng mặt.
 
-- Routing vẫn đúng: `X-Upstream-Service=products-service`.
-- `X-Cache` vắng mặt: đúng LB-only path, không qua CDN.
-- Failure là mismatch giữa traffic shape mặc định của case 04/05 và rate/pressure behavior của products path.
-- `429` không được case 04/05 khai báo là expected, nên threshold check fail là đúng.
-
-### 4.3. `full-no-cdn` profile -- tuned correctness run
-
-Khi giảm tải cho case 04/05 để không đụng rate limit, full profile 03-12 pass.
-
-**Tuned env**:
-
-```powershell
-$env:LB_CACHEABLE_WARMUP_VUS = "1"
-$env:LB_CACHEABLE_MEASUREMENT_VUS = "2"
-$env:LB_CACHEABLE_WARMUP_DURATION = "5s"
-$env:LB_CACHEABLE_MEASUREMENT_DURATION = "10s"
-$env:LB_MIX_VUS = "2"
-$env:LB_MIX_DURATION = "10s"
-```
-
-| Case | Script | Checks | HTTP failed | Primary observation | Result |
-| --- | --- | ---: | ---: | --- | --- |
-| 03 | `03-domain-boundaries.js` | 31/31 | 0.00% (0/6) | 6 service boundaries route đúng upstream | **PASS** |
-| 04 | `04-origin-cacheable-read.js` | 1160/1160 | 0.00% (0/232) | cacheable product reads đi origin qua LB, không CDN cache | **PASS** (tuned) |
-| 05 | `05-origin-service-mix.js` | 815/815 | 0.00% (0/163) | production-like mix route đúng upstream service | **PASS** (tuned) |
-| 06 | `06-retry-failover.js` | 7/7 | 0.00% (0/1) | faulty origin được failover sang stable; `X-LB-Failover=faulty->stable` | **PASS** |
-| 07 | `07-rate-limit-and-connection-pressure.js` | 602/602 | 65.11% (196/301) | expected pressure shedding: 200 + 429, unexpected = 0 | **PASS** |
-| 08 | `08-weighted-routing-canary.js` | 253/253 | 0.00% (0/122) | forced stable/canary channels + weighted share within expected band | **PASS** |
-| 09 | `09-passive-outlier-ejection.js` | 43/43 | 0.00% (0/6) | passive ejection/fallback behavior; `X-LB-Health-Mode=passive-ejection`; follow-up clean | **PASS** |
-| 10 | `10-weighted-fairness-under-load.js` | 2163/2163 | 0.00% (0/721) | observed canary share 12.62% inside expected band | **PASS** |
-| 11 | `11-saturation-isolation.js` | 1866/1866 | 0.00% (0/311) | fast lane p95 thấp (~4.29ms) dù slow lane chậm có chủ đích (~616.27ms) | **PASS** |
-| 12 | `12-slow-origin-timeouts.js` | 260/260 | 100.00% (65/65) | expected timeout 504; `X-LB-Timeout-Policy=read_timeout=150ms`; unexpected = 0 | **PASS** |
+Trạng thái hiện tại: **đã verify fixed** bằng default full-no-cdn run mới; case 04/05 không còn cần tuned env để pass.
 
 ---
 
