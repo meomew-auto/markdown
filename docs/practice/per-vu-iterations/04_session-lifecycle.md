@@ -216,6 +216,99 @@ làm việc" (session) của 1 user.
   "đúng tool cho đúng việc".
 ```
 
+**── Góc nhìn kiến trúc: VU pool trong closed model ──**
+
+Từ phân tích trên có thể thấy 1 nguyên lý sâu hơn về cách k6 thiết kế
+closed model:
+
+```text
+TẤT CẢ closed model executor (constant-vus, ramping-vus, shared-iterations)
+đều dùng VU pool theo cùng 1 cách:
+
+  ┌─────────┐     ┌──────────────────┐
+  │ Công    │ ──► │ VU Pool          │
+  │ việc    │     │ ┌────┐ ┌────┐   │
+  │ (iter)  │     │ │VU#1│ │VU#2│   │
+  │         │     │ └────┘ └────┘   │
+  │ iter #1 │ ──► │   ↓              │
+  │ iter #2 │ ──► │ VU nào RẢNH     │
+  │ iter #3 │ ──► │ thì NHẬN việc   │
+  │ ...     │     │                  │
+  └─────────┘     └──────────────────┘
+
+  → VU là "worker vô danh" — không có identity
+  → Iter là "việc cần làm" — giao cho ai cũng được
+  → KHÔNG CÓ RÀNG BUỘC: "việc này phải do VU kia làm"
+```
+
+Hệ quả của kiến trúc này với session lifecycle:
+
+```text
+Ví dụ: constant-vus, VU=3, muốn test 3 user (A, B, C), mỗi user 20 thao tác.
+
+  Timeline:
+    t=0:   VU #1 rảnh → nhận iter #1 (user A, login)
+    t=0.1: VU #2 rảnh → nhận iter #2 (user A, thao tác 2 — nhưng VU #2
+           không có token của A!)
+    t=0.2: VU #3 rảnh → nhận iter #3 (user B, login)
+    t=0.3: VU #1 rảnh → nhận iter #4 (user C, login — ghi đè state A)
+    ...
+
+  → Không VU nào "sở hữu" 1 user
+  → State của user A phân tán khắp 3 VU (hoặc không VU nào có)
+  → Không thể tái tạo flow: login → dùng → expire → refresh → dùng tiếp
+```
+
+`per-vu-iterations` là NGOẠI LỆ DUY NHẤT trong closed model:
+
+```text
+  ┌──────────────────────────────────────┐
+  │ per-vu-iterations                    │
+  │                                      │
+  │ VU #1: [iter0] [iter1] ... [iter19] │ ← TẤT CẢ của CÙNG user A
+  │ VU #2: [iter0] [iter1] ... [iter19] │ ← TẤT CẢ của CÙNG user B
+  │ VU #3: [iter0] [iter1] ... [iter19] │ ← TẤT CẢ của CÙNG user C
+  │                                      │
+  │ → VU = user (1-1, cố định từ đầu)    │
+  │ → State nằm TRỌN trong 1 VU          │
+  │ → Không bị VU khác xen vào            │
+  └──────────────────────────────────────┘
+```
+
+So sánh trực quan:
+
+```text
+                    shared-iterations    constant-vus        per-vu-iterations
+                    ─────────────────    ────────────        ─────────────────
+Phân phối iter      iter#1→VU nào       iter#1→VU rảnh      toàn bộ iter của
+                    rảnh thì nhận        đầu tiên            1 VU giao cho VU đó
+
+VU ↔ user           KHÔNG CÓ             KHÔNG CÓ            1-1 CỐ ĐỊNH
+                    (iter trộn lẫn)      (iter trộn lẫn)     (VU#k = user#k)
+
+State per-VU        vô nghĩa             vô nghĩa             CỐT LÕI
+                    (state bị ghi đè     (state bị ghi đè     (state sống qua
+                     mỗi iter mới)        mỗi iter mới)        đúng N iter)
+
+Dùng cho            1 việc độc lập       đo throughput        session lifecycle
+                    chạy N lần           liên tục             user journey
+                                         (không state)        (có state)
+```
+
+Tóm lại:
+
+```text
+KHÔNG PHẢI shared-iterations hay constant-vus "làm sai" — chúng được
+thiết kế ĐÚNG cho mục đích của chúng: chạy nhiều việc ĐỘC LẬP, không
+cần nhớ state giữa các lần chạy.
+
+NHƯNG khi cần test session lifecycle (có state, có token, có refresh),
+chỉ per-vu-iterations mới có kiến trúc VU↔user 1-1 để làm việc đó.
+
+→ Đây không phải là "bug" của executor khác — đây là THIẾT KẾ.
+→ Mỗi executor giải quyết 1 lớp bài toán khác nhau.
+```
+
 ### Yêu cầu (b): CHẠY ĐỦ ITER ĐỂ TOKEN EXPIRE + REFRESH
 
 **Ý nghĩa**: Phải chạy đủ số thao tác để token thật sự expire, rồi verify
