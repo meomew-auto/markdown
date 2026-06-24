@@ -493,7 +493,8 @@ Remaining issue:
 - redis-04 is a strong lesson for degrade latency vs correctness.
 - redis-05 is a strong lesson for hotkey fairness.
 - redis-06 is a strong lesson for app cache hot/cold benchmark validity.
-- redis-02 is still useful as a debug lesson: race counters pass, but response breakdown contract is ambiguous.
+- redis-02 is now fully safe to teach as hot-key race/idempotency proof after BE fix.
+- redis-01 is safe for core shared-state semantics, but not yet for “across multiple order-service instances” until topology exposes more than one order-service instance.
 
 ---
 
