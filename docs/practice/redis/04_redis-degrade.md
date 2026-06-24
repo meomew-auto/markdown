@@ -1834,3 +1834,78 @@ Delay=500ms: fresh VU cần ~650ms để lưu kết quả
 ```
 
 Mối quan hệ này giải thích tại sao counters vẫn đúng ở delay=80ms nhưng có thể sai ở delay cực cao: retry mechanism có giới hạn về số lần retry và tổng thời gian chờ.
+
+---
+
+## Appendix F: Frequently Asked Questions (FAQ)
+
+### F.1 Tại sao phải cần OPS_AUTH_TOKEN cho case này?
+
+Vì case này sử dụng control-plane API (`/ops/order/redis/profile`, `/ops/order/redis/reset`) để thay đổi behavior của Redis ở application level. Đây là các endpoint quản trị có khả năng ảnh hưởng đến toàn bộ hệ thống -- chúng cần được bảo vệ bởi authentication. Token được inject bởi platform/runner, learner không cần tự nhập.
+
+### F.2 Nếu không có OPS_AUTH_TOKEN thì có chạy được case này không?
+
+Có, bằng cách set `ORDER_SHARED_STATE_REDIS_CONTROL_MODE=none`. Tuy nhiên, khi đó setup và teardown bị skip -- case sẽ chỉ chạy runtime test mà không inject delay. Kết quả sẽ giống case 02 (baseline), không chứng minh được degrade behavior.
+
+### F.3 Tại sao latency tăng >80ms dù chỉ set delay=80ms?
+
+Vì mỗi request gọi Redis nhiều lần. Ví dụ một fresh confirm request:
+- SET NX claim key: +80ms
+- SET idempotency record: +80ms
+- Có thể GET để check: +80ms
+Tổng: 240ms extra delay, cộng với ~50ms baseline = ~290ms.
+
+Một reuse request chỉ cần:
+- GET idempotency record: +80ms
+Tổng: 80ms extra delay, cộng với ~40ms baseline = ~120ms.
+
+Đây là lý do avg duration (~245ms) cao hơn baseline + 80ms.
+
+### F.4 Làm sao phân biệt giữa "degrade làm chậm" và "server bị chậm vì lý do khác"?
+
+Ba cách phân biệt:
+1. **So sánh với baseline (case 02)**: Nếu case 02 cũng chậm, vấn đề không phải do degrade injection.
+2. **Đọc profile**: `GET /ops/order/redis/profile` -- nếu `redis_delay_ms=0`, degrade không được inject.
+3. **Tắt degrade**: Chạy case với `CONTROL_MODE=none` -- nếu latency vẫn cao, server có vấn đề khác.
+
+### F.5 Tại sao teardown lại quan trọng đến vậy?
+
+Vì Redis profile (delay, fault mode) được lưu trong memory của order-service instance. Nếu không reset, TẤT CẢ các case Redis sau đó (case 05, case 06) sẽ chạy dưới điều kiện degraded mà không ai biết. Kết quả sai sẽ lan ra toàn bộ test suite. Teardown là mandatory, không phải nice-to-have.
+
+### F.6 Case này khác gì với chaos engineering?
+
+Case này là **deterministic degradation testing**, khác với chaos engineering ở chỗ:
+- **Có kiểm soát**: Delay chính xác 80ms, không phải ngẫu nhiên.
+- **Có reproducibility**: Cùng input -> cùng output, phù hợp CI/CD.
+- **Có teardown**: Đảm bảo không ảnh hưởng đến test khác.
+- **Phạm vi hẹp**: Chỉ ảnh hưởng đến Redis operations của order-service.
+
+Chaos engineering thường rộng hơn (kill pod, network partition, resource pressure) và ít kiểm soát hơn.
+
+### F.7 Tại sao phải test cả confirm và webhook dưới degrade?
+
+Vì hai flow có thể có code path Redis khác nhau. Ví dụ:
+- Confirm dùng 3 Redis operations: SET NX claim, GET idempotency record, SET result.
+- Webhook dùng 3 Redis operations: SET NX claim, GET webhook dedupe record, SET result.
+
+Một bug có thể chỉ ảnh hưởng đến một trong hai flow (vd: webhook flow quên retry khi GET fail). Test cả hai đảm bảo toàn bộ Redis operations đều hoạt động đúng dưới degrade.
+
+### F.8 Có nên set REDIS_DELAY_MS=0 để test "baseline" với case 04 không?
+
+Không nên. Case 02 là baseline chính thức cho hotkey race. Case 04 với delay=0 sẽ cho kết quả giống case 02 nhưng có thêm overhead của control-plane setup/teardown. Nếu muốn baseline, dùng case 02.
+
+### F.9 Khi nào nên tăng HOTKEY_VUS?
+
+Tăng HOTKEY_VUS khi:
+- Muốn test retry storm lớn hơn (vd: 20-50 VUs mô phỏng flash sale).
+- Muốn tăng race condition window để phát hiện bug tinh vi.
+- Muốn stress test Redis connection pool.
+
+Giữ HOTKEY_VUS mặc định (6) khi:
+- CI/CD pipeline -- thời gian chạy ngắn.
+- Lần đầu chạy case -- xác nhận cơ bản.
+- Debug một vấn đề cụ thể.
+
+### F.10 Làm sao để biết retry/poll mechanism có hoạt động không?
+
+Quan sát `confirm_duration` của reuse requests. Nếu reuse requests có duration distribution rộng (có request nhanh ~120ms, có request chậm ~350ms), điều này cho thấy một số request phải retry nhiều lần trước khi thấy kết quả -- retry mechanism đang hoạt động. Nếu tất cả reuse requests có duration giống hệt nhau (~120ms), có thể retry không thực sự xảy ra.

@@ -1653,3 +1653,234 @@ Redis SET NX EX là lựa chọn tốt nhất khi:
 6. **Idempotency và claim ownership là hai cơ chế riêng biệt**. Claim ownership kiểm soát "ai đang xử lý". Idempotency kiểm soát "kết quả đã được xử lý chưa". Cả hai phải hoạt động cùng nhau.
 
 7. **Always audit your claims**. Trong production, claim audit log là công cụ debug quan trọng nhất khi có vấn đề về stuck order hoặc double processing.
+
+---
+
+## Appendix E: Decision tree -- Debugging claim ownership failures
+
+### E.1 Cây quyết định khi test fail
+
+```text
+Test fail (Exit != 0)
+  |
+  +-- checks < 100%?
+  |     |
+  |     +-- Abandon checks fail (status != 503, claim_abandoned != true)?
+  |     |     -> Server không hỗ trợ abandon simulation
+  |     |     -> Action: Kiểm tra ?abandon_claim=true có được parse không
+  |     |
+  |     +-- Takeover checks fail?
+  |     |     |
+  |     |     +-- status != 200?
+  |     |     |     -> Takeover request bị reject
+  |     |     |     -> Action: Kiểm tra claim có thực sự hết hạn không
+  |     |     |
+  |     |     +-- idempotency_reuse != false?
+  |     |     |     -> Takeover không thực thi fresh (reuse kết quả cũ)
+  |     |     |     -> Action: Kiểm tra idempotency record của abandon request
+  |     |     |
+  |     |     +-- duration < TTL - 150?
+  |     |           -> Server không chờ TTL hết hạn
+  |     |           -> Action: Kiểm tra poll/wait logic trong server code
+  |     |
+  |     +-- Duplicate checks fail?
+  |           |
+  |           +-- idempotency_reuse != true?
+  |                 -> Duplicate không reuse kết quả takeover
+  |                 -> Action: Kiểm tra idempotency record storage
+  |
+  +-- Counters sai?
+        |
+        +-- abandonedCount != 2?
+        |     -> Một trong hai flow không abandon
+        |     -> Action: Kiểm tra webhook vs confirm flow riêng biệt
+        |
+        +-- takeoverFreshCount != 2?
+        |     -> Một trong hai takeover không fresh
+        |     -> Action: Xem takeover checks để biết flow nào fail
+        |
+        +-- duplicateReuseCount != 2?
+              -> Một trong hai duplicate không reuse
+              -> Action: Xem duplicate checks để biết flow nào fail
+```
+
+### E.2 Quick diagnostic bằng counters
+
+| Pattern counters | Chẩn đoán nhanh | Khả năng cao nhất |
+| --- | --- | --- |
+| abandoned=0, takeover=2, duplicate=2 | Abandon không hoạt động, nhưng takeover và duplicate OK | `?abandon_claim=true` bị ignore; request vẫn xử lý bình thường |
+| abandoned=2, takeover=0, duplicate=0 | Takeover fail hoàn toàn | Claim không có TTL hoặc TTL quá dài; takeover request timeout |
+| abandoned=2, takeover=2, duplicate=0 | Takeover OK nhưng duplicate không reuse | Idempotency record không được persist sau takeover |
+| abandoned=2, takeover=2, duplicate=2 (nhưng duration sai) | Counters đúng nhưng mechanism sai | Takeover không chờ TTL -- lock bị xóa khi abandon |
+| abandoned=2, takeover=4, duplicate=0 | Cả takeover và "duplicate" đều fresh | Không có idempotency record nào được lưu -- mỗi request đều xử lý lại |
+
+### E.3 Flowchart kiểm tra server-side claim logic
+
+```text
+1. Server có gọi SET NX trước khi xử lý không?
+   NO -> BUG: Không có claim mechanism -> fix
+   YES -> Tiếp tục
+
+2. SET NX có kèm EX (TTL) không?
+   NO -> BUG: Claim không có TTL -> thêm EX
+   YES -> Tiếp tục
+
+3. Khi abandon, server có DELETE claim key không?
+   YES -> BUG: Claim bị xóa ngay -> sửa: giữ key đến khi TTL hết hạn
+   NO -> Tiếp tục
+
+4. Khi takeover, server có poll/wait TTL không?
+   NO -> BUG: Takeover không chờ -> sửa: thêm poll loop
+   YES -> Tiếp tục
+
+5. Sau khi takeover fresh, server có lưu idempotency record không?
+   NO -> BUG: Duplicate sẽ không reuse -> sửa: persist record
+   YES -> OK: Claim mechanism hoàn chỉnh
+```
+
+---
+
+## Appendix F: Frequently Asked Questions (FAQ)
+
+### F.1 Tại sao case này dùng 1 VU thay vì nhiều VU?
+
+Vì đây là sequential proof, không phải concurrency test. Ba giai đoạn (abandon -> takeover -> duplicate) phụ thuộc tuần tự vào nhau. Nếu nhiều VU chạy song song, chúng sẽ tạo ra các claim khác nhau và không chứng minh được sequence. Concurrent claim được test ở case 02 (hotkey race).
+
+### F.2 Tại sao takeover duration phải gần bằng TTL?
+
+Vì takeover phải chờ claim cũ hết hạn. Nếu takeover duration ngắn hơn TTL, có nghĩa là server đã bỏ qua claim cũ -- điều này nguy hiểm vì trong production, hai request có thể cùng thấy "không có claim" và cùng xử lý (duplicate side effect).
+
+### F.3 Nếu TTL quá dài (30 giây), người dùng có phải chờ 30 giây không?
+
+Trong production, TTL nên được chọn dựa trên thời gian xử lý thực tế (vd: 5 giây cho payment gateway timeout 3 giây + buffer). Ngoài ra, client thường có retry với exponential backoff, nên request takeover sẽ đến sau vài giây, khi TTL đã gần hết. Server-side wait (như case này) chỉ là một cách implement; cách khác là trả về 202 Retry-After và để client tự retry.
+
+### F.4 Tại sao phải test cả confirm và webhook flow?
+
+Vì hai flow dùng hai cơ chế idempotency khác nhau: confirm dùng `Idempotency-Key` header, webhook dùng `event_id` trong body. Một bug có thể chỉ ảnh hưởng đến một trong hai cơ chế. Test cả hai đảm bảo claim mechanism hoạt động độc lập với cách idempotency key được truyền.
+
+### F.5 Claim ownership khác gì với distributed lock?
+
+Distributed lock ngăn chặn **concurrent** access (ai cũng bị chặn cho đến khi lock được release). Claim ownership cho phép **sequential** access với takeover (người tiếp theo có thể takeover nếu owner hiện tại chết). Distributed lock thường có explicit release; claim ownership dùng TTL để tự động release khi owner chết.
+
+### F.6 Làm sao để biết 503 là intentional setup hay bug thật sự?
+
+Ba cách phân biệt:
+1. **Giai đoạn**: 503 ở abandon phase là intentional; 503 ở takeover/duplicate phase là bug.
+2. **Response body**: Intentional 503 có `claim_abandoned=true`; bug 503 thường không có field này.
+3. **Counters**: Nếu `abandonedCount=2` và `takeoverFreshCount=2`, 503 là setup đúng.
+
+### F.7 TTL 900ms có quá ngắn cho production không?
+
+Có. 900ms là giá trị rút gọn cho testing. Trong production, TTL thường là 3-30 giây tùy vào external dependencies. Giá trị test được chọn để tổng thời gian chạy ngắn (~2 giây), phù hợp cho CI/CD pipeline. Bạn có thể tăng TTL qua biến môi trường để mô phỏng production behavior (xem Variation 2).
+
+### F.8 Điều gì xảy ra nếu hai request cùng thấy claim hết hạn và cùng takeover?
+
+Nếu server implementation đúng (dùng `SET NX` atomic), chỉ một trong hai request sẽ claim được key -- request còn lại sẽ thấy key đã tồn tại và phải chờ tiếp. Đây là lý do `SET NX` atomic quan trọng: nó ngăn duplicate takeover. Nếu server dùng check-then-set (non-atomic), hai request có thể cùng thấy "không có claim" và cùng xử lý -- gây duplicate side effect.
+
+---
+
+## Appendix G: Kịch bản mở rộng -- Claim ownership trong multi-service architecture
+
+### G.1 Kịch bản: Nhiều service khác nhau claim chung một resource
+
+Trong kiến trúc microservices phức tạp, một business operation có thể cần claim ownership trên nhiều service:
+
+```text
+Ví dụ: "Hoàn tất đơn hàng" (Complete Order)
+1. Claim quyền xử lý order_id trong order-service
+2. Gọi payment-service để capture payment
+3. Gọi inventory-service để giảm stock
+4. Gọi notification-service để gửi email xác nhận
+
+Nếu step 3 fail (inventory-service timeout):
+  - Claim trong order-service đã hết hạn chưa?
+  - Có nên rollback payment không?
+  - Làm sao để retry toàn bộ flow mà không duplicate?
+```
+
+Giải pháp với claim ownership:
+
+```text
+1. Tạo một "saga claim" với TTL đủ dài cho toàn bộ saga (vd: 60s)
+2. Mỗi step trong saga kiểm tra saga claim còn valid không
+3. Nếu step fail, saga claim vẫn tồn tại -> cho phép retry từ step fail
+4. Nếu saga claim hết hạn -> toàn bộ saga bị abandon
+5. Một request khác có thể takeover saga claim và bắt đầu lại từ đầu
+```
+
+### G.2 Kịch bản: Claim ownership với idempotency key cross-service
+
+```text
+Client gửi POST /checkout với Idempotency-Key: idem-xyz
+1. order-service claim idem-xyz (Redis key: claim:idem-xyz)
+2. order-service gọi payment-service với cùng idempotency key
+3. payment-service cũng claim idem-xyz? Hay dùng key riêng?
+```
+
+Best practice: mỗi service nên có claim namespace riêng:
+
+```text
+order-service: claim:order:idem-xyz
+payment-service: claim:payment:idem-xyz
+inventory-service: claim:inventory:idem-xyz
+```
+
+Điều này ngăn xung đột claim giữa các service, nhưng đòi hỏi orchestration layer để quản lý saga state.
+
+### G.3 Kịch bản: Claim ownership trong event-driven architecture
+
+```text
+Thay vì request-response, dùng event-driven:
+1. OrderCreated event -> order-service claim và xử lý
+2. Nếu order-service chết, claim hết hạn
+3. Một order-service instance khác nhận event (retry từ message broker)
+4. Instance mới takeover claim và xử lý
+
+Yêu cầu:
+  - Message broker hỗ trợ at-least-once delivery
+  - Claim TTL > message visibility timeout
+  - Takeover phải check xem event đã được xử lý chưa (idempotency)
+```
+
+---
+
+## Appendix H: Bảng tham chiếu nhanh -- Tất cả checks trong script
+
+### H.1 Confirm flow checks (tổng cộng 11 checks)
+
+| # | Check name | Giai đoạn | Điều kiện | Weight |
+| --- | --- | --- | --- | --- |
+| 1 | `confirm abandoned owner status 503` | Abandon | `status === 503` | Critical |
+| 2 | `confirm abandoned owner success false` | Abandon | `success === false` | Critical |
+| 3 | `confirm abandoned owner claim abandoned true` | Abandon | `claim_abandoned === true` | Critical |
+| 4 | `confirm takeover status 200` | Takeover | `status === 200` | Critical |
+| 5 | `confirm takeover success true` | Takeover | `success === true` | Critical |
+| 6 | `confirm takeover order id preserved` | Takeover | `order_id === confirmOrderId` | High |
+| 7 | `confirm takeover idempotency key preserved` | Takeover | `idempotency_key === confirmKey` | High |
+| 8 | `confirm takeover executes fresh after ttl` | Takeover | `idempotency_reuse === false` | Critical |
+| 9 | `confirm takeover waited near claim ttl` | Takeover | `duration >= CLAIM_TTL_MS - 150` | Critical |
+| 10 | `confirm duplicate status 200` | Duplicate | `status === 200` | Critical |
+| 11 | `confirm duplicate reuses takeover result` | Duplicate | `idempotency_reuse === true` | Critical |
+
+### H.2 Webhook flow checks (tổng cộng 11 checks)
+
+| # | Check name | Giai đoạn | Điều kiện | Weight |
+| --- | --- | --- | --- | --- |
+| 1 | `webhook abandoned owner status 503` | Abandon | `status === 503` | Critical |
+| 2 | `webhook abandoned owner success false` | Abandon | `success === false` | Critical |
+| 3 | `webhook abandoned owner claim abandoned true` | Abandon | `claim_abandoned === true` | Critical |
+| 4 | `webhook takeover status 200` | Takeover | `status === 200` | Critical |
+| 5 | `webhook takeover success true` | Takeover | `success === true` | Critical |
+| 6 | `webhook takeover order id preserved` | Takeover | `order_id === webhookOrderId` | High |
+| 7 | `webhook takeover event id preserved` | Takeover | `event_id === webhookEventId` | High |
+| 8 | `webhook takeover executes fresh after ttl` | Takeover | `webhook_duplicate === false` | Critical |
+| 9 | `webhook takeover waited near claim ttl` | Takeover | `duration >= CLAIM_TTL_MS - 150` | Critical |
+| 10 | `webhook duplicate status 200` | Duplicate | `status === 200` | Critical |
+| 11 | `webhook duplicate reuses takeover result` | Duplicate | `webhook_duplicate === true` | Critical |
+
+### H.3 Check criticality classification
+
+| Mức độ | Mô tả | Ví dụ |
+| --- | --- | --- |
+| **Critical** | Nếu fail, claim mechanism không hoạt động. Case phải fail. | `status 503`, `claim_abandoned true`, `idempotency_reuse false`, `waited near claim ttl` |
+| **High** | Nếu fail, có thể có bug nhưng không phá vỡ hoàn toàn mechanism. | `order id preserved`, `idempotency key preserved`, `event id preserved` |
