@@ -134,37 +134,43 @@ Passed evidence:
 - stale webhook keeps `payment_status=paid` and `payment_regression_ignored=true`;
 - order status sees `payment_state_source=webhook`.
 
-Failed checks:
+Failed checks after recheck:
 
 ```text
-confirm duplicate breakdown external_ms cleared: 0/10 pass
-confirm duplicate breakdown db_write_ms cleared: 0/10 pass
 confirm duplicate distinct upstream observed: 0/1 pass
 webhook duplicate distinct upstream observed: 0/1 pass
 webhook stale distinct upstream observed: 0/1 pass
 order status distinct upstream observed: 0/1 pass
 ```
 
+Previously failing checks now pass:
+
+```text
+confirm duplicate breakdown external_ms cleared: pass
+confirm duplicate breakdown db_write_ms cleared: pass
+webhook duplicate breakdown db_write_ms cleared: pass
+webhook stale breakdown db_write_ms cleared: pass
+```
+
 Interpretation:
 
-1. **Core shared-state semantics mostly pass**: idempotency reuse, webhook dedupe, stale event regression protection and status read are correct.
-2. **Reuse path still reports external/db breakdown**: the response says `idempotency_reuse=true`, but performance breakdown is not cleared as script expects. This can be either:
-   - BE bug: reused response includes stale original performance breakdown, making it look like work re-ran; or
-   - script contract too strict: reused response intentionally replays original payload including original breakdown.
-3. **Distributed upstream proof did not happen**: after 10 attempts, `X-Upstream-Addr` did not change. This weakens the “across instances” proof. It may be due to Nginx keepalive/connection reuse behavior, upstream scale/routing, or header value not varying.
+1. **Core shared-state semantics now pass**: idempotency reuse, webhook dedupe, stale event regression protection, status read, and replay breakdown clearing are correct after BE fix.
+2. **Remaining failure is only distributed upstream proof**: after 10 attempts, `X-Upstream-Addr` did not change. Local container inspection also shows only `k6target-order-service-1`, so this run cannot prove cross-order-service-instance shared state.
 
-Result: **FAIL**, but not because status/API flow is broken. It fails on strict evidence requirements.
+Result: **PARTIAL / FAIL**. Redis state semantics are fixed, but the case title/contract says “across order-service instances”, and the topology still exposes only one order-service instance.
 
 ### 4.2. redis-02 — Hot-key race
 
-Observed:
+Observed after BE fix recheck:
 
 ```text
-Exit: 99
-checks: 202/216 = 93.51%
+Exit: 0
+checks: 216/216 = 100.00%
 http_req_failed: 0.00% (0/24)
-order_service_shared_state_hotkey_check_failures: 14
+order_service_shared_state_hotkey_check_failures: 0
 ```
+
+Previous run before fix was `202/216` with 14 check failures.
 
 Counters passed:
 
@@ -175,23 +181,18 @@ webhook_fresh_count = 1
 webhook_duplicate_count = 7
 ```
 
-Failed checks:
+Previously failed checks are now fixed:
 
 ```text
-confirm hotkey reuse breakdown external_ms cleared: 0/7 pass
-confirm hotkey reuse breakdown db_write_ms cleared: 0/7 pass
+confirm hotkey reuse breakdown external_ms cleared: pass
+confirm hotkey reuse breakdown db_write_ms cleared: pass
 ```
 
 Interpretation:
 
-The most important race correctness counters are green: exactly 1 fresh confirm, 7 reuse, exactly 1 fresh webhook, 7 duplicate. That means atomic hot-key collapse appears correct.
+The race correctness counters are green: exactly 1 fresh confirm, 7 reuse, exactly 1 fresh webhook, 7 duplicate. After BE fix, the replay/breakdown contract is also green, so learners can clearly see that reused confirm requests do not perform external/db work again.
 
-The failure is specifically about confirm reuse response breakdown. Reuse responses still carry non-zero `external_ms` / `db_write_ms` in `performance.breakdown`. Same ambiguity as redis-01:
-
-- If BE intended reused responses to have cleared synthetic work fields, this is a BE/reporting bug.
-- If BE intended idempotency replay to return the original full payload including original performance breakdown, then script expectation should be adjusted to assert no new side effect via counters/body flags instead of expecting breakdown zero.
-
-Result: **FAIL** due strict script checks, while race counters themselves pass.
+Result: **PASS**.
 
 ### 4.3. redis-03 — Claim owner abandon and TTL takeover
 
@@ -342,10 +343,10 @@ Result: **PASS**.
 | Confirm reuse count | 7 | 7 | PASS |
 | Webhook fresh count | 1 | 1 | PASS |
 | Webhook duplicate count | 7 | 7 | PASS |
-| Confirm reuse breakdown cleared | yes | no | FAIL |
+| Confirm reuse breakdown cleared | yes | yes | PASS |
 | HTTP failed | 0% | 0% | PASS |
 
-**Reading**: race/atomicity core is green; response breakdown/replay contract is red.
+**Reading**: race/atomicity core and response breakdown/replay contract are now green after BE fix.
 
 ### 5.2. Claim abandon — redis-03
 
