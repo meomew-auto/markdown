@@ -74,7 +74,7 @@ status 200 without X-LB-Failover in case 06 = chưa chứng minh failover
 - `lb-app`: pass 2/2.
 - `full-no-cdn` health/routing/inspect: pass.
 - `full-no-cdn` default runtime sau fix: pass 10/10 cho cases 03-12.
-- Case 04/05 từng fail vì `/api/sim/products` trả unexpected 429 dưới traffic mặc định; đã recheck lại và verify fixed.
+- Case 04/05 từng fail vì `/api/sim/products` trả unexpected 429 dưới traffic mặc định; đã recheck lại và verify fixed. Targeted recheck 2026-06-24 pass: case 04 `8180/8180`, case 05 `4580/4580`, HTTP failed đều `0.00%`.
 - Cases 07/12 vẫn có non-2xx expected theo đúng semantics riêng: expected 429 ở case 07, expected 504 ở case 12.
 
 Kết luận hiện tại: LB/Gateway layer đã xanh với default runner ở cả hai profile (`lb-app` và `full-no-cdn`).

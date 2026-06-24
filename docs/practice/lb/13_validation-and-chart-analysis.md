@@ -188,7 +188,24 @@ Sau khi BE/test-harness sửa case 04/05, chạy lại default profile `full-no-
 | 11 | `11-saturation-isolation.js` | 0 | 1872/1872 | 0.00% (0/312) | fast lane remains healthy while slow lane is intentionally slow | **PASS** |
 | 12 | `12-slow-origin-timeouts.js` | 0 | 260/260 | 100.00% (65/65) | expected timeout 504; `X-LB-Timeout-Policy=read_timeout=150ms`; unexpected = 0 | **PASS** |
 
-### 4.3. Historical issue -- default case 04/05 trước fix
+### 4.3. Targeted recheck 2026-06-24 -- case 04/05 sau BE fix
+
+Sau thông báo BE đã fix case 04/05, chạy lại riêng hai scenario trên stack `full-no-cdn` vừa rebuild, không dùng tuned env:
+
+```text
+Command:
+  ./scripts/stack.ps1 -Stack target -Action up -Build -TargetLayer full-no-cdn -ScaleApp 2
+  ./scripts/run-lb-capabilities.ps1 -Profile full-no-cdn -Scenarios 04-origin-cacheable-read,05-origin-service-mix
+
+Result:
+  runner exit 0
+  case 04: checks 8180/8180, http_req_failed 0.00% (0/1636), p95=189.56ms
+  case 05: checks 4580/4580, http_req_failed 0.00% (0/916), p95=154.57ms
+```
+
+Kết luận: targeted recheck xác nhận fix vẫn ổn ở default scenario; không còn unexpected `429` trên case 04/05.
+
+### 4.4. Historical issue -- default case 04/05 trước fix
 
 Trước fix, default profile dừng ở case 04/05 vì `/api/sim/products` trả unexpected `429` dưới traffic mặc định.
 
@@ -531,6 +548,9 @@ Sau fix:
 
 Kết luận hiện tại:
   Issue 04/05 đã verify fixed.
+  Targeted recheck 2026-06-24 cũng pass:
+    case 04: 8180/8180, http_req_failed 0.00% (0/1636)
+    case 05: 4580/4580, http_req_failed 0.00% (0/916)
   Không còn cần tuned env để pass correctness suite mặc định.
 ```
 
@@ -639,8 +659,12 @@ Kết luận cũ đúng: không phải gateway route sai; đó là contract mism
 Pattern sau fix trong default run:
 
 ```text
-case 04 checks = 6535/6535, http_req_failed = 0.00%
-case 05 checks = 4625/4625, http_req_failed = 0.00%
+full default run:
+  case 04 checks = 6535/6535, http_req_failed = 0.00%
+  case 05 checks = 4625/4625, http_req_failed = 0.00%
+targeted recheck 2026-06-24:
+  case 04 checks = 8180/8180, http_req_failed = 0.00%
+  case 05 checks = 4580/4580, http_req_failed = 0.00%
 status chart chỉ có expected success cho 04/05
 không còn 429 unexpected trên products_list
 ```
@@ -831,12 +855,16 @@ Results: 100 x 200, 20 x 429
 
 ### 11.4. Kết luận sau fix
 
-Fix đã được verify bằng default run, không cần tuned env:
+Fix đã được verify bằng default run và targeted recheck, không cần tuned env:
 
 ```text
 full-no-cdn default runtime: exit 0
 case 04: checks 6535/6535, http_req_failed 0.00% (0/1307)
 case 05: checks 4625/4625, http_req_failed 0.00% (0/925)
+
+targeted recheck 2026-06-24: runner exit 0
+case 04: checks 8180/8180, http_req_failed 0.00% (0/1636), p95=189.56ms
+case 05: checks 4580/4580, http_req_failed 0.00% (0/916), p95=154.57ms
 ```
 
 Khuyến nghị còn lại chỉ là vận hành tài liệu/debug:
