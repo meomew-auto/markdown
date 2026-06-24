@@ -109,18 +109,21 @@ Không dùng aggregate p95 toàn suite để kết luận Redis layer. Một fre
 
 ## 9. Validation snapshot 2026-06-24
 
-Sau BE fix idempotency replay breakdown, Redis/shared-state practice gần xanh toàn bộ:
+Sau BE fix idempotency replay breakdown và conditional distinct-upstream proof, Redis/shared-state practice xanh toàn bộ 6/6:
 
 ```text
-redis-02 hot-key race: PASS 216/216, exact 1 fresh + 7 reuse/duplicate.
+redis-01 shared-state-distributed: PASS 525/525, distinct-upstream proof conditional (skip default, strict on demand).
+redis-02 hot-key race: PASS 216/216.
 redis-03 claim owner abandon: PASS.
 redis-04 Redis degrade: PASS.
 redis-05 hotkey fairness: PASS.
 redis-06 cache hot/cold toggle: PASS.
-redis-01 core semantics: PASS phần idempotency/webhook/status/replay breakdown, nhưng còn fail distinct-upstream proof.
 ```
 
-Điểm còn lại của `redis-01` không phải duplicate/state bug; local topology hiện chỉ thấy `k6target-order-service-1`, nên chưa chứng minh được “across multiple order-service instances”. Muốn full green đúng tên case thì cần topology expose >=2 order-service instances hoặc đổi/relax contract của case.
+redis-01 giờ có 2 chế độ:
+
+- **Default learner/local**: distinct-upstream proof được skip/warn với metric `order_service_shared_state_distinct_upstream_skipped`. Case pass core shared-state semantics.
+- **Strict CI**: set `ORDER_SHARED_STATE_REQUIRE_DISTINCT_UPSTREAM=true` hoặc `ORDER_SHARED_STATE_EXPECTED_INSTANCES>=2` để require proof qua nhiều order-service instances.
 
 ## 10. Roadmap tiếp theo
 
