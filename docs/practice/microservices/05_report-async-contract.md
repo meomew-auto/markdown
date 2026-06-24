@@ -1253,3 +1253,216 @@ Trong incident, neu report export khong hoat dong:
 4. Kiem tra worker logs -- co job nao bi stuck khong?
 5. Kiem tra Postgres -- connection pool co day khong?
 
+---
+
+## 18. Mo rong: async pattern trong kien truc microservices
+
+### 18.1 Khi nao nen dung async pattern?
+
+Không phải operation nào cũng nên là async. Bảng sau giúp quyết định:
+
+| Đặc điểm của operation | Nên dùng sync | Nên dùng async |
+| --- | --- | --- |
+| Thời gian xử lý | < 100ms | > 500ms (hoặc không xác định) |
+| Client expectation | Cần kết quả ngay lập tức | Có thể chờ và poll |
+| Resource intensity | Nhẹ (vài ms CPU, vài row DB) | Nặng (nhiều giây CPU, aggregation, file generation) |
+| Connection model | Request-response là đủ | Cần tách biệt submission và execution |
+| Ví dụ | Dashboard read, list items | Report export, data import, batch processing |
+
+### 18.2 So sánh các async pattern phổ biến
+
+| Pattern | Cách hoạt động | Ưu điểm | Nhược điểm | Phù hợp khi |
+| --- | --- | --- | --- | --- |
+| **Polling** (dùng trong case này) | Client gọi GET status định kỳ | Đơn giản, không cần infrastructure thêm | Tốn băng thông nếu poll quá thường xuyên | Job hoàn thành trong vài giây đến vài phút |
+| **Webhook/Callback** | Server gọi lại client khi job hoàn thành | Hiệu quả, không tốn băng thông poll | Cần client có public endpoint, phức tạp hơn | Job dài (>1 phút), client có thể nhận callback |
+| **Server-Sent Events (SSE)** | Server push status updates qua persistent HTTP connection | Real-time, client luôn biết tiến độ | Cần connection luôn mở, không phù hợp mobile | Cần hiển thị progress bar real-time |
+| **WebSocket** | Two-way persistent connection | Full-duplex, real-time cả hai chiều | Phức tạp nhất, cần WebSocket infrastructure | Ứng dụng real-time (chat, live dashboard) |
+| **Message Queue** | Job được đẩy vào queue, worker xử lý, client subscribe completion event | Scalable, reliable, retry built-in | Cần message broker (RabbitMQ, Kafka, SQS) | Production system với hàng nghìn jobs/giây |
+
+### 18.3 Async pattern và idempotency
+
+Một vấn đề quan trọng với async pattern: nếu client gửi POST job hai lần (do timeout, network error), có tạo ra hai job trùng lặp không?
+
+**Idempotency key pattern** (giống như order confirm trong ms-04):
+
+```text
+Client: POST /api/sim/report/jobs
+Header: Idempotency-Key: client-generated-uuid
+
+Lần 1: Server tạo job, lưu (key, job_id), trả về 202 + job_id
+Lần 2: Server tìm thấy key đã tồn tại, trả về 202 + job_id (cùng job)
+```
+
+Điều này đảm bảo "tạo job" là idempotent -- gửi nhiều lần chỉ tạo một job. Case này không test idempotency (đó là Redis layer, case 01-shared-state-distributed), nhưng đây là pattern quan trọng trong production.
+
+### 18.4 Async pattern và timeout chain
+
+Trong production, mỗi thành phần trong chuỗi có timeout riêng:
+
+```text
+Client (browser/CLI)
+  → timeout: 30s (user expectation)
+  → load balancer timeout: 60s
+    → API gateway timeout: 55s
+      → report-service connection timeout: 50s
+        → Postgres query timeout: 30s
+```
+
+Nếu dùng sync (giữ connection mở trong suốt quá trình xử lý 30-60s), bất kỳ timeout nào cũng làm đứt connection. Async pattern loại bỏ vấn đề này: POST job chỉ mất 5-10ms, sau đó client poll độc lập.
+
+### 18.5 Job lifecycle nâng cao
+
+Trong production, job lifecycle phức tạp hơn:
+
+```text
+                POST /jobs
+                    │
+                    ▼
+              ┌──────────┐
+              │ pending  │  Chờ validation
+              └────┬─────┘
+                    │
+                    ▼
+              ┌──────────┐
+              │ queued   │  Đã vào hàng đợi
+              └────┬─────┘
+                    │
+                    ▼
+              ┌──────────────┐
+              │ processing   │  Đang xử lý
+              └──────┬───────┘
+                    │
+         ┌──────────┼──────────┐
+         │          │          │
+         ▼          ▼          ▼
+    ┌────────┐ ┌────────┐ ┌─────────┐
+    │completed│ │ failed │ │cancelled│
+    └───┬────┘ └───┬────┘ └─────────┘
+        │          │
+        ▼          ▼
+   ┌────────┐  Có thể retry
+   │expired │  (nếu transient error)
+   └────────┘
+        │
+        ▼
+   Cleanup (xóa file sau 24h)
+```
+
+Các trạng thái bổ sung:
+- **pending**: Job vừa được tạo, đang chờ validation (vd: kiểm tra quyền, quota).
+- **cancelled**: Client hủy job trước khi completed.
+- **expired**: Job completed nhưng file đã bị xóa sau TTL (vd: 24 giờ).
+- **retrying**: Job failed với transient error, đang được retry tự động.
+
+### 18.6 Worker pool pattern
+
+Report service dùng worker pool để xử lý jobs:
+
+```text
+┌─────────────────────────────────────────┐
+│              Report Service             │
+│                                         │
+│  POST /jobs  →  Job Queue (in-memory)  │
+│                  │                      │
+│         ┌────────┼────────┐            │
+│         │        │        │            │
+│         ▼        ▼        ▼            │
+│     Worker 0  Worker 1  Worker 2        │
+│         │        │        │            │
+│         └────────┼────────┘            │
+│                  │                      │
+│                  ▼                      │
+│          Postgres (job state)           │
+└─────────────────────────────────────────┘
+```
+
+Số lượng worker quyết định throughput:
+- 1 worker: Xử lý tuần tự, 1 job/lần.
+- N workers: Xử lý song song, N jobs/lần.
+- Nếu tất cả workers bận, job mới nằm trong queue (trạng thái `queued`).
+
+Script test này tạo 80 jobs với 8 VUs -- có thể có hiện tượng queue depth nếu worker pool nhỏ hơn số lượng job đồng thời.
+
+### 18.7 Tại sao không dùng sync cho tất cả?
+
+Một câu hỏi phổ biến: "Tại sao không giữ connection mở cho đến khi job completed?"
+
+Lý do:
+1. **Connection limit**: Mỗi connection chiếm một thread/socket. 1000 connections đồng thời = 1000 threads.
+2. **Load balancer timeout**: AWS ALB timeout mặc định là 60s, không thể tăng quá cao.
+3. **Browser timeout**: Chrome timeout sau 300s, nhưng UX không chấp nhận chờ 5 phút.
+4. **Mobile**: Mobile connection không ổn định -- connection dễ bị đứt giữa chừng.
+5. **Server resource**: Giữ connection mở tiêu tốn memory và file descriptor.
+
+Async pattern giải quyết tất cả: POST trả về 202 trong 5-10ms, client poll độc lập.
+
+### 18.8 Observability cho async jobs
+
+Trong production, tracing một async job đòi hỏi distributed tracing:
+
+```text
+Trace ID: trace-abc-123
+  ├── Span: POST /jobs (parent)
+  │   └── job_id: report-export-42
+  ├── Span: Worker.processJob (child)
+  │   ├── Span: Postgres.query (child)
+  │   └── Span: File.render (child)
+  ├── Span: GET /jobs/:id/status (separate request, same trace via job_id)
+  └── Span: GET /jobs/:id/download (separate request, same trace via job_id)
+```
+
+Tất cả các span chia sẻ cùng `job_id` -- cho phép trace toàn bộ lifecycle dù các request là độc lập.
+
+---
+
+## 19. Kết nối với các case khác trong lộ trình
+
+### 19.1 Trước case này
+
+| Case | Đã chứng minh | Cần cho case này |
+| --- | --- | --- |
+| ms-01 (gateway routing) | Nginx route /api/sim/report → report-service | Xác nhận request đến đúng service |
+| ms-07 (health check) | Postgres healthy, report-service healthy | Infrastructure sẵn sàng |
+
+### 19.2 Sau case này
+
+| Case | Cần từ case này | Tại sao |
+| --- | --- | --- |
+| ms-06 (stateful flow) | Report service contract đúng | Flow bao gồm report-jobs bước |
+| CDN layer cases | Hiểu sync vs async pattern | CDN cache sync responses, không cache async |
+| Redis layer cases | Không trực tiếp | Nhưng cùng mô hình tư duy: verify pattern correctness |
+
+### 19.3 Lộ trình học tập gợi ý
+
+```text
+ms-07 (health) → ms-01 (routing) → ms-02→05 (per-service, thứ tự tùy ý)
+  → ms-05 (case này, async pattern) → ms-06 (cross-service flow)
+```
+
+Lý do nên làm ms-05 trước ms-06: ms-06 có flow đi qua report-service (tạo job, kiểm tra status). Nếu async contract sai, ms-06 sẽ fail ở bước report.
+
+### 19.4 Áp dụng kiến thức từ case này vào production debugging
+
+Khi một report export job không hoàn thành trong production, quy trình debug:
+
+1. **Giai đoạn 1 -- Xác nhận infrastructure (5 phút)**:
+   - Chạy ms-07 (health check): Postgres có up không? Report-service có healthy không?
+   - Kiểm tra worker logs: Có job nào bị stuck không?
+   - Kiểm tra Postgres connection pool: Có bị exhausted không?
+
+2. **Giai đoạn 2 -- Xác nhận contract (5 phút)**:
+   - Chạy case này (ms-05): Async contract có đúng không?
+   - POST /jobs có trả về 202 không?
+   - Job có completed sau `ready_after_ms` không?
+
+3. **Giai đoạn 3 -- Debug sâu (nếu cần)**:
+   - Kiểm tra job cụ thể: `GET /jobs/{id}` → status là gì?
+   - Kiểm tra worker queue depth: Có bao nhiêu jobs đang chờ?
+   - Kiểm tra resource: CPU, memory của report-service có cao không?
+   - Kiểm tra Postgres slow queries: Có query nào > 100ms không?
+
+4. **Giai đoạn 4 -- Fix và verify**:
+   - Fix root cause (restart worker, tăng worker pool, optimize query, tăng timeout).
+   - Rerun case này để verify fix.
+   - Rerun ms-06 (cross-service flow) để verify integration.
+
