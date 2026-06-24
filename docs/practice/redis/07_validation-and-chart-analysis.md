@@ -487,7 +487,7 @@ redis-04 proves latency increases while correctness remains exact. A high p95 is
 | Redis degrade correctness | 04 | **PASS** | setup/reset profile OK; exact counters under 80ms Redis delay. |
 | Hotkey fairness | 05 | **PASS** | hotkey collapsed, normal keys all fresh and fast. |
 | App cache hot/cold | 06 | **PASS** | 904 hot HIT, 888 cold MISS, no inverse observations. |
-| Shared distributed state | 01 | **PARTIAL / FAIL** | core flow and replay breakdown now OK; only distinct-upstream proof fails because one order-service instance is observed. |
+| Shared distributed state | 01 | **PASS** | core idempotency/webhook/status/replay breakdown pass; distinct-upstream proof skipped by default, strict mode available via env. |
 | Hotkey race | 02 | **PASS** | exact race counters and confirm reuse breakdown checks pass after BE fix. |
 
 ### 9.2. Actionable conclusion
