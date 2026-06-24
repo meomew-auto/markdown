@@ -1884,3 +1884,96 @@ Yêu cầu:
 | --- | --- | --- |
 | **Critical** | Nếu fail, claim mechanism không hoạt động. Case phải fail. | `status 503`, `claim_abandoned true`, `idempotency_reuse false`, `waited near claim ttl` |
 | **High** | Nếu fail, có thể có bug nhưng không phá vỡ hoàn toàn mechanism. | `order id preserved`, `idempotency key preserved`, `event id preserved` |
+
+---
+
+## Appendix I: Learning path -- Từ case 03 đến production readiness
+
+### I.1 Kiến thức prerequisite
+
+Trước khi học case 03, learner nên đã nắm vững:
+
+| Kiến thức | Học từ đâu | Tại sao cần |
+| --- | --- | --- |
+| Redis basic operations (SET, GET, DEL, TTL) | Redis documentation | Hiểu cách claim được tạo và quản lý |
+| Idempotency key concept | Case 01 -- Shared state distributed | Hiểu cách retry với cùng key trả về kết quả cũ |
+| Atomic operations (SET NX) | Case 02 -- Hotkey race | Hiểu cách claim key một cách atomic |
+| HTTP status codes (200, 503) | HTTP cơ bản | Hiểu rằng 503 không luôn là bug |
+| k6 basics (VU, iterations, checks, counters) | k6 documentation | Hiểu cách script hoạt động |
+
+### I.2 Kiến thức được xây dựng từ case 03
+
+Sau khi học case 03, learner có thể:
+
+1. **Thiết kế distributed lock với TTL**: Biết cách dùng `SET NX EX` để tạo claim/lock có TTL tự động.
+2. **Implement takeover mechanism**: Biết cách poll/wait claim TTL trước khi takeover.
+3. **Đọc kết quả correctness test**: Phân biệt giữa "status code sai" (bug) và "status code expected" (intentional setup).
+4. **Debug stuck lock issues**: Biết các pattern fail của claim mechanism và cách debug.
+5. **Áp dụng vào production**: Biết các pattern như heartbeat, fencing token, audit log.
+
+### I.3 Các case tiếp theo trong learning path
+
+```text
+Case 03 -- Claim owner abandon (bạn đang ở đây)
+  |
+  +--> Case 05 -- Hotkey fairness
+  |     Hot key collapse không starve normal keys.
+  |     Áp dụng claim knowledge vào fairness scenario.
+  |
+  +--> Case 04 -- Redis degrade
+  |     Redis chậm -- correctness vẫn giữ nguyên.
+  |     Claim TTL và takeover dưới điều kiện degraded.
+  |
+  +--> Case 06 -- Cache hot/cold toggle
+        App cache pattern -- khác với claim ownership nhưng
+        cùng dùng Redis làm shared state.
+```
+
+### I.4 Production readiness checklist cho claim ownership
+
+Trước khi triển khai claim ownership ra production, hãy kiểm tra:
+
+- [ ] Claim TTL được tính dựa trên external timeout + buffer (không hardcode).
+- [ ] Takeover mechanism có poll/wait TTL (không bỏ qua claim).
+- [ ] Idempotency record được persist sau khi takeover thành công.
+- [ ] Có audit log cho mọi hoạt động claim (created, abandoned, expired, takeover, reuse).
+- [ ] Có fencing token để chống split-brain (owner cũ ghi sau khi bị takeover).
+- [ ] Có monitoring/metrics cho: claim creation rate, abandon rate, takeover rate, TTL distribution.
+- [ ] Có alert cho: takeover failure rate > threshold, stuck claims > N minutes.
+- [ ] Đã test với cả hai flow: idempotency key (header-based) và event dedupe (body-based).
+- [ ] Đã test với degradation (Redis chậm): correctness vẫn giữ nguyên.
+- [ ] Đã test với extreme TTL: takeover thành công sau TTL dài (30s+).
+- [ ] Có runbook cho: manual claim release, force takeover, mass claim cleanup.
+
+### I.5 Tài nguyên học tập bổ sung
+
+| Chủ đề | Tài nguyên |
+| --- | --- |
+| Distributed locking patterns | "Designing Data-Intensive Applications" -- Chapter 8: The Trouble with Distributed Systems |
+| Redis-based locking | Redis documentation: Distributed Locks with Redis |
+| Fencing token pattern | Martin Kleppmann: "How to do distributed locking" |
+| Idempotency in APIs | Stripe API documentation: Idempotent Requests |
+| Testing distributed systems | Kyle Kingsbury: Jepsen tests (Aphyr) |
+| Chaos engineering for Redis | Chaos Mesh documentation: Redis chaos experiments |
+
+---
+
+## Appendix J: Tóm tắt nhanh cho người bận rộn
+
+**Case ID**: `redis-03-claim-owner-abandon` | **Script**: `17-order-service-claim-owner-abandon.js`
+
+**Mục đích**: Chứng minh Redis claim ownership có TTL và takeover an toàn khi owner chết.
+
+**Ba giai đoạn**: Abandon (503 intentional) -> Takeover sau TTL (200 fresh) -> Duplicate reuse (200, reuse=true).
+
+**Cách chạy nhanh**:
+```powershell
+$env:BASE_URL = "http://localhost:80"
+k6 run E:\Projects\k6\k6-metrics-server\load-target\k6\app\17-order-service-claim-owner-abandon.js
+```
+
+**Pass khi**: checks=100%, abandonedCount=2, takeoverFreshCount=2, duplicateReuseCount=2, takeover duration >= TTL-150ms.
+
+**Fail khi**: 503 xuất hiện ở takeover/duplicate phase; takeover không chờ TTL; duplicate không reuse; counters sai.
+
+**Bài học cốt lõi**: 503 không luôn là bug. Claim không có TTL sẽ khóa vĩnh viễn business flow khi worker chết. Takeover duration là evidence của correctness.

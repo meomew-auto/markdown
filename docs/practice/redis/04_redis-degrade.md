@@ -1909,3 +1909,95 @@ Giữ HOTKEY_VUS mặc định (6) khi:
 ### F.10 Làm sao để biết retry/poll mechanism có hoạt động không?
 
 Quan sát `confirm_duration` của reuse requests. Nếu reuse requests có duration distribution rộng (có request nhanh ~120ms, có request chậm ~350ms), điều này cho thấy một số request phải retry nhiều lần trước khi thấy kết quả -- retry mechanism đang hoạt động. Nếu tất cả reuse requests có duration giống hệt nhau (~120ms), có thể retry không thực sự xảy ra.
+
+---
+
+## Appendix G: Implementation notes cho control-plane degrade
+
+### G.1 Server-side implementation của Redis delay injection
+
+Một implementation mẫu cho delay injection trong order-service (pseudo-code):
+
+```javascript
+// Trong order-service code:
+let redisDelayMs = 0;
+let redisFaultMode = 'none';
+let redisFaultRate = 0;
+
+// Control-plane endpoint: PUT /ops/order/redis/profile
+function setRedisProfile(profile) {
+  redisDelayMs = profile.redis_delay_ms || 0;
+  redisFaultMode = profile.redis_fault_mode || 'none';
+  redisFaultRate = profile.redis_fault_rate || 0;
+  return { success: true };
+}
+
+// Control-plane endpoint: GET /ops/order/redis/profile
+function getRedisProfile() {
+  return {
+    profile: {
+      redis_delay_ms: redisDelayMs,
+      redis_fault_mode: redisFaultMode,
+      redis_fault_rate: redisFaultRate,
+    },
+    success: true,
+  };
+}
+
+// Control-plane endpoint: POST /ops/order/redis/reset
+function resetRedisProfile() {
+  redisDelayMs = 0;
+  redisFaultMode = 'none';
+  redisFaultRate = 0;
+  return { success: true };
+}
+
+// Wrapper cho mọi Redis operation:
+async function redisOperation(command, ...args) {
+  // Fault injection: Nếu fault mode là 'timeout' và random < fault_rate, throw timeout
+  if (redisFaultMode === 'timeout' && Math.random() < redisFaultRate) {
+    throw new Error('Redis timeout (simulated)');
+  }
+
+  // Delay injection: Thêm delay trước (hoặc sau) Redis operation
+  if (redisDelayMs > 0) {
+    await sleep(redisDelayMs);
+  }
+
+  // Redis operation thực tế
+  const result = await redisClient[command](...args);
+
+  return result;
+}
+```
+
+Implementation này cho phép:
+- Delay injection với độ chính xác ms.
+- Fault injection (timeout) với tỉ lệ tùy chỉnh.
+- Reset về trạng thái bình thường (delay=0, fault=none).
+- Không ảnh hưởng đến Redis server thực tế.
+- Không ảnh hưởng đến các service khác dùng chung Redis instance.
+
+### G.2 Best practices cho control-plane API
+
+1. **Authentication**: Luôn yêu cầu authentication (OPS_AUTH_TOKEN) cho control-plane endpoints. Không bao giờ để public.
+2. **Reset nhanh**: Endpoint reset phải hoạt động ngay cả khi hệ thống đang degraded. Đây là "emergency brake".
+3. **Audit log**: Mọi thay đổi profile nên được audit log (ai, khi nào, thay đổi gì).
+4. **Validation**: Profile endpoint nên validate input (delay >= 0, fault_rate 0-1, fault_mode trong danh sách cho phép).
+5. **Timeout protection**: Control-plane operations nên có timeout riêng, không bị ảnh hưởng bởi delay đang active.
+6. **Monitoring**: Emit metrics về current profile state để ops team biết hệ thống có đang bị degrade không.
+
+### G.3 Khi nào nên dùng control-plane degrade vs network-level degrade
+
+| Tiêu chí | Control-plane degrade | Network-level degrade |
+| --- | --- | --- |
+| Test correctness của business logic | Rất tốt | Tốt |
+| Test TCP-level behavior (retransmit, window) | Không test được | Rất tốt |
+| Test connection pool behavior | Tốt | Rất tốt |
+| Dễ setup trong CI/CD | Rất dễ | Khó |
+| Cần quyền đặc biệt | Ops token | Root/container capability |
+| Isolation (không ảnh hưởng service khác) | Hoàn hảo | Kém (ảnh hưởng cả network interface) |
+| Reproducibility | Rất cao | Trung bình (jitter) |
+| Phù hợp cho developer local testing | Rất phù hợp | Ít phù hợp |
+
+Khuyến nghị: dùng control-plane degrade cho CI/CD và developer testing; dùng network-level degrade cho integration testing và chaos engineering.
