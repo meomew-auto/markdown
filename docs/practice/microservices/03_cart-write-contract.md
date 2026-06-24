@@ -1440,3 +1440,81 @@ Khi triển khai cart service trong production, ba điều quan trọng nhất:
 1. **State persistence**: Cart phải survive qua restart, deploy, và scale events.
 2. **Routing correctness**: Mọi cart operation phải đến đúng cart service -- không có fallback.
 3. **Contract consistency**: Response format phải nhất quán cho mọi HTTP method -- frontend dựa vào contract này để hiển thị cart UI.
+
+### 17.5 Phân tích sâu về cart state và race condition
+
+Một trong những câu hỏi thường gặp khi thiết kế cart service là: "Làm sao để cart state nhất quán khi có nhiều request đồng thời từ cùng một user?"
+
+Hãy xem xét tình huống sau:
+
+```text
+User mở 2 tab trình duyệt:
+  Tab 1: Thêm sản phẩm A vào cart (POST /cart/add, product_id=A, quantity=1)
+  Tab 2: Đồng thời thêm sản phẩm B vào cart (POST /cart/add, product_id=B, quantity=2)
+
+Nếu cart service xử lý tuần tự:
+  Request A đến trước → cart: [A×1] → Request B đến sau → cart: [A×1, B×2]
+  Kết quả đúng.
+
+Nếu cart service xử lý song song (2 threads/workers):
+  Cả hai cùng đọc cart state cũ: []
+  Request A ghi: cart = [A×1]
+  Request B ghi: cart = [B×2]  ← GHI ĐÈ state của request A!
+  Kết quả: cart chỉ có [B×2], mất A.
+```
+
+Các chiến lược giải quyết race condition trong cart service:
+
+| Chiến lược | Mô tả | Ưu điểm | Nhược điểm |
+| --- | --- | --- | --- |
+| **Serialized per-user** | Mọi request từ cùng user được xếp hàng và xử lý tuần tự | Đơn giản, không mất update | Có thể chậm nếu user gửi nhiều request đồng thời |
+| **Optimistic locking** | Dùng version number: request gửi kèm version, server chỉ apply nếu version khớp | Không cần queue, throughput cao | Client phải retry khi version conflict |
+| **Redis atomic operations** | Dùng Redis list/set operations (RPUSH, SADD, HINCRBY) thay vì read-modify-write | Atomic, nhanh | Chỉ hoạt động nếu cart được lưu hoàn toàn trong Redis |
+| **ETag / If-Match** | Dùng HTTP ETag header: client gửi ETag của cart hiện tại, server reject nếu cart đã thay đổi | Chuẩn HTTP, RESTful | Yêu cầu client implement ETag logic |
+
+Case ms-03 không test race condition (có case riêng cho việc này ở Redis layer). Nhưng hiểu được các chiến lược này giúp bạn đánh giá xem cart service đã sẵn sàng cho production chưa.
+
+### 17.6 Mối quan hệ giữa cart service và authentication
+
+Không như products service (có thể public read), cart service yêu cầu authentication:
+
+```text
+Mỗi request đến cart service phải kèm theo thông tin nhận dạng user:
+  - Cookie session (từ auth-service login)
+  - JWT token (Authorization: Bearer header)
+  - API key (cho batch job như cart cleanup)
+
+Cart state được scoped theo user_id từ session:
+  User A → cart A (items của user A)
+  User B → cart B (items của user B)
+  Không user nào thấy được cart của user khác.
+```
+
+Authentication trong cart service có ý nghĩa quan trọng:
+- **Security**: Cart chứa thông tin cá nhân (sản phẩm định mua, số lượng, địa chỉ giao hàng dự kiến).
+- **Data isolation**: Mỗi user có cart riêng -- không có chuyện "cross-user cart corruption".
+- **Audit trail**: Biết được ai đã thêm/sửa/xóa item trong cart (quan trọng cho fraud detection).
+
+Trong script `si-04-cart-cleanup.js`, authentication được xử lý ngầm qua session cookie hoặc token (tùy deployment config). `common.js` không thêm authentication header -- điều này có nghĩa là cart service trong môi trường test không yêu cầu authentication, hoặc authentication được xử lý ở tầng Nginx (service mesh).
+
+### 17.7 Tổng kết các bài học từ case ms-03
+
+1. **Cart là write-heavy service**: 4 write operations (add, update, remove, checkout) so với 2 read operations (view, summary). Thiết kế cart service khác biệt căn bản so với products service (pure read).
+
+2. **Cart state machine đơn giản nhưng quan trọng**: EMPTY → ACTIVE → CHECKOUT. Mỗi transition phải được validate -- không thể thêm item vào cart đã checkout.
+
+3. **Response envelope nhất quán**: `{ success: bool, data: ... }` trên mọi endpoint. Frontend dựa vào contract này.
+
+4. **X-Upstream-Service là evidence chính**: Không có header này, bạn không thể chứng minh request đến đúng service.
+
+5. **Shared-iterations là executor phù hợp**: Batch job pattern với số lượng jobs cố định, phân phối cho nhiều VUs.
+
+6. **State persistence là yêu cầu sống còn**: Nếu cart không giữ được state giữa các request, toàn bộ trải nghiệm mua sắm sụp đổ.
+
+7. **Test từng service riêng biệt trước khi test flow**: Ms-03 (cart) → Ms-04 (order) → Ms-06 (flow). Không skip bước nào.
+
+8. **Script đơn giản hơn document**: Script thực tế chỉ test PATCH + GET summary. Document mô tả full API surface (POST add, GET view, PATCH update, DELETE remove). Cả hai đều quan trọng -- script để chạy test, document để hiểu contract.
+
+---
+
+*Generated with Claude Code. Case metadata from `case-catalog.json`. Script analysis from `si-04-cart-cleanup.js` and `common.js`. Quality template from `redis-03-claim-owner-abandon.md`.*

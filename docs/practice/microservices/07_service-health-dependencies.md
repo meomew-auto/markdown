@@ -1356,3 +1356,271 @@ Quy trinh incident response chuan:
 
 Day la cach tiep can co he thong, tu thap den cao, tu don gian den phuc tap. Dung bo qua buoc 1.
 
+---
+
+## 18. Mo rong: health check pattern trong production
+
+### 18.1 Cac loai health check trong production
+
+Production systems thuong co 3 loai health check:
+
+| Loai | Muc dich | Frequency | Timeout | Action khi fail |
+| --- | --- | --- | --- | --- |
+| **Liveness probe** | Process co song khong? | 10-30s | 1-5s | Restart container |
+| **Readiness probe** | Service co san sang nhan request khong? | 5-10s | 1-5s | Remove khoi load balancer |
+| **Startup probe** | Service da khoi dong xong chua? | 1-2s | 1-5s | Cho them (khong restart) |
+
+Case nay mo phong **readiness probe** -- no kiem tra ca dependency, khong chi process alive.
+
+### 18.2 Health check levels: tu shallow den deep
+
+```text
+Level 1: TCP port check
+  → "Port 8083 co mo khong?"
+  → Nhanh (1ms), nhung khong biet service co hoa dong dung khong.
+  → Dung cho: Liveness probe co ban.
+
+Level 2: HTTP status check
+  → "GET /health tra ve 200 khong?"
+  → Nhanh (2-5ms), nhung co the la static "ok".
+  → Dung cho: Basic readiness probe.
+
+Level 3: Dependency-aware check (DUNG TRONG CASE NAY)
+  → "GET /health tra ve 200 + Redis PING thanh cong + Postgres SELECT 1 thanh cong?"
+  → Trung binh (10-20ms), nhung chinh xac.
+  → Dung cho: Production readiness probe.
+
+Level 4: Business-flow check
+  → "Thuc hien mot giao dich gia (checkout test) co thanh cong khong?"
+  → Lau (50-200ms), nhung toan dien nhat.
+  → Dung cho: Synthetic monitoring (khong phai K8s probe).
+```
+
+### 18.3 Tai sao khong nen dung static health check?
+
+Static health check (luon tra ve "ok" ma khong probe) la mot trong nhung root cause pho bien nhat cua cascading failure:
+
+```text
+1. Redis chet luc 04:15 AM.
+2. Health check van tra ve "ok" (static).
+3. K8s readiness probe van pass → van route traffic den order-service.
+4. Order-service nhan request checkout → goi Redis → timeout (5s).
+5. Sau 5s, response tra ve 500. Nhung luc do, 1000 requests khac da queued.
+6. Connection pool day. Service crash.
+7. K8s restart container. Health check van "ok". Tiep tuc nhan traffic.
+8. Lap lai buoc 4-7 cho den khi Redis duoc fix.
+```
+
+Static health check bien mot loi infrastructure don gian (Redis can restart) thanh cascading failure toan he thong.
+
+### 18.4 Dependency health check best practices
+
+**DO**:
+- Probe tung dependency doc lap (Redis, Postgres, external APIs).
+- Set timeout cho moi probe (1-2 giay). Khong probe vinh vien.
+- Tra ve JSON structured voi status cua tung dependency.
+- Tra ve 503 (khong phai 200) khi co dependency down -- de load balancer co the remove.
+- Cache health check result trong 1-5 giay neu probe qua dat.
+- Log moi lan dependency status thay doi (up→down, down→up).
+
+**DON'T**:
+- Dung static response (luon "ok").
+- Probe khong co timeout.
+- Ket hop qua nhieu dependency vao mot overall status khong ro rang.
+- Dung health endpoint cho business metrics (tao dedicated `/metrics` endpoint).
+- Thuc hien business transactions (checkout) trong health check -- qua lau va co side effect.
+
+### 18.5 Health check trong K8s configuration
+
+```yaml
+# Vi du K8s deployment voi dependency-aware health check
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-service
+spec:
+  template:
+    spec:
+      containers:
+      - name: order-service
+        image: order-service:latest
+        ports:
+        - containerPort: 8083
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8083
+          initialDelaySeconds: 10
+          periodSeconds: 15
+          timeoutSeconds: 3
+          failureThreshold: 3       # 3 lan fail lien tiep → restart
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8083
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 2       # 2 lan fail lien tiep → remove khoi service
+          successThreshold: 1       # 1 lan success → them lai vao service
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8083
+          initialDelaySeconds: 0
+          periodSeconds: 2
+          timeoutSeconds: 3
+          failureThreshold: 30      # Cho toi 60s de startup
+```
+
+Key points:
+- `failureThreshold` cua readiness probe thap hon liveness probe: remove khoi load balancer nhanh, nhung khong restart qua som.
+- `periodSeconds` cua readiness probe ngan hon liveness: can phan ung nhanh khi dependency down.
+- Startup probe co `failureThreshold` cao: cho service khoi dong (30 * 2s = 60s).
+
+### 18.6 Health check dashboard pattern
+
+Mot he thong microservices nen co health dashboard:
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│                    HEALTH DASHBOARD                         │
+│                                                             │
+│  Overall: ● OK (5/5 services healthy)                       │
+│                                                             │
+│  auth-service      ● UP   PG: up                            │
+│  products-service  ● UP   PG: up                            │
+│  cart-service      ● UP   PG: up                            │
+│  order-service     ● UP   PG: up  Redis: up  Pay: up        │
+│  report-service    ● UP   PG: up                            │
+│                                                             │
+│  Postgres          ● UP   latency: 5ms                      │
+│  Redis             ● UP   latency: 2ms                      │
+│  Payment-mock      ● UP   latency: 15ms                     │
+│                                                             │
+│  Last updated: 2026-06-24 14:30:00 (2s ago)                 │
+└─────────────────────────────────────────────────────────────┘
+```
+
+Dashboard nay cho phep:
+- Nhin mot cai la biet toan bo he thong co healthy khong.
+- Xac dinh dependency nao down ngay lap tuc (khong can doc log).
+- Thay duoc latency trend cua tung dependency.
+
+### 18.7 Alerting tu health check
+
+Health check nen duoc integrate voi alerting system:
+
+| Condition | Severity | Alert | Action |
+| --- | --- | --- | --- |
+| 1 service /health fail | Warning | "order-service health degraded: payment-mock unreachable" | Investigate payment-mock |
+| Multiple services /health fail | Critical | "3/5 services health degraded: Postgres unreachable" | Immediate response |
+| Redis down | Warning | "Redis dependency down: 5 services affected" | Restart Redis |
+| Postgres down | Critical | "Postgres dependency down: ALL services affected" | Immediate response |
+| Health latency > 100ms | Warning | "Health check latency high: avg 150ms" | Investigate dependency slowness |
+| Health check flapping | Warning | "order-service health flapping: 5 state changes in 2 min" | Investigate intermittent issue |
+
+---
+
+## 19. Kết nối với các case khác trong lộ trình
+
+### 19.1 Health check la prerequisite cho toan bo cac case khac
+
+```text
+ms-07 (HEALTH CHECK) ← CASE NAY — chay DAU TIEN
+  │
+  ├── ms-01 (gateway routing) ← Can all services healthy
+  ├── ms-02 (products read)   ← Can Postgres healthy
+  ├── ms-03 (cart write)      ← Can Postgres healthy
+  ├── ms-04 (order transaction) ← Can Postgres + Redis + payment-mock healthy
+  ├── ms-05 (report async)    ← Can Postgres healthy
+  ├── ms-06 (cross-service)   ← Can ALL services + dependencies healthy
+  │
+  ├── Redis layer (layer 4)   ← Can Redis healthy (verified by THIS case)
+  ├── Postgres layer (layer 5)← Can Postgres healthy (verified by THIS case)
+  ├── External layer (layer 6)← Can external services healthy
+  └── Resource layer (layer 7)← Can infrastructure healthy
+```
+
+### 19.2 Cach dung case nay trong CI/CD pipeline
+
+```text
+CI/CD Pipeline:
+  1. Deploy infrastructure (docker compose up).
+  2. Run ms-07 (health check) — 30s.
+     → FAIL? Rollback deployment. Infrastructure issue.
+     → PASS? Continue.
+  3. Run ms-01 (gateway routing) — 1-2 min.
+     → FAIL? Check Nginx config.
+     → PASS? Continue.
+  4. Run ms-02→05 (per-service contracts) — in parallel, 3-5 min.
+     → FAIL? Fix service contract.
+     → PASS? Continue.
+  5. Run ms-06 (cross-service flow) — 3-5 min.
+     → FAIL? Integration issue.
+     → PASS? Deploy to production.
+```
+
+Thoi gian: ms-07 chi mat 24-30s. Neu fail o day, tiet kiem 5-10 phut debug cac case sau.
+
+### 19.3 Ap dung kien thuc tu case nay vao production monitoring
+
+Mot he thong production can 3 loai monitoring:
+
+1. **Health check (case nay)**: Moi service co healthy khong? Dependency co up khong?
+   - Dung cho: K8s readiness probe, load balancer health check, alerting.
+   - Frequency: Moi 5-10 giay.
+
+2. **Business metrics (Redis/Postgres layer cases)**: Business flow co hoa dong khong?
+   - Dung cho: Business dashboard, SLA monitoring.
+   - Frequency: Moi 15-30 giay.
+
+3. **Resource metrics (Resource layer cases)**: CPU/Memory/Disk co du khong?
+   - Dung cho: Capacity planning, auto-scaling.
+   - Frequency: Moi 30-60 giay.
+
+Health check la lop dau tien -- neu no fail, 2 lop kia co the bi anh huong.
+
+### 19.4 Thu tu hoc tap goi y cho nguoi moi
+
+Neu ban la nguoi moi bat dau voi microservices testing, day la lo trinh hoc tap:
+
+1. **Tuan 1**: ms-07 (health check) + ms-01 (gateway routing).
+   - Hieu duoc infrastructure health va routing correctness.
+   - Co the chay health check nhu mot thoi quen truoc moi lan test.
+
+2. **Tuan 2**: ms-02 (products read) + ms-03 (cart write).
+   - Hieu duoc per-service contract verification.
+   - Biet cach doc response envelope va X-Upstream-Service header.
+
+3. **Tuan 3**: ms-04 (order transaction) + ms-05 (report async).
+   - Hieu duoc complex contract (idempotency, async pattern).
+   - Biet cach verify cac pattern dac biet.
+
+4. **Tuan 4**: ms-06 (cross-service flow).
+   - Hieu duoc integration testing xuyen nhieu services.
+   - Biet cach verify state flow khong bi dut.
+
+5. **Tuan 5 tro di**: Redis layer, Postgres layer, External layer, Resource layer.
+   - Tung buoc xay dung hieu biet ve consistency, durability, resilience, capacity.
+
+Moi tuan xay dung tren kien thuc cua tuan truoc. ms-07 (case nay) la nen mong -- dung bo qua.
+
+### 19.5 Cau hoi thuong gap
+
+**Q: Tai sao case nay dung constant-vus thay vi shared-iterations nhu cac case khac?**
+
+A: Health check can **sustained probing** (lien tuc trong 24s), khong can phan phoi jobs. constant-vus dam bao 2 VU luon chay, moi VU probe moi 0.2s. shared-iterations se ket thuc khi jobs duoc phan phoi het -- khong phu hop cho continuous health monitoring.
+
+**Q: Tai sao APP_DEPS_SLEEP_SECONDS = 0.2 ma khong phai 0?**
+
+A: Khong can probe lien tuc (0s sleep) vi health check khong can high frequency. 0.2s sleep = 5 probes/giay/VU = 10 probes/giay tong cong. Du de phat hien health thay doi nhung khong tao qua nhieu traffic.
+
+**Q: Neu chi mot service /health fail, case nay co fail khong?**
+
+A: Co. Neu mot service degraded, `app_deps_degraded_observed > 0` va `app_deps_check_failures > 0`. Neu expectation la `healthy`, case fail.
+
+**Q: Co the chay case nay tren topology full (co CDN) khong?**
+
+A: Khong nen. Varnish cache co the cache health response -- dan den health check sai (bao "up" luc thuc te down). Luon dung `full-no-cdn` cho case nay.
+

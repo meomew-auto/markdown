@@ -1466,3 +1466,39 @@ Khi một report export job không hoàn thành trong production, quy trình deb
    - Rerun case này để verify fix.
    - Rerun ms-06 (cross-service flow) để verify integration.
 
+---
+
+## 20. Tổng kết: những điều cốt lõi cần nhớ
+
+### 20.1 Ba nguyên tắc vàng của async contract testing
+
+1. **Status code là evidence số một**: 202 Accepted cho POST job, 200 OK cho GET (dashboard, status, list, download). Nếu POST job trả về 200 thay vì 202, contract đã bị vi phạm -- dừng mọi test khác và fix ngay.
+
+2. **Job lifecycle phải hoàn chỉnh**: Không chỉ tạo job thành công, job phải đi qua đủ các trạng thái (`queued` → `processing` → `completed`) và có thể download được kết quả. Một job được tạo nhưng không bao giờ completed là fail.
+
+3. **X-Upstream-Service không thể thiếu**: Header này là bằng chứng duy nhất chứng minh request đã đến đúng report-service. Không có nó, bạn không thể phân biệt được request đến report-service hay app fallback -- và app fallback có thể vô tình trả về response "hợp lệ" nhưng sai contract.
+
+### 20.2 Ba câu hỏi tự kiểm tra trước khi chuyển sang case tiếp theo
+
+1. "Tôi có tự tin rằng POST /api/sim/report/jobs luôn trả về 202 (không phải 200) không?"
+2. "Tôi có tự tin rằng mọi job được tạo đều hoàn thành trong thời gian expected không?"
+3. "Tôi có tự tin rằng X-Upstream-Service luôn là 'report-service' (không phải 'app') không?"
+
+Nếu câu trả lời là "có" cho cả ba -- bạn đã sẵn sàng cho ms-06 (cross-service stateful flow).
+
+### 20.3 Ghi nhớ cuối cùng
+
+Async job pattern không phải là "tính năng phụ" của report-service -- nó là **cốt lõi** của service này. Dashboard sync read thì service nào cũng có. Nhưng async job với 202 Accepted + polling + download là thứ làm report-service khác biệt. Đây cũng là pattern mà hầu hết người mới học microservices dễ bỏ qua hoặc kiểm tra sai nhất. Nắm vững case này, bạn sẽ tự tin với mọi async API contract về sau.
+
+### 20.4 Con số ghi nhớ nhanh
+
+| Chỉ số | Giá trị | Ý nghĩa |
+| --- | --- | --- |
+| 202 | Status code cho POST job | Không phải 200 -- đây là điều quan trọng nhất |
+| 80 | Số jobs mặc định | Có thể điều chỉnh qua SI_06_JOBS |
+| 100ms | ready_after_ms mặc định | Thời gian job cần để hoàn thành |
+| 5000ms | STATUS_TIMEOUT_MS mặc định | Thời gian tối đa chờ job hoàn thành |
+| 25ms | STATUS_POLL_INTERVAL_MS | Khoảng cách giữa các lần poll |
+| 8 | Số VUs mặc định | Phân phối 80 jobs cho 8 VUs |
+| 5 | Số bước trong flow | Dashboard → Create → List → Status → Download |
+
