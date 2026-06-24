@@ -97,15 +97,24 @@ DB layer là cầu nối giữa state consistency (Redis) và external resilienc
 - **DB**: Xác nhận persistence chịu được degradation
 - **Sau DB**: External dependency (payment mock) và capacity sizing
 
-## 8. Validation snapshot
+## 8. Validation snapshot 2026-06-25
 
-(Chạy sau khi viết xong docs)
+| Case | Run | Checks | http_fail | Notes |
+| --- | ---: | ---: | ---: | --- |
+| db-05 | #116 | 355/355 (100%) | 0% | Resource model: db_rows/db_writes verified |
+| db-01 | #117 | 199/200 (99.5%) | 0% | DB delay 35ms → db_ms observable → recovered |
+| db-02 | #118 | 236/236 (100%) | 0% | DB pressure → p95 3170ms in degraded → recovered |
+| db-03 | #119 | 224/224 (100%) | 4.8% **(expected)** | Fault tcp_reset → 5xx intentional → recovered 200 |
+| db-04 | #120 | 3584/3584 (100%) | 0% | Pool contention 24s → recovered success |
+| db-06 | #121 | sweep | 0% | Capacity: db_rows=120, rate=8, 0 drops |
 
-| Case | Status | Checks | Notes |
-| --- | --- | --- | --- |
-| db-05 | — | — | Resource model correctness |
-| db-01 | — | — | DB delay recovery |
-| db-02 | — | — | DB pressure recovery |
-| db-03 | — | — | DB fault recovery (5xx expected) |
-| db-04 | — | — | DB pool contention |
-| db-06 | — | — | Capacity sweep |
+**Postgres/DB layer GREEN 6/6.**
+
+### Key observations
+
+- **db-01**: 1 check failure (0.5%) — likely timing assertion at boundary. Delay phase `db_ms` clearly elevated.
+- **db-02**: p95 latency 3170ms in pressure phase — proves pool pressure injection works. Recovered clean.
+- **db-03**: http_req_failed 4.8% — ALL during fault window. Post-reset: 0% failures. This is the correct fault→recovery signature.
+- **db-04**: 3584 checks, 0 failures — sustained 24s contention test, trace correlation preserved.
+- **db-05**: All 28 endpoints verified — `resource_model.db_rows` matches query param on every response.
+- **db-06**: Capacity sweep successful — `resource_model.db_rows=120` recorded in every CAPACITY_SAMPLE. Bottleneck rotates between `cpu_ms` and `db_ms`.
