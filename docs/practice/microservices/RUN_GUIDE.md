@@ -104,6 +104,7 @@ $env:APP_DEPS_EXPECTATION = "healthy"
 $env:APP_DEPS_VUS = "2"
 $env:APP_DEPS_DURATION = "24s"
 $env:APP_DEPS_SLEEP_SECONDS = "0.2"
+$env:APP_DEPS_ORIGIN_BASE_URL = ""
 
 k6 run E:/Projects/k6/k6-metrics-server/load-target/k6/app/01-dependency-smoke.js
 ```
@@ -130,7 +131,7 @@ $cases = @(
   @{Id="ms-04"; Script="E:/Projects/k6/k6-metrics-server/load-target/k6/shared-iterations/si-02-order-reconciliation.js"; Env=@{SI_02_VUS="8";SI_02_JOBS="120";SI_02_SLEEP_SECONDS="0"}},
   @{Id="ms-05"; Script="E:/Projects/k6/k6-metrics-server/load-target/k6/shared-iterations/si-06-report-export-batch.js"; Env=@{SI_06_VUS="8";SI_06_JOBS="80";SI_06_SLEEP_SECONDS="0"}},
   @{Id="ms-06"; Script="E:/Projects/k6/k6-metrics-server/load-target/k6/app/32-per-vu-business-core.js"; Env=@{}},
-  @{Id="ms-07"; Script="E:/Projects/k6/k6-metrics-server/load-target/k6/app/01-dependency-smoke.js"; Env=@{APP_DEPS_EXPECTATION="healthy";APP_DEPS_VUS="2";APP_DEPS_DURATION="24s";APP_DEPS_SLEEP_SECONDS="0.2"}}
+  @{Id="ms-07"; Script="E:/Projects/k6/k6-metrics-server/load-target/k6/app/01-dependency-smoke.js"; Env=@{APP_DEPS_EXPECTATION="healthy";APP_DEPS_VUS="2";APP_DEPS_DURATION="24s";APP_DEPS_SLEEP_SECONDS="0.2";APP_DEPS_ORIGIN_BASE_URL=""}}
 )
 
 $results = @()

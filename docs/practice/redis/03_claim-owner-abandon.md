@@ -1478,3 +1478,178 @@ Status: 200, reuse: True
 | k6 Trend metric | [k6.io: Trend](https://k6.io/docs/using-k6/metrics/reference/#trend) |
 | HTTP 503 Service Unavailable | [RFC 7231: 503](https://datatracker.ietf.org/doc/html/rfc7231#section-6.6.4) |
 | Claim-Check pattern | [Enterprise Integration Patterns: Claim Check](https://www.enterpriseintegrationpatterns.com/patterns/messaging/StoreInLibrary.html) |
+
+---
+
+## Appendix A: Production patterns cho claim ownership
+
+### A.1 Pattern 1: Claim TTL dựa trên external timeout
+
+Trong production, claim TTL nên được tính dựa trên timeout của external dependencies:
+
+```text
+CLAIM_TTL = external_payment_timeout + DB_write_timeout + buffer
+
+Ví dụ:
+  external_payment_timeout = 30s (payment gateway SLA)
+  DB_write_timeout = 5s
+  buffer = 10s (network jitter, GC pause, clock skew)
+
+  => CLAIM_TTL = 45s
+```
+
+Công thức này đảm bảo claim tồn tại đủ lâu để hoàn thành business logic, nhưng không quá lâu đến mức request takeover phải chờ quá thời gian chấp nhận được của client.
+
+### A.2 Pattern 2: Claim owner heartbeat
+
+Trong các hệ thống production lớn, thay vì set TTL cố định, owner có thể gửi heartbeat để gia hạn claim:
+
+```text
+1. Owner claim key với TTL ngắn (vd: 10s)
+2. Mỗi 5s, owner gửi heartbeat: EXPIRE claim:key 10
+3. Nếu owner chết, heartbeat dừng -> TTL hết hạn sau 10s
+4. Owner mới takeover sau khi TTL hết hạn
+```
+
+Pattern này cho phép TTL ngắn hơn (takeover nhanh hơn) trong khi vẫn bảo vệ owner đang chạy bình thường khỏi bị takeover sớm. Tuy nhiên, nó phức tạp hơn và yêu cầu thêm logic heartbeat.
+
+### A.3 Pattern 3: Claim fencing token
+
+Để ngăn owner cũ (tưởng đã chết nhưng thực ra vẫn chạy) tiếp tục ghi dữ liệu sau khi đã bị takeover, sử dụng fencing token:
+
+```text
+1. Mỗi claim có một fencing token (số nguyên tăng dần)
+2. Khi owner B takeover, token tăng lên (vd: 1 -> 2)
+3. Mọi write operation của owner phải kèm theo token
+4. Storage layer (DB) chỉ chấp nhận write với token >= token hiện tại
+5. Nếu owner A (token=1) cố gắng ghi sau khi owner B (token=2) đã takeover,
+   storage layer từ chối vì 1 < 2
+```
+
+Đây là cơ chế bảo vệ bổ sung, đặc biệt quan trọng trong các hệ thống mà "owner chết" có thể là false positive (ví dụ: GC pause dài làm owner tưởng đã chết nhưng thực ra vẫn alive).
+
+### A.4 Pattern 4: Claim với graceful degradation
+
+Trong một số hệ thống, thay vì block hoàn toàn khi claim đang được giữ, hệ thống có thể cung cấp graceful degradation:
+
+```text
+1. Nếu claim đang được giữ bởi owner khác:
+   a. Trả về 202 Accepted với Retry-After header
+   b. Client tự động retry sau khoảng thời gian được chỉ định
+2. Nếu claim đã hết hạn:
+   a. Xử lý bình thường
+```
+
+Pattern này phù hợp với các hệ thống async, nơi client có thể chờ đợi. Nó tránh được việc server phải giữ connection mở trong thời gian dài (như trường hợp server-side wait của case này).
+
+### A.5 Pattern 5: Claim audit log
+
+Trong production, mọi hoạt động claim nên được audit:
+
+```text
+audit log entries:
+  [timestamp] CLAIM_CREATED key=idem-xyz owner=instance-A ttl=900
+  [timestamp] CLAIM_ABANDONED key=idem-xyz owner=instance-A reason=timeout
+  [timestamp] CLAIM_EXPIRED key=idem-xyz (TTL natural expiry)
+  [timestamp] CLAIM_TAKEOVER key=idem-xyz new_owner=instance-B waited_ms=820
+  [timestamp] CLAIM_REUSE key=idem-xyz owner=instance-B
+```
+
+Audit log giúp debug các vấn đề production như: tại sao đơn hàng bị kẹt? Ai đã takeover claim? Có bao nhiêu claim bị abandon mỗi giờ?
+
+---
+
+## Appendix B: Troubleshooting claim ownership issues
+
+### B.1 Triệu chứng: Tất cả takeover request timeout
+
+**Quan sát**: Takeover request mất rất nhiều thời gian (> 5 giây) hoặc timeout hoàn toàn.
+
+**Nguyên nhân khả dĩ**:
+1. Claim TTL quá dài (hàng phút thay vì hàng giây).
+2. Server poll interval quá ngắn, gây ra busy-wait loop trên Redis.
+3. Redis bị chậm hoặc không phản hồi, làm TTL check kéo dài.
+
+**Debug steps**:
+1. Kiểm tra giá trị `CLAIM_TTL_MS` hiện tại.
+2. Kiểm tra Redis latency: `redis-cli --latency`.
+3. Kiểm tra server log xem poll/wait loop có bị infinite loop không.
+
+### B.2 Triệu chứng: Takeover xảy ra quá sớm (dưới TTL)
+
+**Quan sát**: Takeover request hoàn thành trong < 200ms dù TTL=900ms.
+
+**Nguyên nhân khả dĩ**:
+1. Abandon xóa claim key ngay lập tức (không đợi TTL).
+2. Server không check claim trước khi xử lý -- bỏ qua claim mechanism hoàn toàn.
+3. `abandon_claim_after_ms` được set bằng hoặc lớn hơn `claim_ttl_ms` -- claim hết hạn trước khi abandon kịp xảy ra.
+
+**Debug steps**:
+1. Kiểm tra Redis keys sau abandon: `redis-cli KEYS "claim:*"` -- nếu không có key nào, abandon đã xóa claim.
+2. Kiểm tra server code: có thực sự gọi `SET NX` trước khi xử lý request takeover không?
+3. Đảm bảo `ABANDON_AFTER_MS < CLAIM_TTL_MS`.
+
+### B.3 Triệu chứng: Duplicate không reuse sau takeover
+
+**Quan sát**: Request thứ ba (duplicate) trả về `idempotency_reuse=false` thay vì `true`.
+
+**Nguyên nhân khả dĩ**:
+1. Kết quả của takeover không được lưu vào idempotency store.
+2. Idempotency key cho takeover khác với key của duplicate request.
+3. Idempotency record hết hạn quá nhanh (TTL của idempotency record quá ngắn).
+
+**Debug steps**:
+1. Kiểm tra idempotency store sau takeover: có record với key tương ứng không?
+2. So sánh `Idempotency-Key` header giữa takeover request và duplicate request.
+3. Kiểm tra TTL của idempotency record -- nó phải dài hơn claim TTL.
+
+### B.4 Triệu chứng: fresh_count > 1 trong takeover
+
+**Quan sát**: Nhiều hơn 1 VU báo cáo `idempotency_reuse=false`.
+
+**Nguyên nhân khả dĩ**:
+1. Nhiều request cùng thấy claim hết hạn và cùng claim lại -- race condition trong takeover.
+2. `SET NX` không được sử dụng -- check và set là hai operation riêng biệt.
+3. Redis replicated (master-slave) và replication lag làm hai request thấy trạng thái khác nhau.
+
+**Debug steps**:
+1. Kiểm tra xem server có dùng `SET NX` atomic không.
+2. Nếu dùng Redis cluster/replicated: kiểm tra replication lag.
+3. Chạy với 1 VU để xác nhận single-request behavior đúng, sau đó tăng dần.
+
+---
+
+## Appendix C: So sánh claim ownership với các hệ thống distributed lock khác
+
+| Hệ thống | Cơ chế lock | TTL tự động | Takeover tự động | Chống split-brain | Độ phức tạp |
+| --- | --- | --- | --- | --- | --- |
+| **Redis SET NX EX** (case này) | Single instance Redis | Có | Có (server poll) | Không (cần fencing token) | Thấp |
+| **Redis Redlock** | Multi-node Redis | Có | Có (client retry) | Một phần (majority vote) | Trung bình |
+| **etcd** | Lease-based | Có (lease TTL) | Có (lease revoke) | Có (Raft consensus) | Cao |
+| **ZooKeeper** | Ephemeral znodes | Có (session timeout) | Có (session expire) | Có (ZAB protocol) | Cao |
+| **PostgreSQL advisory lock** | Database-level | Có (session/transaction end) | Không trực tiếp | Có (DB transaction) | Thấp |
+| **In-memory lock** (không shared) | Process-local | Không | Không | Không áp dụng | Rất thấp |
+
+Redis SET NX EX là lựa chọn tốt nhất khi:
+- Hệ thống đã có Redis (không cần thêm infrastructure).
+- Yêu cầu latency thấp (sub-millisecond).
+- Chấp nhận được rủi ro split-brain (có thể mitigate bằng fencing token).
+- Không yêu cầu strong consistency (Redis không phải là CP system).
+
+---
+
+## Appendix D: Key takeaways cho người học
+
+1. **Claim ownership không phải là lock thông thường**. Lock ngăn chặn concurrent access; claim ownership cho phép sequential access với takeover khi owner chết.
+
+2. **TTL là mandatory, không phải optional**. Không có TTL, một lần crash có thể khóa vĩnh viễn một business flow.
+
+3. **503 không luôn là bug**. Trong testing, intentional failure là công cụ để tạo ra trạng thái cần test. Đọc signal, không đọc status code một cách máy móc.
+
+4. **Duration là evidence của correctness**. Takeover duration >= TTL chứng minh server đã thực sự chờ claim hết hạn. Nếu không kiểm tra duration, bạn không biết takeover có thực sự hoạt động hay không.
+
+5. **Sequential test không phải là "yếu"**. Không phải test nào cũng cần concurrency. Sequential test với 1 VU cho phép chứng minh chính xác sequence của các sự kiện phụ thuộc.
+
+6. **Idempotency và claim ownership là hai cơ chế riêng biệt**. Claim ownership kiểm soát "ai đang xử lý". Idempotency kiểm soát "kết quả đã được xử lý chưa". Cả hai phải hoạt động cùng nhau.
+
+7. **Always audit your claims**. Trong production, claim audit log là công cụ debug quan trọng nhất khi có vấn đề về stuck order hoặc double processing.
