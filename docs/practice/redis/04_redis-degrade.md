@@ -1583,3 +1583,254 @@ Delay: 0, Fault: ''
 | k6 per-vu-iterations | [k6.io: per-vu-iterations](https://k6.io/docs/using-k6/scenarios/executors/per-vu-iterations/) |
 | k6 lifecycle (setup/teardown) | [k6.io: Test Lifecycle](https://k6.io/docs/using-k6/test-lifecycle/) |
 | HTTP 503 Service Unavailable | [RFC 7231: 503](https://datatracker.ietf.org/doc/html/rfc7231#section-6.6.4) |
+
+---
+
+## Appendix A: Production patterns cho Redis degradation
+
+### A.1 Pattern 1: Circuit breaker cho Redis
+
+Trong production, thay vì để request chờ Redis mãi mãi, hệ thống nên có circuit breaker:
+
+```text
+Circuit breaker states:
+  CLOSED: Redis hoạt động bình thường -> request đi qua Redis bình thường
+  OPEN: Redis fail liên tục -> request reject nhanh (fail-fast)
+  HALF-OPEN: Thử một vài request để kiểm tra Redis đã hồi phục chưa
+
+State transition:
+  CLOSED -> OPEN: error_rate > 50% trong 10s
+  OPEN -> HALF-OPEN: sau 30s
+  HALF-OPEN -> CLOSED: success_rate > 75% trong 5 request thử
+  HALF-OPEN -> OPEN: success_rate < 75%
+```
+
+Circuit breaker phù hợp cho Redis khi:
+- Redis là cache (có fallback) -- circuit breaker mở -> bỏ qua cache, đọc từ DB.
+- Redis là shared state (như case này) -- circuit breaker mở -> reject request với 503 (không thể xử lý nếu không có shared state).
+
+Case 04 test trường hợp Redis chậm nhưng vẫn hoạt động (circuit breaker chưa mở). Đây là trạng thái nguy hiểm nhất vì request vẫn đi qua Redis nhưng với latency cao.
+
+### A.2 Pattern 2: Timeout budget cho Redis operations
+
+Mỗi request nên có một timeout budget tổng thể, và Redis operations chỉ được chiếm một phần trong đó:
+
+```text
+Total request timeout: 2000ms
+  - Redis operations budget: 500ms (25%)
+  - DB operations budget: 500ms (25%)
+  - External calls budget: 800ms (40%)
+  - Buffer: 200ms (10%)
+
+Nếu Redis operations vượt quá 500ms:
+  -> Fail request với lỗi "Redis timeout"
+  -> KHÔNG tiếp tục chờ đợi
+```
+
+Pattern này ngăn Redis degradation "lan" sang toàn bộ request pipeline. Nếu Redis chậm 2 giây, request sẽ fail sau 500ms thay vì chờ đủ 2 giây.
+
+### A.3 Pattern 3: Stale read cho idempotency check
+
+Trong một số hệ thống, idempotency check có thể chấp nhận stale read (đọc từ cache cục bộ hoặc replica) thay vì đọc từ Redis master:
+
+```text
+1. Thử đọc idempotency record từ local cache (LRU, TTL=5s)
+2. Nếu local cache miss -> đọc từ Redis
+3. Nếu Redis timeout (sau 200ms) -> fallback: giả định "chưa có record"
+   -> xử lý fresh (có rủi ro duplicate, nhưng chấp nhận được trong một số use case)
+```
+
+Pattern này đánh đổi consistency để lấy availability. Nó phù hợp với các use case mà duplicate là chấp nhận được (ví dụ: idempotency cho "thêm vào giỏ hàng" -- nếu duplicate, cùng lắm là thêm 2 lần, user có thể xóa bớt).
+
+### A.4 Pattern 4: Adaptive retry delay
+
+Thay vì retry với interval cố định, hệ thống nên dùng adaptive delay dựa trên Redis health:
+
+```text
+1. Đo Redis latency trung bình trong 10 request gần nhất (sliding window)
+2. Retry delay = Redis_latency_avg * 2
+3. Max retry delay = 500ms
+4. Nếu Redis_latency_avg > 1000ms -> không retry, fail ngay
+
+Ví dụ:
+  Redis latency 80ms -> retry delay 160ms
+  Redis latency 200ms -> retry delay 400ms
+  Redis latency 500ms -> retry delay 500ms (capped)
+  Redis latency 1200ms -> no retry, fail fast
+```
+
+Pattern này giúp hệ thống thích nghi với mức độ degradation: khi Redis hơi chậm, retry nhanh; khi Redis rất chậm, retry chậm hơn; khi Redis quá chậm, không retry.
+
+### A.5 Pattern 5: Degradation visibility (observability)
+
+Khi Redis bị degrade, hệ thống phải emit đủ signals để ops team phát hiện:
+
+```text
+Metrics cần emit:
+  - redis_operation_duration (histogram, theo operation: SET, GET, DEL, TTL)
+  - redis_operation_timeout_count (counter, theo operation)
+  - redis_circuit_breaker_state (gauge: 0=closed, 1=half-open, 2=open)
+  - idempotency_retry_count (histogram -- số lần retry trước khi có kết quả)
+  - idempotency_fresh_vs_reuse_ratio (gauge -- bất thường nếu fresh > 1)
+
+Alerts:
+  - redis_operation_duration p95 > 100ms trong 5 phút -> warning
+  - redis_operation_duration p95 > 500ms trong 2 phút -> critical
+  - redis_circuit_breaker_state == 2 -> critical (Redis không hoạt động)
+  - idempotency_fresh_count > 1 -> CRITICAL (duplicate side effect detected!)
+```
+
+Case 04 test chính xác các signals này: duration increase và correctness counters.
+
+---
+
+## Appendix B: Troubleshooting Redis degradation issues
+
+### B.1 Triệu chứng: Setup profile fail (401/403)
+
+**Quan sát**: `setup redis reset status 200` fail với status 401 hoặc 403.
+
+**Nguyên nhân khả dĩ**:
+1. `OPS_AUTH_TOKEN` chưa được set.
+2. Token hết hạn.
+3. Token không có quyền truy cập `/ops/order/redis/*`.
+4. `CONTROL_MODE` không phải `'http'` nhưng token được yêu cầu bởi middleware.
+
+**Debug steps**:
+1. Kiểm tra `$env:OPS_AUTH_TOKEN` có giá trị không.
+2. Thử gọi thủ công: `curl -H "Authorization: Bearer $env:OPS_AUTH_TOKEN" http://localhost:80/ops/order/redis/reset -X POST`.
+3. Nếu token hợp lệ: kiểm tra server log xem có lỗi authentication không.
+4. Nếu không có token: chuyển `CONTROL_MODE` sang `'none'` để skip control-plane.
+
+### B.2 Triệu chứng: Profile delay không được áp dụng (duration không tăng)
+
+**Quan sát**: Setup pass (delay set thành công) nhưng confirm_duration avg ~50ms (giống baseline).
+
+**Nguyên nhân khả dĩ**:
+1. Server nhận PUT profile nhưng không áp dụng delay vào Redis operations.
+2. Delay được set nhưng bị skip trong code path cụ thể (ví dụ: chỉ delay cho SET nhưng không delay cho GET).
+3. `redis_delay_ms=0` trong profile dù setup báo thành công (race condition trong profile update).
+
+**Debug steps**:
+1. GET profile sau setup để xác nhận `redis_delay_ms=80`.
+2. Đo thời gian của từng Redis operation (thêm log timing trong server code).
+3. So sánh duration giữa case 02 và case 04 -- delta phải >= 80ms.
+
+### B.3 Triệu chứng: fresh_count > 1 dưới degrade
+
+**Quan sát**: `confirm_fresh_count=3` thay vì `1` với HOTKEY_VUS=6.
+
+**Nguyên nhân khả dĩ**:
+1. Redis delay làm race condition window mở rộng -- nhiều VU cùng thấy "chưa có record".
+2. Retry/poll mechanism không đủ kiên nhẫn -- VU thứ hai không retry mà thực thi fresh luôn.
+3. Lock mechanism (SET NX) không atomic -- check và set là hai operation riêng biệt.
+4. Idempotency record được lưu quá chậm (sau khi Redis delay + DB write + external call).
+
+**Debug steps**:
+1. Tăng `ORDER_SHARED_STATE_REDIS_DELAY_MS` lên 200ms để phóng đại vấn đề.
+2. Giảm `HOTKEY_VUS` về 2 -- nếu 2 VUs vẫn cho 2 fresh, lock mechanism có bug.
+3. Kiểm tra server code: có dùng `SET NX` atomic không? Có retry/poll logic không?
+4. Thêm log: timestamp khi claim key, timestamp khi lưu kết quả, timestamp của từng retry attempt.
+
+### B.4 Triệu chứng: Teardown fail (profile không reset)
+
+**Quan sát**: Teardown `POST /ops/order/redis/reset` trả về 500 hoặc không phải 200.
+
+**Nguyên nhân khả dĩ**:
+1. Server đang trong trạng thái không ổn định sau degrade test.
+2. Ops token hết hạn trong thời gian chạy test (token lifetime < test duration).
+3. Reset endpoint gặp lỗi internal (vd: Redis connection fail khi đang reset).
+
+**Debug steps**:
+1. **ĐỪNG CHẠY TIẾP CASE KHÁC** -- profile đang degraded sẽ làm hỏng mọi case sau.
+2. Gọi reset thủ công: `curl -X POST http://localhost:80/ops/order/redis/reset -H "Authorization: Bearer <token>"`.
+3. Nếu reset thủ công cũng fail: restart order-service container.
+4. Sau khi restart, verify `redis_delay_ms=0`.
+5. Chạy lại case 04 để đảm bảo teardown hoạt động.
+
+---
+
+## Appendix C: So sánh các phương pháp degrade injection
+
+| Phương pháp | Độ chính xác | Phạm vi ảnh hưởng | Cần quyền đặc biệt | Phù hợp CI/CD | Test được loại bug gì |
+| --- | --- | --- | --- | --- | --- |
+| **Control-plane API** (case này) | Rất cao (ms) | Một service | Ops token | Rất phù hợp | Race condition, lock timeout, correctness |
+| **Network delay (tc)** | Trung bình (jitter) | Tất cả services trên interface | Root | Khó tự động hóa | TCP behavior, connection timeout, network partition |
+| **Toxiproxy** | Cao | Một connection/ service | Không (thêm container) | Phù hợp | Connection-level failure, timeout, network latency |
+| **Chaos Mesh** | Thay đổi | Pod-level | Cluster admin | Phù hợp K8s | Pod kill, network partition, resource pressure |
+| **Manual code change** | Tùy chỉnh | Một service | Code access | Không phù hợp | Bất kỳ, nhưng không tái sử dụng được |
+
+Control-plane API là lựa chọn tốt nhất cho CI/CD vì:
+- Không cần quyền root hoặc cluster admin.
+- Có thể tự động hóa hoàn toàn (setup, test, teardown).
+- Chính xác và reproducible (delay luôn đúng 80ms, không bị jitter).
+- Dễ dàng kết hợp với các biến thể (delay, fault mode, fault rate).
+
+---
+
+## Appendix D: Key takeaways cho người học
+
+1. **Degradation không phải là failure**. Redis chậm là một trạng thái vận hành bình thường dưới tải cao. Hệ thống phải tiếp tục hoạt động đúng, chỉ chậm hơn.
+
+2. **Latency và correctness là hai trục độc lập**. Một hệ thống có thể vừa "chậm" (latency cao) vừa "đúng" (counters chính xác). Đừng dùng latency để đánh giá correctness.
+
+3. **Control-plane là công cụ testability quan trọng**. Khả năng thay đổi behavior của dependency mà không cần restart hay network manipulation là một investment xứng đáng cho testing.
+
+4. **Teardown không phải là optional**. Trong testing, cleanup quan trọng không kém setup. Profile degrade rò rỉ sang case sau là một trong những nguyên nhân gây waste time debugging phổ biến nhất.
+
+5. **Concurrency + degradation = nguy hiểm**. Riêng lẻ, concurrency (case 02) và degradation (1 request chậm) đều có thể pass. Kết hợp cả hai mới bộc lộ race condition bug. Luôn test degrade với concurrent load.
+
+6. **Counters, không phải status codes**. Status 200 không đủ để chứng minh correctness. Phải có custom counters (fresh=1, reuse=N-1) để biết business logic có thực sự đúng không.
+
+7. **Authentication cho test tools**. OPS_AUTH_TOKEN là một pattern hay: test tool có quyền đặc biệt (thay đổi system behavior) cần được authenticate. Đừng để control-plane API mở public.
+
+---
+
+## Appendix E: Các tham số Redis delay và ảnh hưởng thực tế
+
+### E.1 Bảng tham chiếu delay -> behavior
+
+| Redis delay | Mô phỏng tình huống | Kỳ vọng behavior | Rủi ro nếu fail |
+| --- | --- | --- | --- |
+| 1-10ms | Redis bình thường | Baseline (case 02) | - |
+| 20-50ms | Redis dưới tải nhẹ | Duration tăng nhẹ, counters đúng | Retry tăng nhẹ |
+| 50-100ms | Redis dưới tải trung bình (case 04 default) | Duration tăng rõ, counters vẫn đúng | Retry tăng, một số request chậm |
+| 100-300ms | Redis dưới tải cao | Duration tăng mạnh, counters vẫn đúng nếu retry đủ kiên nhẫn | Circuit breaker có thể mở, timeout bắt đầu xuất hiện |
+| 300-1000ms | Redis extreme degradation | Nhiều request bắt đầu timeout, counters có thể sai nếu retry không đủ | Fresh count > 1, HTTP failure tăng |
+| > 1000ms | Redis gần như không hoạt động | Hầu hết request timeout, circuit breaker nên mở | Hệ thống không thể xử lý request -- cần fail-fast |
+
+### E.2 Cách chọn delay phù hợp cho test
+
+```text
+Nguyên tắc chọn REDIS_DELAY_MS:
+1. Lớn hơn baseline ít nhất 5x để có sự khác biệt rõ ràng.
+2. Nhỏ hơn request timeout để tránh false positive (request fail vì timeout thay vì correctness bug).
+3. Nằm trong khoảng realistic của production (dựa trên monitoring data).
+4. Có thể điều chỉnh qua biến môi trường để dễ dàng tuned run.
+
+Với case này:
+  Baseline ~10ms -> delay 80ms (8x baseline).
+  Request timeout mặc định của k6: 60s -> 80ms << 60s.
+  Production Redis p95: 5-50ms -> 80ms nằm trong khoảng realistic (dưới tải cao).
+```
+
+### E.3 Tương quan giữa delay và số lần retry
+
+```text
+Với HOTKEY_VUS=6 và REDIS_DELAY_MS thay đổi:
+
+Delay=0ms:   fresh VU cần ~50ms để lưu kết quả
+             -> 5 VU khác retry 0-1 lần, tất cả thấy kết quả
+
+Delay=80ms:  fresh VU cần ~130ms để lưu kết quả
+             -> 5 VU khác retry 1-2 lần, tất cả thấy kết quả
+
+Delay=200ms: fresh VU cần ~280ms để lưu kết quả
+             -> 5 VU khác retry 2-4 lần, tất cả thấy kết quả
+
+Delay=500ms: fresh VU cần ~650ms để lưu kết quả
+             -> 5 VU khác retry 5-8 lần, một số có thể timeout nếu max_retries thấp
+             -> fresh_count có thể > 1 nếu retry không đủ kiên nhẫn
+```
+
+Mối quan hệ này giải thích tại sao counters vẫn đúng ở delay=80ms nhưng có thể sai ở delay cực cao: retry mechanism có giới hạn về số lần retry và tổng thời gian chờ.

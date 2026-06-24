@@ -42,7 +42,10 @@ $env:APP_DEPS_EXPECTATION = "healthy"
 $env:APP_DEPS_VUS = "2"
 $env:APP_DEPS_DURATION = "24s"
 $env:APP_DEPS_SLEEP_SECONDS = "0.2"
+$env:APP_DEPS_ORIGIN_BASE_URL = ""
 ```
+
+> **Lưu ý**: `APP_DEPS_ORIGIN_BASE_URL=""` buộc script dùng `BASE_URL` cho tất cả health probe, tránh port 8088 không có trong topology `full-no-cdn`.
 
 `APP_DEPS_EXPECTATION` có các mode khác:
 
