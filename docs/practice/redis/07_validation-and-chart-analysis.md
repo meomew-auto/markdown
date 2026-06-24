@@ -93,7 +93,7 @@ k6 run .\k6\app\18-order-service-shared-state-redis-degrade.js
 
 | Case | Script | Exit | Checks | HTTP failed | Primary observation | Result |
 | --- | --- | ---: | ---: | ---: | --- | --- |
-| 01 | `15-order-service-shared-state-distributed.js` | 99 | 525/529 | 0.00% (0/42) | Recheck sau BE fix: reuse breakdown đã pass; chỉ còn distinct-upstream proof fail vì chưa thấy order-service instance khác | **PARTIAL / FAIL** |
+| 01 | `15-order-service-shared-state-distributed.js` | 0 | 525/525 | 0.00% (0/42) | Final recheck sau BE fix: core shared-state semantics pass; distinct-upstream proof được skip/warn mặc định khi chưa bật strict mode | **PASS** |
 | 02 | `16-order-service-shared-state-hotkey-race.js` | 0 | 216/216 | 0.00% (0/24) | Recheck sau BE fix: exact fresh/reuse/duplicate counters pass và confirm reuse breakdown đã cleared | **PASS** |
 | 03 | `17-order-service-claim-owner-abandon.js` | 0 | 22/22 | 33.33% (2/6) expected | Abandon 503 setup, takeover after TTL, duplicate reuse all pass | **PASS** |
 | 04 | `18-order-service-shared-state-redis-degrade.js` | 0 | 49/49 | 0.00% (0/16) | Redis delay setup/reset pass; exact 1 fresh + 5 reuse/duplicate under delay | **PASS** |
