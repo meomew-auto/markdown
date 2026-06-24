@@ -127,10 +127,12 @@ redis-01 giờ có 2 chế độ:
 
 ## 10. Roadmap tiếp theo
 
-Sau Redis/shared state:
+Trước Redis/shared state là App Gateway & Microservices:
 
 ```text
-Postgres/DB -> external dependency/payment -> resource/capacity
+CDN → LB/Gateway → App Gateway & Microservices → Redis/shared state → Postgres/DB → External dependency → Resource/capacity
 ```
 
-Redis layer là cầu nối giữa routing correctness và data persistence correctness: request đã route đúng rồi, nhưng state dùng chung có thật sự nhất quán trước khi ghi DB/external side effect hay không.
+App Gateway & Microservices xác nhận Nginx route đúng đến từng service (auth, products, cart, order, report) và mỗi service trả đúng API contract. Sau khi đã chắc chắn request đến đúng service, Redis layer trả lời câu hỏi: state dùng chung giữa các instance của cùng một service có nhất quán không?
+
+Redis layer là cầu nối giữa routing/contract correctness và data persistence correctness: request đã route đúng service rồi, API contract đã đúng rồi, nhưng state dùng chung có thật sự nhất quán trước khi ghi DB/external side effect hay không.
