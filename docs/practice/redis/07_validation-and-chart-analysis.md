@@ -93,8 +93,8 @@ k6 run .\k6\app\18-order-service-shared-state-redis-degrade.js
 
 | Case | Script | Exit | Checks | HTTP failed | Primary observation | Result |
 | --- | --- | ---: | ---: | ---: | --- | --- |
-| 01 | `15-order-service-shared-state-distributed.js` | 99 | 505/529 | 0.00% (0/42) | Core idempotency/webhook/status semantics mostly pass, but duplicate confirm breakdown and distinct-upstream checks fail | **FAIL** |
-| 02 | `16-order-service-shared-state-hotkey-race.js` | 99 | 202/216 | 0.00% (0/24) | Exact fresh/reuse/duplicate counters pass, but confirm reuse breakdown still shows external/db work | **FAIL** |
+| 01 | `15-order-service-shared-state-distributed.js` | 99 | 525/529 | 0.00% (0/42) | Recheck sau BE fix: reuse breakdown đã pass; chỉ còn distinct-upstream proof fail vì chưa thấy order-service instance khác | **PARTIAL / FAIL** |
+| 02 | `16-order-service-shared-state-hotkey-race.js` | 0 | 216/216 | 0.00% (0/24) | Recheck sau BE fix: exact fresh/reuse/duplicate counters pass và confirm reuse breakdown đã cleared | **PASS** |
 | 03 | `17-order-service-claim-owner-abandon.js` | 0 | 22/22 | 33.33% (2/6) expected | Abandon 503 setup, takeover after TTL, duplicate reuse all pass | **PASS** |
 | 04 | `18-order-service-shared-state-redis-degrade.js` | 0 | 49/49 | 0.00% (0/16) | Redis delay setup/reset pass; exact 1 fresh + 5 reuse/duplicate under delay | **PASS** |
 | 05 | `19-order-service-hotkey-fairness.js` | 0 | 64/64 | 0.00% (0/16) | Hotkey fresh bounded at 1, reuse 7, normal fresh 8, normal latency healthy | **PASS** |
@@ -103,9 +103,9 @@ k6 run .\k6\app\18-order-service-shared-state-redis-degrade.js
 Current layer conclusion:
 
 ```text
-Redis/shared-state suite is PARTIAL GREEN.
-Cases 03/04/05/06 pass.
-Cases 01/02 expose two issues or contract mismatches around reuse breakdown and distributed-upstream proof.
+Redis/shared-state suite is MOSTLY GREEN after BE fix.
+Cases 02/03/04/05/06 pass.
+Case 01 core shared-state/reuse breakdown now passes, but distributed-upstream proof still fails because only one order-service instance is observed.
 ```
 
 ---
@@ -114,14 +114,16 @@ Cases 01/02 expose two issues or contract mismatches around reuse breakdown and 
 
 ### 4.1. redis-01 — Shared state distributed
 
-Observed:
+Observed after BE fix recheck:
 
 ```text
 Exit: 99
-checks: 505/529 = 95.46%
+checks: 525/529 = 99.24%
 http_req_failed: 0.00% (0/42)
-order_service_shared_state_distributed_check_failures: 24
+order_service_shared_state_distributed_check_failures: 4
 ```
+
+Previous run before fix was `505/529` with 24 check failures. The reuse breakdown failures are now fixed.
 
 Passed evidence:
 
