@@ -402,9 +402,9 @@ cache_hot_hits/cache_cold_misses
 
 **Pattern 2 — Reuse response payload contract matters**
 
-Cases 01/02 show a subtle contract question: should idempotency replay return the original performance breakdown unchanged, or should the response expose that no new external/db work happened?
+Initial runs of cases 01/02 showed a subtle contract question: should idempotency replay return the original performance breakdown unchanged, or should the response expose that no new external/db work happened?
 
-For learner-facing practice, this needs a clear contract. Otherwise students see `idempotency_reuse=true` but also `external_ms`/`db_write_ms` present and cannot know whether duplicate work really happened.
+After BE fix, replay responses now clear the relevant external/db breakdown fields, so learner-facing evidence is clear: `idempotency_reuse=true` also means no new external/db work is reported for the replay request.
 
 **Pattern 3 — Expected non-2xx exists**
 
@@ -418,8 +418,8 @@ redis-04 proves latency increases while correctness remains exact. A high p95 is
 
 | # | Scope | Symptom | Severity | Suggested action |
 | --- | --- | --- | --- | --- |
-| 1 | redis-01/02 | Reuse confirm response still has non-zero `external_ms` and `db_write_ms` breakdown | Medium | Decide contract: clear breakdown on replay, or adjust scripts/docs to accept replayed original breakdown while relying on counters/body flags. |
-| 2 | redis-01 | Distinct upstream not observed after 10 attempts | Medium | Check `ScaleApp`, Nginx upstream distribution/keepalive, `X-Upstream-Addr` emission, or relax proof to “attempted distributed proof but not guaranteed locally”. |
+| 1 | redis-01/02 | Reuse confirm response had non-zero `external_ms` and `db_write_ms` breakdown in initial run | Done | BE fix verified: redis-02 pass 216/216; redis-01 replay breakdown checks now pass. |
+| 2 | redis-01 | Distinct upstream not observed after 10 attempts; local Docker shows only `k6target-order-service-1` | Medium | Scale/expose >=2 order-service instances for this case, or relax/rename the case if cross-instance proof is not intended locally. |
 | 3 | Tooling | No `run-redis-capabilities.ps1` runner | Low | Add runner later for consistent FE/CI execution like CDN/LB. |
 
 ---
@@ -428,7 +428,7 @@ redis-04 proves latency increases while correctness remains exact. A high p95 is
 
 | Chart | Case liên quan | Cách đọc |
 | --- | --- | --- |
-| Checks rate | Tất cả | Primary pass/fail; hiện 01/02 drop do strict checks. |
+| Checks rate | Tất cả | Primary pass/fail; sau BE fix redis-02 đã 100%, redis-01 còn drop nhẹ vì distinct-upstream proof. |
 | HTTP failed | 03 | 33.33% expected do abandon setup 503. |
 | HTTP duration by phase | 02/04/05 | Fresh/reuse/degrade/hot/normal phải đọc riêng. |
 | Custom counters | Tất cả | Quan trọng nhất: fresh/reuse/duplicate/takeover/cache. |
@@ -452,7 +452,7 @@ redis-04 proves latency increases while correctness remains exact. A high p95 is
 | Pattern | Vì sao nguy hiểm | Cách đọc đúng |
 | --- | --- | --- |
 | Status 200 nhưng fresh count > expected | Duplicate side effect bị che bởi success response | Đọc fresh/reuse/duplicate counters. |
-| `idempotency_reuse=true` nhưng breakdown có work | Có thể replay original breakdown hoặc làm lại work; cần contract rõ | So sánh body flags, counters, DB/external side effects. |
+| `idempotency_reuse=true` nhưng breakdown có work | Có thể replay original breakdown hoặc làm lại work; initial run từng gặp pattern này | Sau BE fix, replay breakdown đã clear; nếu tái xuất hiện, so sánh body flags/counters/side effects. |
 | 503 ở redis-03 bị coi là fail | Đây là setup abandon claim | Đọc `claim_abandoned=true` và takeover counters. |
 | Redis degrade p95 cao bị coi là fail | Delay được inject có chủ đích | Counters exact + setup/reset pass => expected. |
 | Hotkey pass nhưng normal lane fail | Starvation bị bỏ qua | Đọc normal fresh count/duration. |
@@ -471,19 +471,20 @@ redis-04 proves latency increases while correctness remains exact. A high p95 is
 | Redis degrade correctness | 04 | **PASS** | setup/reset profile OK; exact counters under 80ms Redis delay. |
 | Hotkey fairness | 05 | **PASS** | hotkey collapsed, normal keys all fresh and fast. |
 | App cache hot/cold | 06 | **PASS** | 904 hot HIT, 888 cold MISS, no inverse observations. |
-| Shared distributed state | 01 | **FAIL** | core flow mostly OK, but reuse breakdown and distinct-upstream proof fail. |
-| Hotkey race | 02 | **FAIL** | exact race counters pass, but confirm reuse breakdown checks fail. |
+| Shared distributed state | 01 | **PARTIAL / FAIL** | core flow and replay breakdown now OK; only distinct-upstream proof fails because one order-service instance is observed. |
+| Hotkey race | 02 | **PASS** | exact race counters and confirm reuse breakdown checks pass after BE fix. |
 
 ### 9.2. Actionable conclusion
 
 ```text
-Redis/shared-state layer is not fully green yet.
+Redis/shared-state layer is almost green after BE fix.
 
-BE/script contract needs clarification for idempotency replay performance breakdown:
-  - If reused response should prove no new work by zeroing breakdown, BE should fix response fields.
-  - If reused response intentionally replays original payload, scripts should stop requiring breakdown zero and rely on explicit reuse/fresh counters or add clearer side-effect counters.
+Verified fixed:
+  - redis-02 hotkey race now exits 0 with 216/216 checks.
+  - redis-01 replay breakdown checks now pass.
 
-redis-01 also needs stronger distributed-upstream evidence or a less brittle local proof.
+Remaining issue:
+  - redis-01 still needs stronger distributed-upstream evidence. Recheck still sees only one order-service container (`k6target-order-service-1`), so the case cannot prove shared state across multiple order-service instances yet.
 ```
 
 ### 9.3. What is already safe to teach
