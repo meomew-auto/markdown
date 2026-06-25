@@ -58,11 +58,12 @@ External (payment, events):  Bạn KHÔNG sở hữu → mock behavior → handl
 | ext-05 | #123 | 41/41 (100%) | 0% | Webhook: regression_ignored=true on stale failed |
 | ext-01 | #125 | 9/9 (100%) | 0% | Payment matrix healthy mode pass |
 | ext-06 | #126 | 263/263 (100%) | 0% | Mixed payment+DB: degraded observed, recovered 100% |
-| ext-03 | #124 | 27/38 (71.1%) | 20% | **FAIL** — transient retry `payment_attempts` not meeting MIN_ATTEMPTS=2 |
+| ext-03 | #127 | 38/38 (100%) | 0% | ✅ **Fixed** — `payment_attempts >= 2`, retry overhead confirmed |
 | ext-02 | — | — | — | Chưa chạy |
 | ext-07 | — | — | — | Cần topology `full` |
 
-**5/7 cases verified. ext-03 cần BE fix — `payment_fail_first_n` mechanism không tạo đủ retry attempts.**
+**6/7 cases verified. ext-02 và ext-07 pending topology/config.**
+**BE fix ext-03**: `payment_fail_first_n` + auto-retry hoạt động, `payment_attempts >= 2`.
 
 ## 5. Production lesson
 
