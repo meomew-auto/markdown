@@ -1483,3 +1483,58 @@ Không có spike bất thường -- đồ thị phẳng, đúng như mong đợi
   - db-02: DB pressure recovery (dùng `db_ms` + `db_write_ms`)
   - db-06: Capacity sweep (dùng `resource_model` để map db_rows -> db_ms -> capacity)
 - **Performance payload spec**: `performance.breakdown` và `performance.resource_model` trong mọi API response
+
+### 17.1 Troubleshooting nhanh
+
+| Triệu chứng | Nguyên nhân có khả năng nhất | Action |
+| --- | --- | --- |
+| `checks rate < 100%` nhưng không rõ failure gì | Có check fail nhưng không được tag đúng | Xem console output của k6 -- check nào FAIL? |
+| `http_req_failed > 0` | Service không reachable hoặc trả về 5xx | `curl http://localhost:80/api/sim/products?db_rows=1` -- có response không? |
+| `resource_model.db_rows` sai tất cả endpoint | Performance middleware bug -- có thể field name sai | Kiểm tra code: resource_model được build từ query param hay từ actual row count? |
+| `db_ms` missing trên tất cả endpoint | DB time measurement chưa được implement hoặc bị disable | Kiểm tra middleware timing wrapper |
+| `go_sample_available = false` | Go runtime sampler không chạy (cần Go 1.19+ và sampler được init) | Kiểm tra sampler initialization trong service startup |
+| `payload_bytes = 0` hoặc missing | Response body rỗng hoặc không parse được JSON | `curl -s http://localhost:80/api/sim/products?db_rows=1 \| jq '.'` |
+| `heavy.payload_bytes <= light.payload_bytes` | Service bỏ qua query param (VD: `view`, `limit`) hoặc có response size limit | So sánh response body của light và heavy |
+
+### 17.2 Integration với CI/CD
+
+Case này lý tưởng để chạy như một **smoke test trong CI/CD pipeline**:
+
+```yaml
+# .github/workflows/db-smoke.yml (ví dụ)
+name: DB Contract Smoke
+on: [deployment]
+jobs:
+  db-correctness:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run db-05 correctness check
+        env:
+          BASE_URL: ${{ secrets.STAGING_URL }}
+          RESOURCE_CORRECTNESS_RUN_ID: "ci-${{ github.sha }}"
+        run: |
+          k6 run -o cloud k6/app/26-resource-correctness-benchmark.js
+          # Nếu checks rate != 100% -> CI fail -> block deploy
+```
+
+Lợi ích: mỗi lần deploy, contract được verify tự động. Nếu ai đó thay đổi performance payload format, CI sẽ catch ngay trước khi đến production.
+
+### 17.3 Mối liên hệ với Observability
+
+`resource_model` và `breakdown` không chỉ dùng cho test -- chúng còn là **observability data** trong production:
+
+```text
+Trong production, mỗi response đều có performance payload.
+Nếu bạn log hoặc export các field này vào metrics system (Prometheus, Grafana):
+
+  - resource_model_db_rows: histogram của db_rows phân bố
+  - breakdown_db_ms: histogram của DB latency
+  - bottleneck: counter của bottleneck type
+
+Bạn có thể build dashboard real-time:
+  - "Endpoint nào đang có db_ms cao nhất?"
+  - "Bottleneck đang là db_ms hay cpu_ms?"
+  - "Phân bố db_rows có thay đổi sau deploy không?"
+
+db-05 verify rằng pipeline này hoạt động -- từ code -> response -> metrics system.
+```
