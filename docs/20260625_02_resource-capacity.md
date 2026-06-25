@@ -137,33 +137,34 @@ This is the EXPECTED behavior when a local Docker container is CPU/memory pressu
 
 ---
 
-### 2.5 res-05 — Capacity Sizing Sweep (Run #133) — ⚠️ PRESSURE
+### 2.5 res-05 — Capacity Sizing Sweep (Run #140 + sweep series)
 
-**Chart observations:**
-- 241 requests, constant-arrival-rate at 8 req/s, 30s duration, 40 max VUs
-- 100 succeeded (200), 141 failed (429)
-- Response time for successful requests: avg=3.9ms, p95=8.2ms, p99=11.4ms — surprisingly FAST
-- 0 dropped_iterations — VU pool (max 40) is sufficient
-- 12 time buckets — consistent failure rate across all buckets
-- 2 endpoint groups in breakdown: products_list (200 and 429)
+**Sweep methodology:** Giữ nguyên `products_db_read` profile, chỉ thay đổi rate.
 
-**Capacity interpretation:**
+| Rate | DB_ROWS | Success | 429 | p95 | Phase |
+| ---: | ---: | ---: | ---: | ---: | --- |
+| 5 | 10 | 100% | 0% | 9.4ms | Light — baseline |
+| 5 | 120 | 99% | 1% | 7.6ms | Medium — DB nặng vẫn xanh |
+| 6 | 120 | 83% | 17% | 6.8ms | Bắt đầu vượt ceiling |
+| 7 | 120 | 71% | 29% | 7.0ms | Vượt rõ |
+| 8 | 120 | 76% | 24% | 9.0ms | Heavy — ceiling confirmed |
+
+**Phát hiện quan trọng — Đây là RATE-LIMITED system, không phải DB-saturated:**
+
 ```text
-Rate=8 req/s, db_rows=120 per request
-  → Products service returns 200 for some, 429 for others
-  → Not a gradual degradation — service self-limits immediately
-  → Zero queue buildup (no increasing latency trend)
-  → The service enforces a rate limit based on DB capacity, not connection count
+RATE-LIMITED (thực tế)                  RESOURCE-SATURATED (dự đoán sai)
+─────────────────────                   ──────────────────────────
+p95 latency PHẲNG ~6-9ms                p95 latency TĂNG DẦN
+429 xuất hiện ĐỘT NGỘT                  Request chậm dần rồi timeout
+Server: "Từ chối, không chậm"           Server: "Chậm dần rồi chết"
+Ceiling = rate limiter (~5/s)           Ceiling = DB/CPU saturation
 ```
 
-**What this means for capacity planning:**
-- At rate=8 with db_rows=120, the products service can handle ~3.3 successful req/s
-- The service uses 429 (not connection drops or timeouts) to signal overload
-- This is GOOD design — 429 is explicit feedback ("slow down"), whereas timeouts are ambiguous
-- Increasing preAllocatedVUs won't help — the bottleneck is the DB read path, not k6 scheduling
-- To increase throughput: reduce db_rows, add DB read replicas, or implement caching
-
-**Chart shape:** Flat line with gaps — consistent 200 responses interspersed with 429. Latency for 200s stays flat (no upward slope), confirming the bottleneck is at the service/db level, not the network or VU pool.
+**Bài học cho learner:**
+1. Light → Medium: DB rows tăng 12x (10→120) nhưng latency không đổi → **DB không phải bottleneck**
+2. Medium → Heavy: Rate tăng 5→8 → 429 xuất hiện, latency vẫn phẳng → **Ceiling là rate limiter**
+3. Nếu chỉ nhìn latency chart: p95=9ms → tưởng hệ thống khỏe, nhưng thực tế 24% request đang bị từ chối
+4. **Phải đọc status code (200/429) + latency + dropped_iterations cùng lúc**
 
 ---
 

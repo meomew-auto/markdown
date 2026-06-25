@@ -53,18 +53,37 @@ $env:NONK8S_DURATION_SECONDS = "16"
 k6 run -o cloud E:/Projects/k6/k6-metrics-server/load-target/k6/app/29-nonk8s-prod-approx.js
 ```
 
-## res-05 — Capacity sweep
+## res-05 — Capacity sweep (3 mức)
 
+### Light (baseline xanh)
 ```powershell
 $env:CAPACITY_PROFILE = "products_db_read"
-$env:CAPACITY_RATE = "8"
-$env:CAPACITY_DURATION_SECONDS = "30"
-$env:CAPACITY_PRE_ALLOCATED_VUS = "12"
-$env:CAPACITY_MAX_VUS = "40"
-$env:CAPACITY_DB_ROWS = "120"
-
+$env:CAPACITY_RATE = "5"; $env:CAPACITY_DB_ROWS = "10"
+$env:CAPACITY_DURATION_SECONDS = "20"
+$env:CAPACITY_PRE_ALLOCATED_VUS = "8"; $env:CAPACITY_MAX_VUS = "20"
 k6 run -o cloud E:/Projects/k6/k6-metrics-server/load-target/k6/app/30-capacity-sizing-sweep.js
 ```
+Expected: 100% success, p95~9ms, 0 fail.
+
+### Medium (DB nặng, vẫn xanh)
+```powershell
+$env:CAPACITY_PROFILE = "products_db_read"
+$env:CAPACITY_RATE = "5"; $env:CAPACITY_DB_ROWS = "120"
+$env:CAPACITY_DURATION_SECONDS = "20"
+$env:CAPACITY_PRE_ALLOCATED_VUS = "8"; $env:CAPACITY_MAX_VUS = "20"
+k6 run -o cloud E:/Projects/k6/k6-metrics-server/load-target/k6/app/30-capacity-sizing-sweep.js
+```
+Expected: ~99% success, p99~20ms tail. DB 12x nặng hơn nhưng latency không đổi.
+
+### Heavy (tìm ceiling)
+```powershell
+$env:CAPACITY_PROFILE = "products_db_read"
+$env:CAPACITY_RATE = "8"; $env:CAPACITY_DB_ROWS = "120"
+$env:CAPACITY_DURATION_SECONDS = "30"
+$env:CAPACITY_PRE_ALLOCATED_VUS = "12"; $env:CAPACITY_MAX_VUS = "40"
+k6 run -o cloud E:/Projects/k6/k6-metrics-server/load-target/k6/app/30-capacity-sizing-sweep.js
+```
+Expected: ~76% success, ~24% 429. Ceiling ở ~5 success/s. Latency vẫn phẳng.
 
 ## Dashboard Capacity tab
 
