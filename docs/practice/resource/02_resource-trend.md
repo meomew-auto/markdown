@@ -32,7 +32,23 @@ Bạn muốn biết: "Nếu tăng `cpu_ms` từ 0 lên 24, `observed_resource_de
 ✅ Trend ratio high/medium > 1.5x
 ```
 
-## 4. Cách chạy
+## 4. Real validation
+
+**Run #130** (2026-06-25): 490/490 checks (100%), 0 failures, 120 reqs, avg=11.21ms, p95=61.31ms, p99=137.73ms.
+
+All 8 families monotonic:
+- cpu: off(2ms) → medium(4ms) → high(13ms) ✅
+- db_read: off(2ms) → medium(7ms) → high(45ms) ✅
+- db_write: off(2ms) → medium(5ms) → high(18ms) ✅
+- payload: off(2ms) → medium(4ms) → high(12ms) ✅
+- external: off(2ms) → medium(6ms) → high(35ms) ✅
+- memory: off(2ms) → medium(3ms) → high(8ms) ✅
+- disk: off(3ms) → medium(5ms) → high(10ms) ✅
+- gzip: off(3ms) → medium(5ms) → high(10ms) ✅
+
+High db_read level dominates tail latency (p95=61ms, p99=138ms) — expected with 120 rows.
+
+## 5. Cách chạy
 
 ```powershell
 $env:RESOURCE_TREND_RUN_ID = "res-02-test"

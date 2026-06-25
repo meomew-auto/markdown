@@ -32,7 +32,24 @@ Local Docker không có cgroup throttling như K8s. Case này **xấp xỉ** pro
 
 Đây là **xấp xỉ** — không có cgroup, không có K8s scheduler. Kết quả chỉ ra behavior pattern, không phải con số tuyệt đối cho production K8s.
 
-## 5. Cách chạy
+## 6. Real validation
+
+### Mode: cpu_throttle — Run #132 ⚠️
+- 923 reqs, 4 VUs, 1123/1946 checks (58%), 89.17% http_req_failed
+- **All failures: `products_cpu_throttle_status_429`**
+- Server correctly returns 429 under CPU+memory pressure (cpu_ms=35, retain_memory_kb=16384)
+- This is LEGITIMATE self-protection behavior, not a bug
+- **Lesson:** Under pressure, the service rate-limits via 429 instead of crashing
+
+### Mode: disk_pressure — Run #134 ✅
+- 752 reqs, 4 VUs, 2256/2256 checks (100%), 0% http_req_failed
+- avg=12.98ms, p95=30.46ms, p99=44.72ms
+- Disk I/O at 2048KB per request handled cleanly by OS buffering
+
+### Caveat
+cpu_throttle mode exposes a script threshold issue: `expectedStatuses()` should include 429 (like OOM mode includes 502/503/504). Currently 429 is treated as failure even though it's the expected system response under pressure.
+
+## 7. Cách chạy
 
 ```powershell
 $env:NONK8S_MODE = "cpu_throttle"

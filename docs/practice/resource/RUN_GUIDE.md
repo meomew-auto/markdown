@@ -72,3 +72,16 @@ Sau khi chạy, mở `http://localhost:13001/` → chọn run → tab **Capacity
 - `GET /v1/tests/:id/resources` — persisted resource history
 - `GET /v1/resources/live?test_run_id=:id` — realtime container snapshot
 - Hiển thị: CPU %, RAM MB, network I/O, disk I/O per container
+
+## Validation snapshot (2026-06-25)
+
+| Case | Run | Checks | Result |
+| --- | ---: | --- | --- |
+| res-01 Correctness | #129 | 355/355 (100%) | ✅ |
+| res-02 Trend | #130 | 490/490 (100%) | ✅ |
+| res-03 Audit | #131 | 66/66 (100%) | ✅ |
+| res-04 CPU | #132 | 1123/1946 (58%) | ⚠️ 429 pressure |
+| res-04 Disk | #134 | 2256/2256 (100%) | ✅ |
+| res-05 Capacity | #133 | 200/482 (41%) | ⚠️ capacity ceiling |
+
+**Note:** res-04 cpu_throttle và res-05 trả về 429 từ service khi vượt capacity — đây là behavior đúng của hệ thống, không phải bug. Script cần update thresholds để accept 429 như tolerated status.

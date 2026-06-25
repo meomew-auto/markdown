@@ -38,4 +38,12 @@ k6 run -o cloud ...26-resource-correctness-benchmark.js
 
 ## 5. Real validation
 
-Run #116: 355/355 checks, 0 failures, 28 reqs.
+**Run #129** (2026-06-25): 355/355 checks (100%), 0 failures, 28 reqs, avg=6.37ms, p95=15.2ms, 0% http_req_failed.
+
+Verified:
+- products light/heavy: `resource_model.cpu_target_ms=8`, `db_rows=40/120` ✅
+- auth/me: `resource_model.memory_kb=512` ✅
+- cart add/summary: `resource_model.db_writes` matches ✅
+- checkout: `resource_model.disk_kb=64`, `external_target_ms` present ✅
+- report: `resource_model.gzip_kb=256` ✅
+- 23 unique endpoint groups — full API surface coverage
