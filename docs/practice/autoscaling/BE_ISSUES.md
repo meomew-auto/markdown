@@ -13,8 +13,9 @@
 | 5 | LOW | list trả metrics=null | ✅ FIXED (list giờ include summary_metrics đầy đủ) |
 | 6 | LOW | scale_applied(initial) ghi 1→1 | ✅ FIXED (đổi sang scale_observed/initial_already_satisfied) |
 | 7 | CRITICAL | run-id resolution gom CẢ list reference_id | ✅ FIXED (Get-RunReferenceId reject mảng count≠1) |
+| 8 | HIGH | as-03 scenario KHÔNG tái hiện được bài học: scale app 1→3 → success 41.7%→100% (NGƯỢC bài học) | ✅ FIXED (BE thêm pg_advisory_lock bottleneck + profile db-bottleneck-practice; verify 2026-07-15) |
 
-**Tất cả 7/7 issues đã FIXED.** 🎉
+**8/8 issues đã FIXED. Issue #8 (scenario design) verify lại 2026-07-15 (round 6): scale 1→3 → throughput −0.34%, db_p95 173→349ms, 0×429, 27/27 gates PASS — chi tiết cuối file.**
 
 ---
 
@@ -77,3 +78,60 @@ BE đổi sang event `scale_observed` với reason `initial_already_satisfied` k
 
 ### 7. [CRITICAL] ✅ run-id resolution gom CẢ list reference_id
 BE thêm `Get-RunReferenceId` — reject mảng có `count ≠ 1` và chỉ nhận reference_id numeric (`^\d+$`). Verify: Run #184 map sạch.
+
+---
+
+## Issue mới (2026-07-15) — chạy as-03 với data thật
+
+### 8. [HIGH] ⚠️ as-03 scenario tái hiện NGƯỢC bài học nó muốn dạy
+
+**Bài học mong muốn (theo `03_bottleneck-not-solved-by-scale.md`):** scale app 1→3 KHÔNG tăng throughput vì bottleneck nằm ở DB/backend, không phải app.
+
+**Thực tế đo được (A/B sạch, cùng workload `CAPACITY_RATE=8`, `CAPACITY_DB_ROWS=120`, 30s, 240 iterations):**
+
+| Replicas | success | 429 | db_ms |
+| --- | --- | --- | --- |
+| 1 | 100/240 = **41.7%** | 140 | ~2ms |
+| 3 | 240/240 = **100%** | 0 | ~2ms |
+
+→ Scale app 1→3 khiến success **41.7% → 100%** — tức là scale app CỨU được, **ngược hoàn toàn** thông điệp của case.
+
+**Nguyên nhân gốc (đọc code, không đoán):**
+- Cái duy nhất bị chạm là **rate limiter per-replica in-memory** trong products-service (`internal/handler/http.go`: `userRateLimiter` = `sync.Mutex` + `map[string]rateLimitWindow`, state nằm TRONG mỗi process, KHÔNG share giữa các replica).
+- Default `PRODUCTS_LIST_RATE_LIMIT_PER_MINUTE = 100`, window = 1 phút.
+- Script `30-capacity-sizing-sweep.js` gửi `Authorization: Bearer ${RUN_ID}` trên MỌI request → toàn bộ VU gộp về **1 identity bucket duy nhất** (`default:${RUN_ID}`).
+- Vì limiter per-replica → ceiling thực = **100/min × số replica**. Scale 1→3 nâng ceiling 100→300/min. DB không bao giờ nghẽn (db_ms giữ ~2ms), nên bottleneck DB mà case muốn dạy **không bao giờ xảy ra**.
+
+**Tại sao đây là issue chứ không phải bài học:** case tên là "bottleneck NOT solved by scale" nhưng data chứng minh scale GIẢI QUYẾT được (vì bottleneck thật là app-level rate limiter, mà limiter lại scale tuyến tính theo replica). Học viên chạy đúng theo doc sẽ thấy kết quả mâu thuẫn với kết luận.
+
+**Ngoài ra — lỗi doc (đã sửa trong RUN_GUIDE.md + 03_*.md):** cả `RUN_GUIDE.md` (bước 2) và `03_bottleneck-not-solved-by-scale.md` scale `order-service`, nhưng profile `products_db_read` route tới **products-service** (`30-capacity-sizing-sweep.js:217`). Scale sai tier → dù muốn demo "scale không giúp" thì cũng đang scale nhầm service.
+
+**Đề xuất fix cho BE (chọn 1):**
+1. **Ép DB thật sự thành bottleneck:** tăng `CAPACITY_DB_ROWS` rất cao + nới rate limit (`PRODUCTS_LIST_RATE_LIMIT_PER_MINUTE` lớn) để 429 không phải là cái chạm trước, và giới hạn `MaxConns` (hiện `db/postgres.go:258` = 10) là trần thật. Khi đó scale app 1→3 sẽ KHÔNG tăng throughput vì nghẽn ở pool DB dùng chung.
+2. **Đổi identity mỗi VU:** cho script gửi `X-User-Token` khác nhau theo VU → limiter không còn gộp 1 bucket; nhưng vẫn phải xử lý chuyện limiter per-replica nếu muốn dạy "shared bottleneck".
+3. **Nếu muốn giữ rate limiter làm bottleneck:** phải chuyển limiter sang **shared store (Redis)** để 3 replica dùng CHUNG 1 counter → lúc đó scale app mới thực sự KHÔNG nâng ceiling, đúng bài học.
+
+Lựa chọn (1) sát ý đồ "DB là bottleneck thật" nhất.
+
+---
+
+### ✅ Verify round 6 — Run harness `run-as03-db-bottleneck.ps1` (2026-07-15)
+
+**BE đã fix theo hướng #1 (biến thể tốt hơn):** thay vì dựa vào `MaxConns=10`, BE thêm **synthetic `pg_advisory_lock` server-side** (`db/postgres.go`: `acquireArtificialLock` gọi ở 4 callsite trên đường DB, khóa cùng 1 key qua env `PRODUCTS_DB_LOCK_HOLD_MS`). Lock nằm TRONG Postgres → mọi connection từ MỌI replica đua chung 1 khóa, chỉ 1 holder tại một thời điểm → trần throughput toàn cục, scale replica không nâng được. Kèm profile `db-bottleneck-practice` nâng rate limit lên 100000/min để 429 không còn là cái chạm trước (che mất bài học DB).
+
+**Kết quả A/B (harness tự chạy + tự gate, `PRODUCTS_DB_LOCK_HOLD_MS=60`, rate 8, db_rows 120, 30s, profile `db-bottleneck-practice`):**
+
+| | Phase A (1 replica) | Phase B (3 replica) |
+| --- | --- | --- |
+| success | 241/241 (100%) | 240/240 (100%) |
+| 429 | 0 | 0 |
+| dropped | 0 | 0 |
+| **db_p95** | **173ms** | **349ms** |
+| throughput gain B/A | — | **−0.34%** (đứng yên) |
+| db_p95 ratio B/A | — | 201.7% (latency TỆ HƠN 2×) |
+
+→ Scale app 1→3 KHÔNG tăng throughput (−0.34%), thậm chí latency tệ hơn 2× vì 3 replica đua trên cùng 1 advisory-lock. **Đúng bài học "scale app không cứu backend bottleneck".**
+
+**27/27 gates PASS, `passed=True`.** Không OOM, không restart, không container churn. Cleanup trả stack về sạch (lock=0, replicas=1). Issue #8 **CLOSED**.
+
+**Lưu ý cho học viên:** case này chỉ tái hiện đúng khi chạy qua harness `run-as03-db-bottleneck.ps1` (nó bật `PRODUCTS_DB_LOCK_HOLD_MS` + profile `db-bottleneck-practice`). Chạy `30-capacity-sizing-sweep.js` tay với default (lock=0, profile mặc định) sẽ KHÔNG có bottleneck DB — chỉ đụng rate limiter như cũ.

@@ -26,25 +26,9 @@ docker compose -p k6target --env-file .../infra/env/.env.target -f .../infra/com
 
 ## as-02 — CPU pressure scale out
 
-```powershell
-cd E:\Projects\k6\k6-metrics-server
-$env:K6_METRICS_TOKEN = "student-token-1234567890"
+> ⚠️ **KHÔNG dùng `run-compose-autoscale-lab.ps1` cho case này.** Lab script mặc định chạy `25-order-service-autoscale-controller.js` và scale `order-service` — service này IO-bound (`cpu_ms=0, external_ms=35`) nên CPU luôn 0-3%, KHÔNG bao giờ chạm ngưỡng scale-out 10% → autoscaler chỉ ghi `hold` (đã kiểm chứng ở Run #173). Lab script chỉ đúng cho as-05. Muốn scale-out thật phải chạy CPU pressure workload + autoscaler thủ công như dưới.
 
-# Chạy lab đầy đủ (90s controller + CPU pressure workload)
-.\scripts\run-compose-autoscale-lab.ps1 `
-  -BaseUrl http://localhost:18080 `
-  -MetricsBaseUrl http://localhost:13001 `
-  -ControllerDurationSeconds 90
-```
-
-**Muốn scale-out thật (CPU đủ cao để vượt ngưỡng):**
-```powershell
-# Dùng CPU pressure workload thay vì order-service script mặc định
-# Script: load-target/k6/app/cpu-pressure-workload.js
-# Tự động gọi products-service với cpu_ms=25, 8 VUs → tạo CPU load thật
-```
-
-**Chạy riêng autoscaler với custom threshold:**
+**Scale-out thật — CPU pressure workload + autoscaler (2 terminal):**
 ```powershell
 # Terminal 1: CPU pressure workload
 $env:BASE_URL = "http://localhost:80"
@@ -72,38 +56,51 @@ k6 run -o cloud E:/Projects/k6/k6-metrics-server/load-target/k6/app/cpu-pressure
 
 ## as-03 — Bottleneck NOT solved by scale
 
+> ✅ **BE đã fix scenario (2026-07-15, verify round 6 — xem BE_ISSUES.md #8).** Bottleneck thật giờ là **`pg_advisory_lock` server-side** (shared qua mọi replica), không phải rate limiter. Profile mới `db-bottleneck-practice` nâng rate limit lên 100000/min để 429 không chạm trước. Kết quả A/B: scale 1→3 → throughput **−0.34%** (đứng yên), db_p95 **173→349ms** (tệ hơn) → ĐÚNG bài học.
+>
+> **Cách chạy chuẩn (harness BE tự A/B + gate):**
+
 ```powershell
-# Bước 1: Baseline với 1 replica
-$env:CAPACITY_PROFILE = "products_db_read"
-$env:CAPACITY_RATE = "8"; $env:CAPACITY_DB_ROWS = "120"
+cd E:\Projects\k6\k6-metrics-server
+# Harness tự: bật PRODUCTS_DB_LOCK_HOLD_MS=60, recreate products-service, chạy phase A (1 replica) + phase B (3 replica),
+# chấm gate (db_p95 ≥150ms, throughput gain ≤20%), rồi cleanup (lock=0, replicas=1).
+.\scripts\run-as03-db-bottleneck.ps1 -Build
+# Report: artifacts\audits\as03-db-bottleneck-<timestamp>\as03-db-bottleneck.md (+ .json)
+```
+
+> **Chạy tay (nếu muốn hiểu từng bước):** phải bật CẢ 2 — `PRODUCTS_DB_LOCK_HOLD_MS` (ép DB lock) và profile `db-bottleneck-practice` (né 429). Thiếu 1 trong 2 → scenario sai như bug cũ.
+
+```powershell
+cd E:\Projects\k6\k6-metrics-server
+# Bật lock rồi recreate products-service để nhận env mới
+$env:PRODUCTS_DB_LOCK_HOLD_MS = "60"
+$env:PRODUCTS_LIST_RAMPING_PRACTICE_RATE_LIMIT_PER_MINUTE = "100000"
+docker compose -p k6target -f infra/compose/compose.target.yml up -d --force-recreate --scale products-service=1 products-service
+
+# Workload: profile mới CAPACITY_LOAD_PROFILE=db-bottleneck-practice (gửi header X-Load-Profile)
+$env:CAPACITY_PROFILE = "products_db_read"; $env:CAPACITY_LOAD_PROFILE = "db-bottleneck-practice"
+$env:CAPACITY_RATE = "8"; $env:CAPACITY_DB_ROWS = "120"; $env:CAPACITY_CPU_MS = "0"
 $env:CAPACITY_DURATION_SECONDS = "30"
-$env:CAPACITY_PRE_ALLOCATED_VUS = "12"; $env:CAPACITY_MAX_VUS = "40"
-k6 run -o cloud E:/Projects/k6/k6-metrics-server/load-target/k6/app/30-capacity-sizing-sweep.js
-# Ghi nhận: success rate, 429 rate, capacity_breakdown_db_ms
+$env:CAPACITY_PRE_ALLOCATED_VUS = "32"; $env:CAPACITY_MAX_VUS = "128"
 
-# Bước 2: Scale order-service lên 3 replica
-docker compose -p k6target up -d --scale order-service=3
-
-# Bước 3: Chạy lại cùng workload
+# Phase A: 1 replica → ghi db_p95, success_rps
 k6 run -o cloud E:/Projects/k6/k6-metrics-server/load-target/k6/app/30-capacity-sizing-sweep.js
-# So sánh: success rate có tăng không? → nếu KHÔNG → bottleneck ở DB, không phải app
+
+# Phase B: scale 3 replica, chạy lại
+docker compose -p k6target -f infra/compose/compose.target.yml up -d --scale products-service=3 products-service
+k6 run -o cloud E:/Projects/k6/k6-metrics-server/load-target/k6/app/30-capacity-sizing-sweep.js
+# So sánh: success_rps KHÔNG tăng (bottleneck ở advisory-lock dùng chung) + db_p95 TĂNG → ĐÚNG bài học "scale không cứu backend"
+
+# Cleanup: tắt lock, về 1 replica
+$env:PRODUCTS_DB_LOCK_HOLD_MS = "0"
+docker compose -p k6target -f infra/compose/compose.target.yml up -d --force-recreate --scale products-service=1 products-service
 ```
 
 ## as-04 — Cooldown (scale in)
 
-```powershell
-cd E:\Projects\k6\k6-metrics-server
-$env:K6_METRICS_TOKEN = "student-token-1234567890"
+> ⚠️ Dùng CHUNG cách chạy manual của as-02 (CPU pressure workload + autoscaler). Cooldown blocks chỉ xuất hiện GIỮA các lần scale, mà scale chỉ xảy ra khi products-service vượt CPU 10% — lab script mặc định (order-service IO-bound) không tạo được. Để `-DurationSeconds` của autoscaler DÀI HƠN k6 workload (vd k6 90s, autoscaler 100s) để thấy trọn chu trình: scale out → cooldown → workload dừng → `cpu_low` → scale in.
 
-# Chạy lab 90s — workload đủ dài để thấy full chu trình:
-# scale out (cpu_high) → cooldown blocks → workload dừng → cpu_low → scale in
-.\scripts\run-compose-autoscale-lab.ps1 `
-  -BaseUrl http://localhost:18080 `
-  -MetricsBaseUrl http://localhost:13001 `
-  -ControllerDurationSeconds 90
-```
-
-**Đọc kết quả:** Đếm số `decision` với `reason: "cooldown"` trong event log. Mỗi cooldown = 1 lần autoscaler định scale nhưng bị chặn vì chưa hết 12s.
+**Đọc kết quả:** Đếm số `decision` với `reason: "cooldown"` trong event log. Mỗi cooldown = 1 lần autoscaler định scale nhưng bị chặn vì chưa hết 12s. Muốn thấy scale-in: để autoscaler chạy tiếp SAU khi k6 kết thúc → CPU về 0% → `cpu_low` → scale 3→2→1 (như Run #184).
 
 ## as-05 — Shared state during scale
 
